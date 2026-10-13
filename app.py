@@ -649,8 +649,9 @@ async def view_post(request: Request, pid: int):
                                user["id"] == p["user_id"] or owner_on),
         })
     conn.close()
-    return render(request, "post.html",
-                  {"post": post_card(dict(p), user, owner_on), "comments": comments})
+    pc = post_card(dict(p), user, owner_on)
+    pc["comments"] = comments
+    return render(request, "post.html", {"post": pc})
 
 
 @app.post("/post/{pid}/comment")
