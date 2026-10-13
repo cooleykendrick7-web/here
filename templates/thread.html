@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ friend.name|e }} — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="row-item" style="border-bottom:1px solid var(--border);margin-bottom:10px">
+    {% if friend.avatar %}<img class="avatar av-40" src="{{ friend.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ friend.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ friend.id }}">{{ friend.name|e }}</a></div>
+    </div>
+    <a class="btn-ghost btn-sm" href="/messages">← All messages</a>
+  </div>
+
+  <div class="thread-box" id="thread-box">
+    {% for m in msgs %}
+    <div class="msg-row" style="{% if m.mine %}justify-content:flex-end{% else %}justify-content:flex-start{% endif %}">
+      <div style="{% if m.mine %}text-align:right{% endif %}">
+        <div class="msg-bub {% if m.mine %}msg-mine{% else %}msg-theirs{% endif %}">{{ m.body|e }}</div>
+        <div class="msg-time">{{ m.created_at|e }}</div>
+      </div>
+    </div>
+    {% else %}
+    <p style="color:var(--muted);font-size:14px">No messages yet — say something!</p>
+    {% endfor %}
+  </div>
+
+  <form class="comment-form" action="/messages/{{ friend.id }}" method="post">
+    <input type="text" name="body" placeholder="Message {{ friend.name|e }}…" required maxlength="2000" autocomplete="off">
+    <button type="submit" class="btn btn-sm">Send</button>
+  </form>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  var box = document.getElementById('thread-box');
+  if (box) box.scrollTop = box.scrollHeight;
+})();
+</script>
+{% endblock %}

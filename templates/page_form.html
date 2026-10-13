@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Create Page — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">➕ Create a Page</div>
+  <form action="/pages" method="post" enctype="multipart/form-data" style="margin-top:12px">
+    <div class="field">
+      <label for="pg-name">Page name</label>
+      <input type="text" id="pg-name" name="name" required maxlength="80" placeholder="My Awesome Page">
+    </div>
+    <div class="field">
+      <label for="pg-ptype">Page type</label>
+      <select id="pg-ptype" name="ptype" required>
+        {% for pt in ptypes %}
+        <option value="{{ pt|e }}">{{ pt|replace('_',' ')|title|e }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="pg-desc">Description</label>
+      <textarea id="pg-desc" name="description" maxlength="1000" placeholder="What is this page about?"></textarea>
+    </div>
+    <div class="field">
+      <label for="pg-cover">Cover image</label><br>
+      <input type="file" id="pg-cover" name="cover" accept="image/*">
+    </div>
+    <button type="submit" class="btn">Create Page</button>
+    <a class="btn-ghost" href="/pages" style="margin-left:8px">Cancel</a>
+  </form>
+</div>
+
+{% endblock %}

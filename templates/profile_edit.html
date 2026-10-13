@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Edit Profile — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">✏️ Edit Profile</div>
+  <form action="/settings/profile" method="post" enctype="multipart/form-data" style="margin-top:12px">
+    <div class="field">
+      <label for="pe-name">Name</label>
+      <input type="text" id="pe-name" name="name" value="{{ profile.name|e }}" required maxlength="80">
+    </div>
+    <div class="field">
+      <label for="pe-bio">Bio</label>
+      <textarea id="pe-bio" name="bio" maxlength="1000" placeholder="Tell people about yourself…">{{ profile.bio|e }}</textarea>
+    </div>
+    <div class="field">
+      <label for="pe-avatar">Profile picture</label><br>
+      {% if profile.avatar %}<img class="avatar av-100" src="{{ profile.avatar|e }}" alt="" style="margin-bottom:8px"><br>{% endif %}
+      <input type="file" id="pe-avatar" name="avatar" accept="image/*">
+    </div>
+    <button type="submit" class="btn">Save Changes</button>
+    <a class="btn-ghost" href="/user/{{ profile.id }}" style="margin-left:8px">Cancel</a>
+  </form>
+</div>
+
+{% endblock %}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ page.name|e }} — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">✏️ Edit Page</div>
+  <form action="/page/{{ page.id }}/edit" method="post" enctype="multipart/form-data" style="margin-top:12px">
+    <div class="field">
+      <label for="pge-name">Page name</label>
+      <input type="text" id="pge-name" name="name" value="{{ page.name|e }}" required maxlength="80">
+    </div>
+    <div class="field">
+      <label for="pge-desc">Description</label>
+      <textarea id="pge-desc" name="description" maxlength="1000">{{ page.description|e }}</textarea>
+    </div>
+    <div class="field">
+      <label for="pge-cover">Cover image</label><br>
+      {% if page.cover %}<img src="{{ page.cover|e }}" alt="" style="max-height:140px;border-radius:8px;margin-bottom:8px"><br>{% endif %}
+      <input type="file" id="pge-cover" name="cover" accept="image/*">
+    </div>
+    <button type="submit" class="btn">Save Changes</button>
+    <a class="btn-ghost" href="/page/{{ page.id }}" style="margin-left:8px">Cancel</a>
+  </form>
+</div>
+
+{% endblock %}

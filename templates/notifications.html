@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Notifications — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">🔔 Notifications</div>
+  {% for n in notes %}
+  <a class="row-item{% if not n.is_read %} unread-hl{% endif %}" href="{{ n.link|e }}" style="border-radius:8px;padding-left:8px;padding-right:8px">
+    <div class="grow">
+      <div style="font-size:15px">
+        {% if n.kind == 'friend_request' %}👥
+        {% elif n.kind == 'tap' %}🖐️
+        {% elif n.kind == 'message' %}💬
+        {% else %}🔔{% endif %}
+        {{ n.text|e }}
+      </div>
+      <div class="sub">{{ n.created_at|e }}</div>
+    </div>
+  </a>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">Nothing here yet.</p>
+  {% endfor %}
+</div>
+
+{% endblock %}

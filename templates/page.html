@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}{{ page.name|e }} — HERE{% endblock %}
+{% block content %}
+
+<div class="card" style="padding:0;overflow:hidden">
+  <div class="page-hero">
+    {% if page.cover %}<img src="{{ page.cover|e }}" alt="">{% else %}{{ page.name[:1]|upper|e }}{% endif %}
+  </div>
+  <div style="padding:15px">
+    <h2 style="font-size:24px">{{ page.name|e }}</h2>
+    <span class="ptype-badge">{{ page.ptype|replace('_',' ')|e }}</span>
+    {% if page.description %}<p style="margin:8px 0;white-space:pre-wrap">{{ page.description|e }}</p>{% endif %}
+    <div class="pmeta" style="margin:8px 0">{{ page.members }} members · by {{ page.owner_name|e }}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      {% if page.is_owner %}
+      <a class="btn-ghost btn-sm" href="/page/{{ page.id }}/edit">✏️ Edit Page</a>
+      {% elif page.joined %}
+      <form class="inline-form" action="/page/{{ page.id }}/leave" method="post">
+        <button type="submit" class="btn-ghost btn-sm">✓ Joined — Leave</button>
+      </form>
+      {% else %}
+      <form class="inline-form" action="/page/{{ page.id }}/join" method="post">
+        <button type="submit" class="btn btn-sm">Join Page</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if page.joined or page.is_owner %}
+<div class="card composer">
+  <form action="/page/{{ page.id }}/post" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="kind" id="kind-input" value="text">
+    <div class="kind-tabs" id="kind-tabs">
+      <button type="button" class="kind-tab active" data-kind="text">📝 Status</button>
+      <button type="button" class="kind-tab" data-kind="photo">📷 Photo</button>
+      <button type="button" class="kind-tab" data-kind="feeling">😊 Feeling</button>
+      <button type="button" class="kind-tab" data-kind="clothes">👕 Clothes</button>
+      <button type="button" class="kind-tab" data-kind="link">🔗 Link</button>
+      <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
+      <button type="button" class="kind-tab" data-kind="audio">🎵 Music</button>
+    </div>
+    <textarea name="body" id="composer-body" placeholder="Post to {{ page.name|e }}…"></textarea>
+
+    <div id="fld-feeling" style="display:none">
+      <label class="fld" for="feeling-select">Feeling</label>
+      <select name="feeling" id="feeling-select">
+        <option value="">— pick a feeling —</option>
+        <option>happy</option><option>excited</option><option>loved</option>
+        <option>blessed</option><option>grateful</option><option>thankful</option>
+        <option>relaxed</option><option>proud</option><option>motivated</option>
+        <option>sad</option><option>tired</option><option>sick</option>
+        <option>angry</option><option>annoyed</option><option>lonely</option>
+      </select>
+    </div>
+
+    <div id="fld-media" style="display:none">
+      <label class="fld" for="media-file">Upload <span id="media-kind-label">photo</span> (jpg, png, gif, webp · mp3 for music · max 25MB)</label>
+      <input type="file" name="media" id="media-file" accept="image/*,audio/*">
+    </div>
+
+    <div id="fld-link" style="display:none">
+      <label class="fld" for="link-url">Link URL (must start with http)</label>
+      <input type="url" name="link_url" id="link-url" placeholder="https://example.com">
+    </div>
+
+    <div id="fld-video" style="display:none">
+      <label class="fld" for="video-url">Video URL (YouTube or Vimeo)</label>
+      <input type="url" name="video_url" id="video-url" placeholder="https://www.youtube.com/watch?v=...">
+    </div>
+
+    <div class="post-row">
+      <button type="submit" class="btn">Post to Page</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+{% for post in posts %}
+  {% include "partials/post_card.html" %}
+{% else %}
+<div class="card"><p style="color:var(--muted)">No posts on this page yet.</p></div>
+{% endfor %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  var tabs = document.querySelectorAll('#kind-tabs .kind-tab');
+  if (!tabs.length) return;
+  var kindInput = document.getElementById('kind-input');
+  var bodyBox = document.getElementById('composer-body');
+  var fFeeling = document.getElementById('fld-feeling');
+  var fMedia = document.getElementById('fld-media');
+  var fLink = document.getElementById('fld-link');
+  var fVideo = document.getElementById('fld-video');
+  var mediaLbl = document.getElementById('media-kind-label');
+  function setKind(kind){
+    kindInput.value = kind;
+    tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.kind === kind); });
+    fFeeling.style.display = (kind === 'feeling') ? 'block' : 'none';
+    fMedia.style.display = (kind === 'photo' || kind === 'clothes' || kind === 'audio') ? 'block' : 'none';
+    if (kind === 'audio') mediaLbl.textContent = 'mp3';
+    else if (kind === 'clothes') mediaLbl.textContent = 'outfit photo';
+    else mediaLbl.textContent = 'photo';
+    fLink.style.display = (kind === 'link') ? 'block' : 'none';
+    fVideo.style.display = (kind === 'video') ? 'block' : 'none';
+  }
+  tabs.forEach(function(t){ t.addEventListener('click', function(){ setKind(t.dataset.kind); }); });
+  setKind('text');
+})();
+</script>
+{% endblock %}

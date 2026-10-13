@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HERE - Social Network</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: #f0f2f5;
+            color: #1c1e21;
+        }
+
+        a { text-decoration: none; color: inherit; }
+        ul { list-style: none; }
+
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 60px;
+            background-color: #ffffff;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            z-index: 1000;
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 900;
+            color: #1877f2;
+            letter-spacing: -1px;
+            cursor: pointer;
+        }
+
+        .search-bar {
+            background: #f0f2f5;
+            border-radius: 20px;
+            padding: 10px 15px;
+            width: 250px;
+            border: none;
+            outline: none;
+            color: #65676b;
+        }
+
+        .header-icons {
+            display: flex;
+            gap: 15px;
+        }
+
+        .icon-btn {
+            width: 40px;
+            height: 40px;
+            background: #e4e6eb;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-weight: bold;
+            color: #050505;
+        }
+
+        .icon-btn:hover { background: #d8dadf; }
+
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            max-width: 1200px;
+            margin: 70px auto 0;
+            gap: 20px;
+            padding: 0 20px;
+        }
+
+        .sidebar-left {
+            position: sticky;
+            top: 80px;
+            height: calc(100vh - 80px);
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            color: #050505;
+        }
+
+        .menu-item:hover { background-color: #e4e6eb; }
+
+        .menu-icon {
+            width: 36px;
+            height: 36px;
+            background: #1877f2;
+            border-radius: 50%;
+            margin-right: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 14px;
+        }
+
+        .feed {
+            min-height: 100vh;
+        }
+
+        .create-post {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .input-row {
+            display: flex;
+            align-items: center;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e4e6eb;
+        }
+
+        .avatar {
+            width: 40px;
+            height: 40px;
+            background: #ccc;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        .post-input {
+            flex-grow: 1;
+            border: none;
+            background: #f0f2f5;
+            border-radius: 20px;
+            padding: 10px 15px;
+            font-size: 16px;
+            outline: none;
+        }
+
+        .post-actions {
+            display: flex;
+            justify-content: space-around;
+            padding-top: 10px;
+        }
+
+        .action-btn {
+            color: #65676b;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        .action-btn:hover { background: #f0f2f5; }
+
+        .post {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            padding: 15px;
+        }
+
+        .post-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .user-info h4 { font-size: 15px; margin-bottom: 2px; }
+        .user-info span { font-size: 12px; color: #65676b; }
+
+        .post-content {
+            font-size: 15px;
+            line-height: 1.4;
+            margin-bottom: 15px;
+        }
+
+        .post-stats {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-top: 1px solid #e4e6eb;
+            color: #65676b;
+            font-size: 14px;
+        }
+
+        .like-btn {
+            color: #65676b;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .like-btn.active { color: #1877f2; }
+
+        .sidebar-right {
+            position: sticky;
+            top: 80px;
+            height: fit-content;
+        }
+
+        .contact-item {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .contact-item:hover { background: #e4e6eb; }
+
+        .online-dot {
+            width: 10px;
+            height: 10px;
+            background: #31a24c;
+            border-radius: 50%;
+            border: 2px solid white;
+            margin-left: -10px;
+            margin-top: 18px;
+        }
+
+        @media (max-width: 900px) {
+            .sidebar-right { display: none; }
+            .container { grid-template-columns: 1fr 2fr; }
+        }
+        @media (max-width: 600px) {
+            .sidebar-left { display: none; }
+            .container { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div class="logo">HERE</div>
+        <input type="text" class="search-bar" placeholder="Search HERE">
+        <div class="header-icons">
+            <div class="icon-btn">🏠</div>
+            <div class="icon-btn">💬</div>
+            <div class="icon-btn">🔔</div>
+            <div class="avatar" style="background: #1877f2; color: white;">ME</div>
+        </div>
+    </div>
+
+    <div class="container">
+
+        <aside class="sidebar-left">
+            <div class="menu-item">
+                <div class="menu-icon">👤</div> My Profile
+            </div>
+            <div class="menu-item">
+                <div class="menu-icon">👥</div> Friends
+            </div>
+            <div class="menu-item">
+                <div class="menu-icon">📺</div> Watch
+            </div>
+            <div class="menu-item">
+                <div class="menu-icon">🏪</div> Marketplace
+            </div>
+            <div class="menu-item">
+                <div class="menu-icon">🕒</div> Memories
+            </div>
+        </aside>
+
+        <main class="feed">
+
+            <div class="create-post">
+                <div class="input-row">
+                    <div class="avatar"></div>
+                    <input type="text" class="post-input" id="postInput" placeholder="What's on your mind?">
+                </div>
+                <div class="post-actions">
+                    <div class="action-btn" onclick="addPost()">📷 Photo/Video</div>
+                    <div class="action-btn" onclick="addPost()">😊 Feeling</div>
+                </div>
+            </div>
+
+            <div id="posts-container">
+                <div class="post">
+                    <div class="post-header">
+                        <div class="avatar" style="background: purple;"></div>
+                        <div class="user-info">
+                            <h4>Alex Developer</h4>
+                            <span>Just now · 🌍</span>
+                        </div>
+                    </div>
+                    <div class="post-content">
+                        Welcome to HERE! This is the main feed. Try posting something above.
+                    </div>
+                    <div class="post-stats">
+                        <span>12 Likes</span>
+                        <span>4 Comments</span>
+                    </div>
+                    <div style="padding: 10px 0; border-top: 1px solid #eee;">
+                        <span class="like-btn" onclick="toggleLike(this)">👍 Like</span>
+                    </div>
+                </div>
+
+                <div class="post">
+                    <div class="post-header">
+                        <div class="avatar" style="background: orange;"></div>
+                        <div class="user-info">
+                            <h4>Sarah Design</h4>
+                            <span>2 hours ago · 🌍</span>
+                        </div>
+                    </div>
+                    <div class="post-content">
+                        Loving the new interface design of HERE. Clean, fast, and simple. 🚀
+                    </div>
+                    <div class="post-stats">
+                        <span>45 Likes</span>
+                        <span>8 Comments</span>
+                    </div>
+                    <div style="padding: 10px 0; border-top: 1px solid #eee;">
+                        <span class="like-btn" onclick="toggleLike(this)">👍 Like</span>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+
+        <aside class="sidebar-right">
+            <h4 style="color: #65676b; margin-bottom: 10px;">Contacts</h4>
+
+            <div class="contact-item">
+                <div class="avatar" style="background: green; width: 30px; height: 30px;"></div>
+                <span>John Doe</span>
+                <div class="online-dot"></div>
+            </div>
+            <div class="contact-item">
+                <div class="avatar" style="background: red; width: 30px; height: 30px;"></div>
+                <span>Jane Smith</span>
+                <div class="online-dot"></div>
+            </div>
+            <div class="contact-item">
+                <div class="avatar" style="background: blue; width: 30px; height: 30px;"></div>
+                <span>Mike Ross</span>
+            </div>
+        </aside>
+
+    </div>
+
+    <script>
+        function addPost() {
+            const input = document.getElementById('postInput');
+            const text = input.value.trim();
+
+            if (!text) return alert("Write something first!");
+
+            const container = document.getElementById('posts-container');
+
+            const newPost = document.createElement('div');
+            newPost.className = 'post';
+            newPost.innerHTML = `
+                <div class="post-header">
+                    <div class="avatar" style="background: #1877f2; color: white;">ME</div>
+                    <div class="user-info">
+                        <h4>You</h4>
+                        <span>Just now · 🌍</span>
+                    </div>
+                </div>
+                <div class="post-content">${text}</div>
+                <div class="post-stats">
+                    <span>0 Likes</span>
+                    <span>0 Comments</span>
+                </div>
+                <div style="padding: 10px 0; border-top: 1px solid #eee;">
+                    <span class="like-btn" onclick="toggleLike(this)">👍 Like</span>
+                </div>
+            `;
+
+            container.insertBefore(newPost, container.firstChild);
+
+            input.value = '';
+        }
+
+        function toggleLike(btn) {
+            btn.classList.toggle('active');
+            if (btn.classList.contains('active')) {
+                btn.style.color = '#1877f2';
+                btn.innerHTML = '👍 Liked';
+            } else {
+                btn.style.color = '#65676b';
+                btn.innerHTML = '👍 Like';
+            }
+        }
+    </script>
+</body>
+</html>

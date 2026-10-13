@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ profile.name|e }} — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+    {% if profile.avatar %}<img class="avatar av-100" src="{{ profile.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-100">{{ profile.name[:1]|upper|e }}</span>{% endif %}
+    <div style="flex:1;min-width:200px">
+      <h2 style="font-size:24px">{{ profile.name|e }}
+        {% if not profile.is_self %}
+        <form class="inline-form" action="/tap/{{ profile.id }}" method="post">
+          <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">🖐️ Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>
+        </form>
+        {% elif profile.tap_count %}
+        <span class="kind-tag">🖐️ {{ profile.tap_count }} taps</span>
+        {% endif %}
+      </h2>
+      <div class="post-meta" style="margin-top:4px">{{ profile.friend_count }} friends · joined {{ profile.created_at|e }}</div>
+      {% if profile.bio %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        {% if profile.is_self %}
+        <a class="btn-ghost" href="/settings/profile">✏️ Edit Profile</a>
+        {% elif profile.req_status == 'none' %}
+        <form class="inline-form" action="/friends/request/{{ profile.id }}" method="post">
+          <button type="submit" class="btn btn-sm">➕ Add Friend</button>
+        </form>
+        {% elif profile.req_status == 'pending_out' %}
+        <button class="btn-ghost btn-sm" disabled>⏳ Request Sent</button>
+        {% elif profile.req_status == 'pending_in' %}
+        <form class="inline-form" action="/friends/accept/{{ profile.id }}" method="post">
+          <button type="submit" class="btn btn-sm">✅ Accept Request</button>
+        </form>
+        <form class="inline-form" action="/friends/decline/{{ profile.id }}" method="post">
+          <button type="submit" class="btn-ghost btn-sm">Decline</button>
+        </form>
+        {% elif profile.req_status == 'friends' %}
+        <span class="kind-tag">✓ Friends</span>
+        <form class="inline-form" action="/friends/remove/{{ profile.id }}" method="post" onsubmit="return confirm('Remove {{ profile.name|e }} as a friend?');">
+          <button type="submit" class="btn-danger btn-sm">Remove</button>
+        </form>
+        {% endif %}
+        {% if not profile.is_self %}
+        <a class="btn-ghost btn-sm" href="/messages/{{ profile.id }}">💬 Message</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% for post in posts %}
+  {% include "partials/post_card.html" %}
+{% else %}
+<div class="card"><p style="color:var(--muted)">No posts yet.</p></div>
+{% endfor %}
+
+{% endblock %}

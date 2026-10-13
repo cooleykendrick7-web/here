@@ -1,0 +1,13 @@
+# Owner hash source — never commit
+owner_hash.txt
+
+# Local runtime artifacts
+here.db
+here.db-journal
+venv/
+__pycache__/
+*.pyc
+.env
+
+# Local uploads (Render uses the /data persistent disk)
+uploads/

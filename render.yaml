@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: here
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: here-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: HERE_DB
+        value: /data/here.db
+      - key: HERE_UPLOADS
+        value: /data/uploads

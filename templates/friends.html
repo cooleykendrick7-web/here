@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Friends — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">📥 Friend Requests {% if incoming %}({{ incoming|length }}){% endif %}</div>
+  {% for r in incoming %}
+  <div class="row-item">
+    {% if r.avatar %}<img class="avatar av-40" src="{{ r.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ r.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ r.id }}">{{ r.name|e }}</a></div>
+      <div class="sub">requested {{ r.created_at|e }}</div>
+    </div>
+    <div class="row-actions">
+      <form class="inline-form" action="/friends/accept/{{ r.id }}" method="post">
+        <button type="submit" class="btn btn-sm">Accept</button>
+      </form>
+      <form class="inline-form" action="/friends/decline/{{ r.id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">Decline</button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">No incoming requests.</p>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="section-title">📤 Sent Requests {% if sent %}({{ sent|length }}){% endif %}</div>
+  {% for r in sent %}
+  <div class="row-item">
+    {% if r.avatar %}<img class="avatar av-40" src="{{ r.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ r.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ r.id }}">{{ r.name|e }}</a></div>
+      <div class="sub">waiting for a response</div>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">No sent requests.</p>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="section-title">👥 My Friends {% if friends %}({{ friends|length }}){% endif %}</div>
+  {% for f in friends %}
+  <div class="row-item">
+    {% if f.avatar %}<img class="avatar av-40" src="{{ f.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ f.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ f.id }}">{{ f.name|e }}</a> {% if f.online %}<span class="online-dot" style="position:static;display:inline-block;margin:0"></span>{% endif %}</div>
+      <div class="sub">{% if f.online %}online now{% else %}offline{% endif %}</div>
+    </div>
+    <div class="row-actions">
+      <a class="btn-ghost btn-sm" href="/messages/{{ f.id }}">💬</a>
+      <form class="inline-form" action="/friends/remove/{{ f.id }}" method="post" onsubmit="return confirm('Remove {{ f.name|e }} as a friend?');">
+        <button type="submit" class="btn-danger btn-sm">Remove</button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">No friends yet — find people with search.</p>
+  {% endfor %}
+</div>
+
+{% endblock %}

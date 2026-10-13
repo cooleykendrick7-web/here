@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Search — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">🔎 Search HERE</div>
+  <form action="/search" method="get" style="margin-top:10px">
+    <div class="field">
+      <input type="text" name="q" placeholder="Search people and pages…" value="{{ q|e }}" autocomplete="off">
+    </div>
+    <button type="submit" class="btn btn-sm">Search</button>
+  </form>
+</div>
+
+{% if q %}
+<div class="card">
+  <div class="section-title">👤 People</div>
+  {% for u in users %}
+  <div class="row-item">
+    {% if u.avatar %}<img class="avatar av-40" src="{{ u.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ u.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ u.id }}">{{ u.name|e }}</a></div>
+    </div>
+    <a class="btn-ghost btn-sm" href="/user/{{ u.id }}">View</a>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">No people found for “{{ q|e }}”.</p>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="section-title">📄 Pages</div>
+  {% for p in pages %}
+  <div class="row-item">
+    <div class="grow">
+      <div class="nm"><a href="/page/{{ p.id }}">{{ p.name|e }}</a></div>
+      <div class="sub">{{ p.ptype|replace('_',' ')|title|e }}</div>
+    </div>
+    <a class="btn-ghost btn-sm" href="/page/{{ p.id }}">View</a>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">No pages found for “{{ q|e }}”.</p>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}

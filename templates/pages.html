@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Pages — HERE{% endblock %}
+{% block content %}
+
+<div class="card" style="display:flex;align-items:center;gap:12px">
+  <div class="grow" style="flex:1">
+    <div class="section-title">📄 Pages</div>
+    <p style="color:var(--muted);font-size:14px">Community, market, fan club & seller pages.</p>
+  </div>
+  <a class="btn btn-sm" href="/pages/new">➕ Create Page</a>
+</div>
+
+<div class="pages-grid">
+  {% for p in pages %}
+  <div class="page-card">
+    <a href="/page/{{ p.id }}">
+      <div class="cover">
+        {% if p.cover %}<img src="{{ p.cover|e }}" alt="">{% else %}{{ p.name[:1]|upper|e }}{% endif %}
+      </div>
+    </a>
+    <div class="pbody">
+      <div class="pname"><a href="/page/{{ p.id }}">{{ p.name|e }}</a></div>
+      <span class="ptype-badge">{{ p.ptype|replace('_',' ')|e }}</span>
+      {% if p.description %}<p class="pdesc">{{ p.description|e }}</p>{% endif %}
+      <div class="pmeta">{{ p.members }} members · by {{ p.owner_name|e }}</div>
+      {% if p.joined %}
+      <form class="inline-form" action="/page/{{ p.id }}/leave" method="post">
+        <button type="submit" class="btn-ghost btn-sm">✓ Joined — Leave</button>
+      </form>
+      {% else %}
+      <form class="inline-form" action="/page/{{ p.id }}/join" method="post">
+        <button type="submit" class="btn btn-sm">Join</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card"><p style="color:var(--muted)">No pages yet — create the first one!</p></div>
+  {% endfor %}
+</div>
+
+{% endblock %}

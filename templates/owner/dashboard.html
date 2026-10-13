@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Owner Panel — HERE</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;padding:20px}
+a{color:#ff8f98;text-decoration:none}
+.topbar{display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+.brand{font-size:34px;font-weight:900;color:#ffd400}
+.topbar h1{font-size:22px}
+.topbar .spacer{flex:1}
+.logout{color:#9a9a9a;font-size:14px}
+.logout:hover{color:#fff}
+.stat-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:22px}
+.stat-card{background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:16px;text-align:center}
+.stat-card .num{font-size:30px;font-weight:900;color:#d41f2e}
+.stat-card .lbl{font-size:13px;color:#9a9a9a;font-weight:600;margin-top:4px}
+section{margin-bottom:28px}
+section>h2{font-size:18px;margin-bottom:10px;color:#ffd400}
+.table-wrap{overflow-x:auto;background:#141414;border:1px solid #2a2a2a;border-radius:10px}
+table.admin{width:100%;border-collapse:collapse;font-size:13px}
+table.admin th{background:#1f1f1f;color:#ffd400;text-align:left;padding:9px 10px;font-size:12px;white-space:nowrap}
+table.admin td{padding:8px 10px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+table.admin tr:last-child td{border-bottom:none}
+.reasons{color:#ff8f98;font-weight:600}
+.excerpt{color:#9a9a9a;font-style:italic}
+.status-pill{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 9px;background:#333;color:#fff}
+.status-pill.pending{background:#d41f2e}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer}
+.btn:hover{background:#a8151f}
+.btn-ghost{display:inline-block;background:#2a2a2a;color:#f0f0f0;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-ghost:hover{background:#3a3a3a}
+.inline-form{display:inline}
+.empty{color:#9a9a9a;font-size:14px;padding:14px}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">H</span>
+  <h1>Owner Panel</h1>
+  <span class="spacer"></span>
+  <a class="logout" href="/owner/logout">Logout</a>
+</div>
+
+<div class="stat-cards">
+  <div class="stat-card"><div class="num">{{ stats.users }}</div><div class="lbl">Users</div></div>
+  <div class="stat-card"><div class="num">{{ stats.posts_today }}</div><div class="lbl">Posts today</div></div>
+  <div class="stat-card"><div class="num">{{ stats.msgs_today }}</div><div class="lbl">Messages today</div></div>
+  <div class="stat-card"><div class="num">{{ stats.taps_today }}</div><div class="lbl">Taps today</div></div>
+  <div class="stat-card"><div class="num">{{ stats.flags_pending }}</div><div class="lbl">Pending flags</div></div>
+</div>
+
+<section>
+  <h2>🚩 Flagged Content Queue (AI flags only — you decide)</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>ID</th><th>Type</th><th>Item</th><th>Author</th><th>Reasons</th><th>Excerpt</th><th>Status</th><th>When</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for f in flags %}
+        <tr>
+          <td>{{ f.id }}</td>
+          <td>{{ f.item_type|e }}</td>
+          <td>{{ f.item_id }}</td>
+          <td>{{ f.author_name|e }}</td>
+          <td class="reasons">{{ f.reasons|e }}</td>
+          <td class="excerpt">{{ f.excerpt|e }}</td>
+          <td><span class="status-pill {{ f.status|e }}">{{ f.status|e }}</span></td>
+          <td>{{ f.created_at|e }}</td>
+          <td style="white-space:nowrap">
+            {% if f.status == 'pending' %}
+            <form class="inline-form" action="/owner/flag/{{ f.id }}/dismiss" method="post">
+              <button type="submit" class="btn-ghost">Dismiss</button>
+            </form>
+            <form class="inline-form" action="/owner/flag/{{ f.id }}/remove" method="post" onsubmit="return confirm('Remove this {{ f.item_type|e }}?');">
+              <button type="submit" class="btn">Remove</button>
+            </form>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="empty">No flagged content.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>👥 Users</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Joined</th><th>Posts</th><th>Friends</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.id }}</td>
+          <td><a href="/user/{{ u.id }}">{{ u.name|e }}</a></td>
+          <td>{{ u.email|e }}</td>
+          <td>{{ u.created_at|e }}</td>
+          <td>{{ u.posts }}</td>
+          <td>{{ u.friends }}</td>
+          <td>
+            <form class="inline-form" action="/owner/user/{{ u.id }}/remove" method="post" onsubmit="return confirm('Remove user {{ u.name|e }} and ALL their content?');">
+              <button type="submit" class="btn">Remove User</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">No users.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>🤝 Friend-Request Activity</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>Requester</th><th>Target</th><th>Status</th><th>When</th></tr></thead>
+      <tbody>
+        {% for r in friend_activity %}
+        <tr>
+          <td>{{ r.requester_name|default(r.user_name|default(''))|e }}</td>
+          <td>{{ r.target_name|default(r.friend_name|default(''))|e }}</td>
+          <td><span class="status-pill">{{ r.status|e }}</span></td>
+          <td>{{ r.created_at|e }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">No friend activity yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>📄 Pages</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Members</th><th>Posts</th><th>Interactions</th></tr></thead>
+      <tbody>
+        {% for p in pages %}
+        <tr>
+          <td>{{ p.id }}</td>
+          <td><a href="/page/{{ p.id }}">{{ p.name|e }}</a></td>
+          <td>{{ p.ptype|replace('_',' ')|e }}</td>
+          <td>{{ p.members }}</td>
+          <td>{{ p.posts }}</td>
+          <td>{{ p.interactions }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No pages.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</body>
+</html>
