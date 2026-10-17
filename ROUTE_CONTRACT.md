@@ -23,17 +23,19 @@ rebuild it fresh for HERE.
 - posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), privacy TEXT DEFAULT 'public' ('public'|'friends'|'onlyme'), pinned INTEGER DEFAULT 0, shared_post_id INTEGER NULL (points at original post for share rows), created_at)
 - hidden_posts(user_id, post_id, created_at) — UNIQUE(user_id, post_id); hides a post row from that user's feeds only
 - comments(id, post_id, user_id, body, created_at)
-- likes(post_id, user_id, created_at) — UNIQUE(post_id, user_id)
+- likes(post_id, user_id, kind TEXT DEFAULT 'like' ('like'|'love'|'laugh'|'wow'|'sad'|'angry'), created_at) — UNIQUE(post_id, user_id)
+- stories(id, user_id, media (relative upload path), caption DEFAULT '', created_at, expires_at) — 24h TTL, friends + self only
+- story_views(story_id, user_id, viewed_at) — UNIQUE(story_id, user_id)
 - friendships(id, user_id, friend_id, status TEXT 'pending'|'accepted', created_at) — one row per direction is NOT needed; single row: user_id=requester, friend_id=target. accepted => mutual.
 - messages(id, sender_id, receiver_id, body, is_read INTEGER DEFAULT 0, created_at)
 - pages(id, owner_id, name, ptype TEXT ('community'|'market'|'fan_club'|'seller'), description DEFAULT '', cover DEFAULT '', created_at)
 - page_members(page_id, user_id, created_at) — UNIQUE(page_id, user_id); owner auto-member
 - taps(id, tapper_id, tapped_id, created_at)
 - notifications(id, user_id, kind TEXT ('friend_request'|'tap'|'message'), text, link, is_read INTEGER DEFAULT 0, created_at)
-- moderation_flags(id, item_type TEXT ('post'|'comment'|'message'), item_id INTEGER, author_id, reasons TEXT (comma-joined), excerpt TEXT, status TEXT 'pending'|'dismissed'|'removed' DEFAULT 'pending', created_at)
+- moderation_flags(id, item_type TEXT ('post'|'comment'|'message'|'story'), item_id INTEGER, author_id, reasons TEXT (comma-joined), excerpt TEXT, status TEXT 'pending'|'dismissed'|'removed' DEFAULT 'pending', created_at)
 - owner_sessions(token PRIMARY KEY, created_at)
 
-Upload dirs (under UPLOAD_DIR): avatars/, posts/, pages/. IMG_EXTS={jpg,jpeg,png,gif,webp},
+Upload dirs (under UPLOAD_DIR): avatars/, posts/, pages/, stories/. IMG_EXTS={jpg,jpeg,png,gif,webp},
 AUD_EXTS={mp3,wav,ogg,m4a}, MAX_UPLOAD_MB=25. Save with uuid filename. Serve at /uploads.
 
 Owner auth: bcrypt hash embedded in app.py as OWNER_PW_HASH (read the hash string
@@ -86,11 +88,16 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 | GET | /login | auth/login.html | error? — tiny yellow "H" link bottom -> /owner/login |
 | POST | /login | fields: email, password | -> redirect /home |
 | GET | /logout | | -> redirect /login |
-| GET | /home | home.html | posts (post-card dicts, newest first: friends' posts + public posts), contacts (friends: id,name,avatar,online) |
+| GET | /home | home.html | posts (post-card dicts, newest first: friends' posts + public posts), contacts (friends: id,name,avatar,online), stories_tray (self + friends' active stories: user_id,name,avatar,is_self,first_id,count,all_viewed) |
 | POST | /posts | fields: kind, privacy ('public'|'friends'|'onlyme'), body, feeling, link_url, video_url, media (file) | -> redirect /home |
 | GET | /post/{id} | post.html | post (with comments list of {id,user_id,author_name,author_avatar,body,created_at,can_delete}) |
 | POST | /post/{id}/comment | field: body | -> redirect /post/{id} |
-| POST | /post/{id}/like | | toggle; -> JSON {ok, likes, liked} (share ids resolve to the original; privacy-gated) |
+| POST | /post/{id}/like | | toggle 'like' (removes any existing reaction); -> JSON {ok, likes, liked} (share ids resolve to the original; privacy-gated) |
+| POST | /post/{id}/react | field: kind ('like'|'love'|'laugh'|'wow'|'sad'|'angry') | set/change reaction; same kind twice removes it; -> JSON {ok, likes, reacted, kind, top:[{emoji,count}]} |
+| GET | /stories/new | story_new.html | story upload form (photo/video + caption) |
+| POST | /stories/new | fields: media (file: jpg,png,gif,webp,mp4,mov,webm), caption (max 280) | friends-only, 24h expiry; -> redirect /home |
+| GET | /story/{id} | story.html | viewer (author/friends only, unexpired); marks viewed; prev/next; story {id,media,is_video,caption,created_at,pos,total}, author, is_own |
+| POST | /story/{id}/delete | | own story or owner; -> redirect /home |
 | POST | /post/{id}/delete | | own post or owner; -> redirect back (also deletes its shares) |
 | POST | /post/{id}/share | | public posts only; creates share row pointing at original (one per user); -> redirect back |
 | POST | /share/{id}/remove | | sharer or owner removes their share row; -> redirect back |

@@ -47,6 +47,15 @@ PTYPES = ("community", "market", "fan_club", "seller")
 IMG_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
 AUD_EXTS = {"mp3", "wav", "ogg", "m4a"}
 MAX_UPLOAD_MB = 25
+# Post reactions (extends likes; likes.kind defaults to 'like' for old rows)
+REACTIONS = [("like", "👍", "Like"), ("love", "❤️", "Love"),
+             ("laugh", "😂", "Haha"), ("wow", "😮", "Wow"),
+             ("sad", "😢", "Sad"), ("angry", "😡", "Angry")]
+REACTION_EMOJI = {k: e for k, e, _ in REACTIONS}
+REACTION_LABEL = {k: l for k, e, l in REACTIONS}
+# Stories: 24-hour photo/short-video posts, friends-only
+STORY_EXTS = IMG_EXTS | {"mp4", "mov", "webm"}
+STORY_TTL_HOURS = 24
 ONLINE_MINUTES = 5
 
 for _d in ("avatars", "posts", "pages"):
@@ -175,6 +184,23 @@ def init_db():
         c.execute("ALTER TABLE posts ADD COLUMN pinned INTEGER DEFAULT 0")
     if "shared_post_id" not in _post_cols:
         c.execute("ALTER TABLE posts ADD COLUMN shared_post_id INTEGER")
+    if "page_id" not in _post_cols:
+        c.execute("ALTER TABLE posts ADD COLUMN page_id INTEGER")
+    # --- stories (safe on existing DBs) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS stories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, media TEXT NOT NULL DEFAULT '',
+        caption TEXT DEFAULT '', created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS story_views (
+        story_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        viewed_at TEXT NOT NULL, UNIQUE(story_id, user_id))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_stories_user_exp "
+              "ON stories(user_id, expires_at)")
+    # --- reactions: likes.kind (safe on existing DBs) ---
+    _like_cols = [r["name"] for r in c.execute("PRAGMA table_info(likes)").fetchall()]
+    if "kind" not in _like_cols:
+        c.execute("ALTER TABLE likes ADD COLUMN kind TEXT DEFAULT 'like'")
     conn.commit()
     conn.close()
 
@@ -522,10 +548,20 @@ def post_card(p, viewer, owner_on=False):
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
                          (p["id"],)).fetchone()["c"]
     liked = False
+    my_reaction = None
     if viewer:
-        liked = bool(conn.execute(
-            "SELECT 1 FROM likes WHERE post_id=? AND user_id=?",
-            (p["id"], viewer["id"])).fetchone())
+        r = conn.execute(
+            "SELECT kind FROM likes WHERE post_id=? AND user_id=?",
+            (p["id"], viewer["id"])).fetchone()
+        if r:
+            liked = True
+            my_reaction = r["kind"] or "like"
+    reactions_top = [
+        {"emoji": REACTION_EMOJI.get(r["kind"], "👍"), "count": r["c"]}
+        for r in conn.execute(
+            "SELECT kind, COUNT(*) c FROM likes WHERE post_id=? "
+            "GROUP BY kind ORDER BY c DESC LIMIT 3", (p["id"],)).fetchall()
+        if r["kind"] in REACTION_EMOJI]
     cc = conn.execute("SELECT COUNT(*) c FROM comments WHERE post_id=?",
                       (p["id"],)).fetchone()["c"]
     share_count = conn.execute(
@@ -539,7 +575,7 @@ def post_card(p, viewer, owner_on=False):
             "SELECT 1 FROM hidden_posts WHERE user_id=? AND post_id=?",
             (viewer["id"], p["id"])).fetchone())
     page_name, page_id, is_page = "", 0, False
-    if p["page_id"]:
+    if p.get("page_id"):
         pg = conn.execute("SELECT id,name FROM pages WHERE id=?",
                           (p["page_id"],)).fetchone()
         if pg:
@@ -567,6 +603,8 @@ def post_card(p, viewer, owner_on=False):
         "embed_url": video_embed_url(p["video_url"]) if p["kind"] == "video" else "",
         "created_at": fancy_time(p["created_at"]),
         "likes": likes, "liked": liked, "comments_count": cc,
+        "my_reaction": my_reaction, "reactions_top": reactions_top,
+        "reaction_kinds": REACTIONS,
         "share_count": share_count,
         "privacy": priv,
         "pinned": bool(p.get("pinned")) and not share,
@@ -755,6 +793,7 @@ async def home(request: Request):
         contacts.sort(key=lambda c: (not c["online"], c["name"].lower()))
     return render(request, "home.html",
                   {"posts": posts, "contacts": contacts,
+                   "stories_tray": stories_tray(user["id"]),
                    "discover_people": discover_people(user["id"], 3),
                    "trends": trending_topics(5)})
 
@@ -921,14 +960,218 @@ async def toggle_like(request: Request, pid: int):
                      (pid, user["id"]))
         liked = False
     else:
-        conn.execute("INSERT INTO likes(post_id, user_id, created_at) VALUES(?,?,?)",
-                     (pid, user["id"], now_iso()))
+        conn.execute("INSERT INTO likes(post_id, user_id, kind, created_at) VALUES(?,?,?,?)",
+                     (pid, user["id"], "like", now_iso()))
         liked = True
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
                          (pid,)).fetchone()["c"]
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True, "likes": likes, "liked": liked})
+
+
+@app.post("/post/{pid}/react")
+async def react_post(request: Request, pid: int):
+    """Set/change/remove a reaction kind. Same kind twice = toggle off."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    form = await request.form()
+    kind = (form.get("kind") or "like").strip()
+    if kind not in REACTION_EMOJI:
+        kind = "like"
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    if not p:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    p = dict(p)
+    if p.get("shared_post_id"):
+        # Reactions land on the original post, not the share pointer.
+        pid = p["shared_post_id"]
+        p = dict(conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone() or {})
+        if not p:
+            conn.close()
+            return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    if not can_view_post(user, p):
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    row = conn.execute("SELECT kind FROM likes WHERE post_id=? AND user_id=?",
+                       (pid, user["id"])).fetchone()
+    if row and (row["kind"] or "like") == kind:
+        conn.execute("DELETE FROM likes WHERE post_id=? AND user_id=?",
+                     (pid, user["id"]))
+        my_kind = None
+    elif row:
+        conn.execute("UPDATE likes SET kind=?, created_at=? WHERE post_id=? AND user_id=?",
+                     (kind, now_iso(), pid, user["id"]))
+        my_kind = kind
+    else:
+        conn.execute("INSERT INTO likes(post_id, user_id, kind, created_at) VALUES(?,?,?,?)",
+                     (pid, user["id"], kind, now_iso()))
+        my_kind = kind
+    likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
+                         (pid,)).fetchone()["c"]
+    top = [{"emoji": REACTION_EMOJI.get(r["kind"], "👍"), "count": r["c"]}
+           for r in conn.execute(
+               "SELECT kind, COUNT(*) c FROM likes WHERE post_id=? "
+               "GROUP BY kind ORDER BY c DESC LIMIT 3", (pid,)).fetchall()
+           if r["kind"] in REACTION_EMOJI]
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "likes": likes, "reacted": my_kind is not None,
+                         "kind": my_kind, "top": top})
+
+
+# ---------------- stories (24-hour, friends-only) ----------------
+def story_expires_at():
+    return (datetime.now(timezone.utc) + timedelta(hours=STORY_TTL_HOURS)).isoformat()
+
+
+def prune_stories():
+    """Lazy expiry: drop expired stories and orphaned views."""
+    conn = db()
+    conn.execute("DELETE FROM stories WHERE expires_at < ?", (now_iso(),))
+    conn.execute("DELETE FROM story_views WHERE story_id NOT IN (SELECT id FROM stories)")
+    conn.commit()
+    conn.close()
+
+
+def stories_tray(viewer_id):
+    """Tray entries for viewer + friends with active stories. Self first, then newest."""
+    prune_stories()
+    conn = db()
+    now = now_iso()
+    tray, others = [], []
+    for fid in friend_id_set(viewer_id) | {viewer_id}:
+        u = conn.execute("SELECT id,name,avatar FROM users WHERE id=?", (fid,)).fetchone()
+        if not u:
+            continue
+        ss = conn.execute(
+            "SELECT id, created_at FROM stories WHERE user_id=? AND expires_at > ? "
+            "ORDER BY created_at DESC", (fid, now)).fetchall()
+        if not ss:
+            continue
+        sids = [s["id"] for s in ss]
+        ph = ",".join("?" * len(sids))
+        seen = {r["story_id"] for r in conn.execute(
+            f"SELECT story_id FROM story_views WHERE user_id=? AND story_id IN ({ph})",
+            (viewer_id, *sids)).fetchall()}
+        entry = {
+            "user_id": u["id"], "name": u["name"],
+            "avatar": avatar_url(u["avatar"]),
+            "is_self": fid == viewer_id,
+            "first_id": ss[0]["id"], "count": len(ss),
+            "all_viewed": all(s in seen for s in sids),
+            "latest": ss[0]["created_at"] or "",
+        }
+        (tray if fid == viewer_id else others).append(entry)
+    conn.close()
+    others.sort(key=lambda t: t["latest"], reverse=True)
+    return tray + others
+
+
+def _get_story(sid):
+    conn = db()
+    s = conn.execute("SELECT * FROM stories WHERE id=?", (sid,)).fetchone()
+    conn.close()
+    return dict(s) if s else None
+
+
+def _can_view_story(user, s):
+    if not s or s["expires_at"] < now_iso():
+        return False
+    if s["user_id"] == user["id"]:
+        return True
+    return s["user_id"] in friend_id_set(user["id"])
+
+
+@app.get("/stories/new", response_class=HTMLResponse)
+async def story_new_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    return render(request, "story_new.html", {})
+
+
+@app.post("/stories/new")
+async def story_create(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    caption = (form.get("caption") or "").strip()[:280]
+    try:
+        media = save_upload(form.get("media"), "stories", STORY_EXTS)
+    except ValueError as e:
+        return redir("/stories/new", str(e))
+    if not media:
+        return redir("/stories/new", "Choose a photo or short video.")
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO stories(user_id, media, caption, created_at, expires_at) "
+        "VALUES(?,?,?,?,?)",
+        (user["id"], media, caption, now_iso(), story_expires_at()))
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    flag_item("story", sid, user["id"], user["name"], caption)
+    return redir("/home", "Story posted — it disappears in 24 hours.")
+
+
+@app.get("/story/{sid}", response_class=HTMLResponse)
+async def story_view(request: Request, sid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    s = _get_story(sid)
+    if not _can_view_story(user, s):
+        return render(request, "post_gone.html",
+                      {"message": "This story isn't available."})
+    conn = db()
+    author = conn.execute("SELECT id,name,avatar FROM users WHERE id=?",
+                          (s["user_id"],)).fetchone()
+    mine = conn.execute(
+        "SELECT id, media, caption, created_at FROM stories "
+        "WHERE user_id=? AND expires_at > ? ORDER BY created_at DESC",
+        (s["user_id"], now_iso())).fetchall()
+    ids = [r["id"] for r in mine]
+    idx = ids.index(sid)
+    prev_id = ids[idx - 1] if idx > 0 else 0
+    next_id = ids[idx + 1] if idx < len(ids) - 1 else 0
+    conn.execute("INSERT OR IGNORE INTO story_views(story_id, user_id, viewed_at) "
+                 "VALUES(?,?,?)", (sid, user["id"], now_iso()))
+    conn.commit()
+    conn.close()
+    media_url = "/uploads/" + s["media"] if s["media"] else ""
+    is_video = media_url.lower().endswith((".mp4", ".mov", ".webm"))
+    return render(request, "story.html", {
+        "story": {"id": s["id"], "media": media_url, "is_video": is_video,
+                  "caption": s["caption"] or "",
+                  "created_at": fancy_time(s["created_at"]),
+                  "pos": idx + 1, "total": len(ids)},
+        "author": {"id": author["id"], "name": author["name"],
+                   "avatar": avatar_url(author["avatar"])} if author else None,
+        "is_own": s["user_id"] == user["id"],
+        "prev_id": prev_id, "next_id": next_id,
+    })
+
+
+@app.post("/story/{sid}/delete")
+async def story_delete(request: Request, sid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    s = _get_story(sid)
+    owner_on = is_owner(request)
+    if not s or (s["user_id"] != user["id"] and not owner_on):
+        return redir("/home", "Story not found.")
+    conn = db()
+    conn.execute("DELETE FROM story_views WHERE story_id=?", (sid,))
+    conn.execute("DELETE FROM stories WHERE id=?", (sid,))
+    conn.commit()
+    conn.close()
+    return redir("/home", "Story deleted.")
 
 
 def _delete_post(pid):
@@ -1868,6 +2111,12 @@ async def owner_flag_remove(request: Request, fid: int):
         elif f["item_type"] == "message":
             conn = db()
             conn.execute("DELETE FROM messages WHERE id=?", (f["item_id"],))
+            conn.commit()
+            conn.close()
+        elif f["item_type"] == "story":
+            conn = db()
+            conn.execute("DELETE FROM story_views WHERE story_id=?", (f["item_id"],))
+            conn.execute("DELETE FROM stories WHERE id=?", (f["item_id"],))
             conn.commit()
             conn.close()
         conn = db()
