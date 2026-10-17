@@ -18,7 +18,7 @@ rebuild it fresh for HERE.
 
 ## DB schema (SQLite, tables created in init_db; all created_at = UTC ISO string)
 
-- users(id, name, email UNIQUE, pw_hash, bio DEFAULT '', avatar DEFAULT '', last_seen TEXT, created_at)
+- users(id, name, email UNIQUE, pw_hash, bio DEFAULT '', avatar DEFAULT '', last_seen TEXT, is_verified INTEGER DEFAULT 0, verification_status TEXT DEFAULT 'none' ('none'|'pending'|'approved'|'declined'), created_at)
 - sessions(token PRIMARY KEY, user_id, created_at)
 - posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), privacy TEXT DEFAULT 'public' ('public'|'friends'|'onlyme'), pinned INTEGER DEFAULT 0, shared_post_id INTEGER NULL (points at original post for share rows), created_at)
 - hidden_posts(user_id, post_id, created_at) — UNIQUE(user_id, post_id); hides a post row from that user's feeds only
@@ -28,7 +28,8 @@ rebuild it fresh for HERE.
 - story_views(story_id, user_id, viewed_at) — UNIQUE(story_id, user_id)
 - friendships(id, user_id, friend_id, status TEXT 'pending'|'accepted', created_at) — one row per direction is NOT needed; single row: user_id=requester, friend_id=target. accepted => mutual.
 - messages(id, sender_id, receiver_id, body, is_read INTEGER DEFAULT 0, created_at)
-- pages(id, owner_id, name, ptype TEXT ('community'|'market'|'fan_club'|'seller'), description DEFAULT '', cover DEFAULT '', created_at)
+- pages(id, owner_id, name, ptype TEXT ('community'|'market'|'fan_club'|'seller'), description DEFAULT '', cover DEFAULT '', is_verified INTEGER DEFAULT 0, verification_status TEXT DEFAULT 'none' ('none'|'pending'|'approved'|'declined'), created_at)
+- verification_requests(id, kind TEXT ('user'|'page'), target_id, requester_id, status TEXT 'pending'|'approved'|'declined' DEFAULT 'pending', created_at, reviewed_at TEXT NULL, note TEXT DEFAULT '')
 - page_members(page_id, user_id, created_at) — UNIQUE(page_id, user_id); owner auto-member
 - taps(id, tapper_id, tapped_id, created_at)
 - notifications(id, user_id, kind TEXT ('friend_request'|'tap'|'message'), text, link, is_read INTEGER DEFAULT 0, created_at)
@@ -73,10 +74,13 @@ last_seen: updated to now on every authenticated page view; online = within 5 mi
 - `unread_msgs` — unread messages (0 for guests)
 
 Post card partial `partials/post_card.html`, context var `post` with keys:
-  id, user_id, author_name, author_avatar, kind, body, feeling, link_url,
+  id, user_id, author_name, author_avatar, author_verified (bool — golden ★ beside name when true), kind, body, feeling, link_url,
   video_url, media (full /uploads url or ""), embed_url (for video kind, "" if none),
   created_at (display string), likes (count), liked (bool), comments_count,
   can_delete (bool), is_page_post (bool), page_name ("" or name), page_id (0 or id)
+
+Verification: users/pages carry is_verified (bool) and verification_status ('none'|'pending'|'approved'|'declined').
+Verified names show a golden five-point star ★ (color #FFD700, white/gold shine + light red glow) beside the name — on profiles, pages, post cards. Verification is owner-only; never auto-approved. Users apply via "⭐ Verify me" on their profile or settings; page owners apply via "⭐ Verify page" on their page.
 
 ## Routes & templates
 
@@ -106,7 +110,8 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 | GET | /hidden | hidden.html | posts (your hidden posts, with Unhide buttons) |
 | POST | /post/{id}/pin | | author only, personal posts; unpins others; -> redirect back |
 | POST | /post/{id}/unpin | | author only; -> redirect back |
-| GET | /user/{id} | profile.html | profile {id,name,bio,avatar,created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count}, posts |
+| GET | /user/{id} | profile.html | profile {id,name,bio,avatar,created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count,is_verified,verification_status}, posts |
+| POST | /verify/user/request | | logged in; once per user (re-request after decline allowed); sets verification_status='pending' + inserts verification_requests(kind='user'); -> redirect /user/{id} with flash |
 | GET | /settings/profile | profile_edit.html | profile |
 | POST | /settings/profile | fields: name, bio, avatar (file) | -> redirect /user/{id} |
 | GET | /friends | friends.html | incoming [{id,name,avatar,created_at}], sent [{id,name,avatar}], friends [{id,name,avatar,online}] |
@@ -125,7 +130,8 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 | GET | /pages | pages.html | pages [{id,name,ptype,description,cover,members,owner_name,joined}] |
 | GET | /pages/new | page_form.html | ptypes list |
 | POST | /pages | fields: name, ptype, description, cover (file) | -> redirect /page/{id} |
-| GET | /page/{id} | page.html | page {id,name,ptype,description,cover,owner_name,owner_id,members,is_owner,joined}, posts |
+| GET | /page/{id} | page.html | page {id,name,ptype,description,cover,owner_name,owner_id,members,is_owner,joined,is_verified,verification_status}, posts |
+| POST | /verify/page/{id}/request | | page owner only; sets pages.verification_status='pending' + inserts verification_requests(kind='page'); -> redirect /page/{id} with flash |
 | POST | /page/{id}/join | | -> redirect /page/{id} |
 | POST | /page/{id}/leave | | -> redirect /page/{id} |
 | POST | /page/{id}/post | fields: kind, body, feeling, link_url, video_url, media (file) | -> redirect /page/{id} |
@@ -134,7 +140,9 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 | GET | /owner/login | owner/login.html | error? |
 | POST | /owner/login | field: password | -> redirect /owner |
 | GET | /owner/logout | | -> redirect /login |
-| GET | /owner | owner/dashboard.html | users [{id,name,email,created_at,posts,friends}], friend_activity (recent friendships rows w/ names), flags [{id,item_type,item_id,author_name,excerpt,reasons,status,created_at}], pages [{id,name,ptype,members,posts,interactions}], stats {users, posts_today, msgs_today, taps_today, flags_pending} |
+| GET | /owner | owner/dashboard.html | users [{id,name,email,created_at,posts,friends}], friend_activity (recent friendships rows w/ names), flags [{id,item_type,item_id,author_name,excerpt,reasons,status,created_at}], pages [{id,name,ptype,members,posts,interactions}], verifications [{id,kind ('user'|'page'),name,link,requester_name,posts,extra,extra_label,created_at,status}], stats {users, posts_today, msgs_today, taps_today, flags_pending, verify_pending} |
+| POST | /owner/verify/{id}/approve | | owner only; sets target is_verified=1 + verification_status='approved', request status='approved' + reviewed_at; -> redirect /owner |
+| POST | /owner/verify/{id}/decline | | owner only; sets target verification_status='declined', request status='declined' + reviewed_at; -> redirect /owner |
 | POST | /owner/flag/{fid}/dismiss | | -> redirect /owner |
 | POST | /owner/flag/{fid}/remove | | deletes the flagged item -> redirect /owner |
 | POST | /owner/post/{id}/delete | | -> redirect /owner |

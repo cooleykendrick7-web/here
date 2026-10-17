@@ -201,6 +201,27 @@ def init_db():
     _like_cols = [r["name"] for r in c.execute("PRAGMA table_info(likes)").fetchall()]
     if "kind" not in _like_cols:
         c.execute("ALTER TABLE likes ADD COLUMN kind TEXT DEFAULT 'like'")
+    # --- verification system (safe on existing DBs) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS verification_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL, target_id INTEGER NOT NULL,
+        requester_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL, reviewed_at TEXT, note TEXT DEFAULT '')""")
+    _user_cols = [r["name"] for r in c.execute("PRAGMA table_info(users)").fetchall()]
+    if "is_verified" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0")
+    if "verification_status" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN verification_status TEXT DEFAULT 'none'")
+    _page_cols = [r["name"] for r in c.execute("PRAGMA table_info(pages)").fetchall()]
+    if "is_verified" not in _page_cols:
+        c.execute("ALTER TABLE pages ADD COLUMN is_verified INTEGER DEFAULT 0")
+    if "verification_status" not in _page_cols:
+        c.execute("ALTER TABLE pages ADD COLUMN verification_status TEXT DEFAULT 'none'")
+    # backfill any NULLs left on rows that predated the columns
+    c.execute("UPDATE users SET is_verified=0 WHERE is_verified IS NULL")
+    c.execute("UPDATE users SET verification_status='none' WHERE verification_status IS NULL")
+    c.execute("UPDATE pages SET is_verified=0 WHERE is_verified IS NULL")
+    c.execute("UPDATE pages SET verification_status='none' WHERE verification_status IS NULL")
     conn.commit()
     conn.close()
 
@@ -543,7 +564,7 @@ def post_card(p, viewer, owner_on=False):
     if viewer and not can_view_post(viewer, p):
         conn.close()
         return None
-    a = conn.execute("SELECT id,name,avatar FROM users WHERE id=?",
+    a = conn.execute("SELECT id,name,avatar,is_verified FROM users WHERE id=?",
                      (p["user_id"],)).fetchone()
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
                          (p["id"],)).fetchone()["c"]
@@ -596,6 +617,7 @@ def post_card(p, viewer, owner_on=False):
         "dom_id": ("post-share-%d" % share["id"]) if share else ("post-%d" % p["id"]),
         "author_name": a["name"] if a else "Deleted user",
         "author_avatar": avatar,
+        "author_verified": bool(a["is_verified"]) if a else False,
         "kind": p["kind"], "body": p["body"] or "",
         "feeling": p["feeling"] or "", "link_url": p["link_url"] or "",
         "video_url": p["video_url"] or "",
@@ -1385,6 +1407,8 @@ async def profile(request: Request, uid: int):
         "is_self": user["id"] == uid,
         "req_status": req_status(user["id"], uid),
         "tap_count": tcount,
+        "is_verified": bool(prof.get("is_verified")),
+        "verification_status": prof.get("verification_status") or "none",
     }
     posts = []
     for r in prows:
@@ -1405,7 +1429,9 @@ async def profile_edit_page(request: Request):
     return render(request, "profile_edit.html", {
         "profile": {"id": user["id"], "name": user["name"],
                     "bio": user.get("bio", ""),
-                    "avatar": avatar_url(user.get("avatar", ""))}})
+                    "avatar": avatar_url(user.get("avatar", "")),
+                    "is_verified": bool(user.get("is_verified")),
+                    "verification_status": user.get("verification_status") or "none"}})
 
 
 @app.post("/settings/profile")
@@ -1775,6 +1801,8 @@ def page_ctx(pg, user):
         "owner_name": owner["name"] if owner else "Deleted user",
         "owner_id": pg["owner_id"], "members": members,
         "is_owner": user["id"] == pg["owner_id"], "joined": joined,
+        "is_verified": bool(pg.get("is_verified")),
+        "verification_status": pg.get("verification_status") or "none",
     }
 
 
@@ -2058,6 +2086,40 @@ async def owner_dashboard(request: Request):
                       "members": members, "posts": posts_n,
                       "interactions": interactions})
 
+    # --- verification requests: pending first, with review context ---
+    vrows = conn.execute(
+        "SELECT vr.*, ru.name AS requester_name FROM verification_requests vr "
+        "LEFT JOIN users ru ON ru.id=vr.requester_id "
+        "ORDER BY CASE vr.status WHEN 'pending' THEN 0 ELSE 1 END, "
+        "vr.created_at DESC LIMIT 100").fetchall()
+    verifications = []
+    for r in vrows:
+        if r["kind"] == "user":
+            tgt = conn.execute("SELECT id,name FROM users WHERE id=?",
+                               (r["target_id"],)).fetchone()
+            posts_n = conn.execute("SELECT COUNT(*) c FROM posts WHERE user_id=?",
+                                   (r["target_id"],)).fetchone()["c"]
+            extra_n = conn.execute(
+                "SELECT COUNT(*) c FROM friendships WHERE status='accepted' AND "
+                "(user_id=? OR friend_id=?)", (r["target_id"], r["target_id"])).fetchone()["c"]
+            extra_lbl, link = "friends", f"/user/{r['target_id']}"
+        else:
+            tgt = conn.execute("SELECT id,name FROM pages WHERE id=?",
+                               (r["target_id"],)).fetchone()
+            posts_n = conn.execute("SELECT COUNT(*) c FROM posts WHERE page_id=?",
+                                   (r["target_id"],)).fetchone()["c"]
+            extra_n = conn.execute("SELECT COUNT(*) c FROM page_members WHERE page_id=?",
+                                   (r["target_id"],)).fetchone()["c"]
+            extra_lbl, link = "members", f"/page/{r['target_id']}"
+        verifications.append({
+            "id": r["id"], "kind": r["kind"],
+            "name": tgt["name"] if tgt else "Deleted",
+            "link": link,
+            "requester_name": r["requester_name"] or "Deleted user",
+            "posts": posts_n, "extra": extra_n, "extra_label": extra_lbl,
+            "status": r["status"], "created_at": fancy_time(r["created_at"]),
+        })
+
     today = datetime.now(timezone.utc).date().isoformat()
     stats = {
         "users": conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"],
@@ -2073,11 +2135,15 @@ async def owner_dashboard(request: Request):
         "flags_pending": conn.execute(
             "SELECT COUNT(*) c FROM moderation_flags WHERE status='pending'"
         ).fetchone()["c"],
+        "verify_pending": conn.execute(
+            "SELECT COUNT(*) c FROM verification_requests WHERE status='pending'"
+        ).fetchone()["c"],
     }
     conn.close()
     return render(request, "owner/dashboard.html", {
         "users": users, "friend_activity": friend_activity,
-        "flags": flags, "pages": pages, "stats": stats})
+        "flags": flags, "pages": pages, "stats": stats,
+        "verifications": verifications})
 
 
 @app.post("/owner/flag/{fid}/dismiss")
@@ -2158,6 +2224,86 @@ async def owner_user_remove(request: Request, uid: int):
     conn.execute("DELETE FROM moderation_flags WHERE author_id=?", (uid,))
     conn.execute("DELETE FROM users WHERE id=?", (uid,))
     conn.commit()
+    conn.close()
+    return redir("/owner")
+
+
+# ---------------- verification ----------------
+@app.post("/verify/user/request")
+async def verify_user_request(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    fresh = get_user(user["id"])
+    if fresh.get("is_verified") or (fresh.get("verification_status") or "none") == "pending":
+        return redir(f"/user/{user['id']}", "Your verification request is already pending.")
+    conn = db()
+    conn.execute("UPDATE users SET verification_status='pending' WHERE id=?", (user["id"],))
+    conn.execute(
+        "INSERT INTO verification_requests(kind, target_id, requester_id, status, created_at) "
+        "VALUES(?,?,?,?,?)",
+        ("user", user["id"], user["id"], "pending", now_iso()))
+    conn.commit()
+    conn.close()
+    return redir(f"/user/{user['id']}", "Verification request submitted — the owner will review your page.")
+
+
+@app.post("/verify/page/{pid}/request")
+async def verify_page_request(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    pg = conn.execute("SELECT * FROM pages WHERE id=?", (pid,)).fetchone()
+    if not pg or pg["owner_id"] != user["id"]:
+        conn.close()
+        return redir("/pages", "Only the page owner can request verification.")
+    if pg["is_verified"] or (pg["verification_status"] or "none") == "pending":
+        conn.close()
+        return redir(f"/page/{pid}", "Verification request already pending.")
+    conn.execute("UPDATE pages SET verification_status='pending' WHERE id=?", (pid,))
+    conn.execute(
+        "INSERT INTO verification_requests(kind, target_id, requester_id, status, created_at) "
+        "VALUES(?,?,?,?,?)",
+        ("page", pid, user["id"], "pending", now_iso()))
+    conn.commit()
+    conn.close()
+    return redir(f"/page/{pid}", "Verification request submitted — the owner will review your page.")
+
+
+@app.post("/owner/verify/{rid}/approve")
+async def owner_verify_approve(request: Request, rid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    vr = conn.execute("SELECT * FROM verification_requests WHERE id=?", (rid,)).fetchone()
+    if vr and vr["status"] == "pending":
+        table = "users" if vr["kind"] == "user" else "pages"
+        conn.execute(
+            f"UPDATE {table} SET is_verified=1, verification_status='approved' WHERE id=?",
+            (vr["target_id"],))
+        conn.execute("UPDATE verification_requests SET status='approved', reviewed_at=? WHERE id=?",
+                     (now_iso(), rid))
+        conn.commit()
+    conn.close()
+    return redir("/owner")
+
+
+@app.post("/owner/verify/{rid}/decline")
+async def owner_verify_decline(request: Request, rid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    vr = conn.execute("SELECT * FROM verification_requests WHERE id=?", (rid,)).fetchone()
+    if vr and vr["status"] == "pending":
+        table = "users" if vr["kind"] == "user" else "pages"
+        conn.execute(f"UPDATE {table} SET verification_status='declined' WHERE id=?",
+                     (vr["target_id"],))
+        conn.execute("UPDATE verification_requests SET status='declined', reviewed_at=? WHERE id=?",
+                     (now_iso(), rid))
+        conn.commit()
     conn.close()
     return redir("/owner")
 
