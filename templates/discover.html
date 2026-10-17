@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Discover — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">🧭 Discover</div>
+  <p style="color:var(--muted);font-size:14px">People you may know and what's trending this week on HERE.</p>
+</div>
+
+<div class="card">
+  <div class="section-title">👋 People you may know</div>
+  {% for p in people %}
+  <div class="row-item">
+    {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ p.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ p.id }}">{{ p.name|e }}</a></div>
+      {% if p.views %}<div class="sub">{{ p.views }} profile {{ 'view' if p.views == 1 else 'views' }} this week</div>{% endif %}
+    </div>
+    <div class="row-actions">
+      {% if p.req == 'none' %}
+      <form class="inline-form" action="/friends/request/{{ p.id }}" method="post">
+        <button type="submit" class="btn btn-sm">➕ Add Friend</button>
+      </form>
+      {% elif p.req == 'pending_out' %}
+      <span class="kind-tag">⏳ Request sent</span>
+      <form class="inline-form" action="/friends/cancel/{{ p.id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">Cancel</button>
+      </form>
+      {% elif p.req == 'pending_in' %}
+      <form class="inline-form" action="/friends/accept/{{ p.id }}" method="post">
+        <button type="submit" class="btn btn-sm">Accept</button>
+      </form>
+      <form class="inline-form" action="/friends/decline/{{ p.id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">Decline</button>
+      </form>
+      {% elif p.req == 'friends' %}
+      <span class="kind-tag">✓ Friends</span>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">No suggestions right now — check back soon!</p>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="section-title">🔥 Trending this week</div>
+  {% for t in trends %}
+  <div class="row-item">
+    <div class="grow">
+      <div class="nm"><a href="/search?q={{ t.q|urlencode }}">{{ t.label|e }}</a></div>
+      <div class="sub">{{ t.count }} {{ 'post' if t.count == 1 else 'posts' }}</div>
+    </div>
+    <div class="row-actions">
+      <a class="btn-ghost btn-sm" href="/search?q={{ t.q|urlencode }}">View posts</a>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">Nothing trending yet — post something with a #hashtag to start a trend!</p>
+  {% endfor %}
+</div>
+
+{% endblock %}

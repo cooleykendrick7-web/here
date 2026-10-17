@@ -59,10 +59,28 @@
       <div class="nm"><a href="/page/{{ p.id }}">{{ p.name|e }}</a></div>
       <div class="sub">{{ p.ptype|replace('_',' ')|title|e }}</div>
     </div>
-    <a class="btn-ghost btn-sm" href="/page/{{ p.id }}">View</a>
+    <div class="row-actions">
+      {% if p.joined %}
+      <span class="kind-tag">✓ Joined</span>
+      <a class="btn-ghost btn-sm" href="/page/{{ p.id }}">View</a>
+      {% else %}
+      <form class="inline-form" action="/page/{{ p.id }}/join" method="post">
+        <button type="submit" class="btn btn-sm">Join</button>
+      </form>
+      {% endif %}
+    </div>
   </div>
   {% else %}
   <p style="color:var(--muted);font-size:14px">No pages found for “{{ q|e }}”.</p>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="section-title">📝 Posts</div>
+  {% for post in posts %}
+    {% include "partials/post_card.html" %}
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">No posts found for “{{ q|e }}”.</p>
   {% endfor %}
 </div>
 {% endif %}

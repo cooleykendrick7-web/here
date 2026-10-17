@@ -234,6 +234,7 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
     {% endif %}
     <a class="menu-item" href="/friends"><span class="menu-ic">👥</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
     <a class="menu-item" href="/search"><span class="menu-ic">🔎</span> Find Friends</a>
+    <a class="menu-item" href="/discover"><span class="menu-ic">🧭</span> Discover</a>
     <a class="menu-item" href="/messages"><span class="menu-ic">💬</span> Messages</a>
     <a class="menu-item" href="/pages"><span class="menu-ic">📄</span> Pages</a>
     <a class="menu-item" href="/hidden"><span class="menu-ic">🙈</span> Hidden</a>
@@ -246,6 +247,39 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
   </main>
 
   <aside class="side-right">
+    {% if discover_people %}
+    <h4>People you may know</h4>
+    {% for p in discover_people %}
+    <div class="contact-item">
+      <a href="/user/{{ p.id }}" style="display:flex;align-items:center;gap:10px;min-width:0">
+        {% if p.avatar %}<img class="avatar av-32" src="{{ p.avatar|e }}" alt="">
+        {% else %}<span class="av-ph av-32">{{ p.name[:1]|upper|e }}</span>{% endif %}
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.name|e }}</span>
+      </a>
+      {% if p.req == 'none' %}
+      <form class="inline-form" action="/friends/request/{{ p.id }}" method="post" style="margin-left:auto">
+        <button type="submit" class="btn-ghost btn-sm">Add</button>
+      </form>
+      {% elif p.req == 'pending_out' %}
+      <span class="kind-tag" style="margin-left:auto">⏳</span>
+      {% elif p.req == 'pending_in' %}
+      <a class="btn-ghost btn-sm" style="margin-left:auto" href="/friends">Respond</a>
+      {% else %}
+      <span class="kind-tag" style="margin-left:auto">✓</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div style="margin-bottom:14px"><a class="action-link" href="/discover">See more →</a></div>
+    {% endif %}
+    {% if trends %}
+    <h4>Trending this week</h4>
+    {% for t in trends %}
+    <a class="contact-item" href="/search?q={{ t.q|urlencode }}">
+      <span style="font-weight:700;color:var(--red)">{{ t.label|e }}</span>
+      <span style="color:var(--muted);font-size:12px;margin-left:auto">{{ t.count }} posts</span>
+    </a>
+    {% endfor %}
+    {% endif %}
     {% if contacts %}
     <h4>Contacts</h4>
     {% for c in contacts %}
