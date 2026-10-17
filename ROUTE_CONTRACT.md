@@ -20,7 +20,8 @@ rebuild it fresh for HERE.
 
 - users(id, name, email UNIQUE, pw_hash, bio DEFAULT '', avatar DEFAULT '', last_seen TEXT, created_at)
 - sessions(token PRIMARY KEY, user_id, created_at)
-- posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), created_at)
+- posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), privacy TEXT DEFAULT 'public' ('public'|'friends'|'onlyme'), pinned INTEGER DEFAULT 0, shared_post_id INTEGER NULL (points at original post for share rows), created_at)
+- hidden_posts(user_id, post_id, created_at) — UNIQUE(user_id, post_id); hides a post row from that user's feeds only
 - comments(id, post_id, user_id, body, created_at)
 - likes(post_id, user_id, created_at) — UNIQUE(post_id, user_id)
 - friendships(id, user_id, friend_id, status TEXT 'pending'|'accepted', created_at) — one row per direction is NOT needed; single row: user_id=requester, friend_id=target. accepted => mutual.
@@ -86,11 +87,18 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 | POST | /login | fields: email, password | -> redirect /home |
 | GET | /logout | | -> redirect /login |
 | GET | /home | home.html | posts (post-card dicts, newest first: friends' posts + public posts), contacts (friends: id,name,avatar,online) |
-| POST | /posts | fields: kind, body, feeling, link_url, video_url, media (file) | -> redirect /home |
+| POST | /posts | fields: kind, privacy ('public'|'friends'|'onlyme'), body, feeling, link_url, video_url, media (file) | -> redirect /home |
 | GET | /post/{id} | post.html | post (with comments list of {id,user_id,author_name,author_avatar,body,created_at,can_delete}) |
 | POST | /post/{id}/comment | field: body | -> redirect /post/{id} |
-| POST | /post/{id}/like | | toggle; -> JSON {ok, likes, liked} |
-| POST | /post/{id}/delete | | own post or owner; -> redirect back |
+| POST | /post/{id}/like | | toggle; -> JSON {ok, likes, liked} (share ids resolve to the original; privacy-gated) |
+| POST | /post/{id}/delete | | own post or owner; -> redirect back (also deletes its shares) |
+| POST | /post/{id}/share | | public posts only; creates share row pointing at original (one per user); -> redirect back |
+| POST | /share/{id}/remove | | sharer or owner removes their share row; -> redirect back |
+| POST | /post/{id}/hide | | hides the row from YOUR feeds only; -> redirect back |
+| POST | /post/{id}/unhide | | -> redirect back |
+| GET | /hidden | hidden.html | posts (your hidden posts, with Unhide buttons) |
+| POST | /post/{id}/pin | | author only, personal posts; unpins others; -> redirect back |
+| POST | /post/{id}/unpin | | author only; -> redirect back |
 | GET | /user/{id} | profile.html | profile {id,name,bio,avatar,created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count}, posts |
 | GET | /settings/profile | profile_edit.html | profile |
 | POST | /settings/profile | fields: name, bio, avatar (file) | -> redirect /user/{id} |
@@ -98,13 +106,14 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 | POST | /friends/request/{id} | | -> redirect back |
 | POST | /friends/accept/{id} | | -> redirect /friends |
 | POST | /friends/decline/{id} | | -> redirect /friends |
+| POST | /friends/cancel/{id} | | cancel an outgoing request; -> redirect back |
 | POST | /friends/remove/{id} | | -> redirect /friends |
 | POST | /tap/{id} | | -> redirect back; creates tap + notification |
-| GET | /messages | inbox.html | threads [{friend_id,friend_name,friend_avatar,last_body,last_at,unread}] |
+| GET | /messages | inbox.html | box ('inbox'|'sent'); threads [{friend_id,friend_name,friend_avatar,last_body,last_at,unread}]; sent [{friend_id,friend_name,friend_avatar,body,created_at}] |
 | GET | /messages/{fid} | thread.html | friend {id,name,avatar}, msgs [{id,sender_id,body,created_at,mine}] |
 | POST | /messages/{fid} | field: body | -> redirect /messages/{fid} |
 | GET | /notifications | notifications.html | notes [{id,kind,text,link,created_at,is_read}] (marks read on view) |
-| GET | /search | search.html | q, users [{id,name,avatar}], pages [{id,name,ptype}] |
+| GET | /search | search.html | q, users [{id,name,avatar,is_self,req}], pages [{id,name,ptype}] |
 | GET | /pages | pages.html | pages [{id,name,ptype,description,cover,members,owner_name,joined}] |
 | GET | /pages/new | page_form.html | ptypes list |
 | POST | /pages | fields: name, ptype, description, cover (file) | -> redirect /page/{id} |
@@ -126,7 +135,9 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 "redirect back": use request.headers.get('referer') or fallback sensible page.
 
 Composer (home + page): a kind selector (Status 📝 | Photo 📷 | Feeling 😊 |
-Clothes 👕 | Link 🔗 | Video 🎬 | Music 🎵). Fields shown per kind via JS:
+Clothes 👕 | Link 🔗 | Video 🎬 | Music 🎵). Home composer also has an
+audience selector: 🌍 Public | 👥 Friends | 🔒 Only me (page composer posts
+are always public). Fields shown per kind via JS:
 text: body. photo: body + media(file). feeling: body + feeling(select of common
 feelings). clothes: body + media(file). link: body + link_url. video: body +
 video_url. audio: body + media(file .mp3). All POST to /posts (or /page/{id}/post

@@ -41,6 +41,8 @@ OWNER_COOKIE = "here_owner"
 OWNER_PW_HASH = os.environ.get("HERE_OWNER_HASH", "$2b$12$5KZ9EpDumnhhvCrmdfDB0OV.jnMBAob23CAQEEawWakJgB4/x8mLC")
 
 KINDS = ("text", "photo", "feeling", "clothes", "link", "video", "audio")
+PRIVACIES = ("public", "friends", "onlyme")
+PRIVACY_LABELS = {"public": "Public", "friends": "Friends only", "onlyme": "Only me"}
 PTYPES = ("community", "market", "fan_club", "seller")
 IMG_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
 AUD_EXTS = {"mp3", "wav", "ogg", "m4a"}
@@ -154,6 +156,17 @@ def init_db():
         created_at TEXT NOT NULL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS owner_sessions (
         token TEXT PRIMARY KEY, created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS hidden_posts (
+        user_id INTEGER NOT NULL, post_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, UNIQUE(user_id, post_id))""")
+    # --- one-go feature pass migrations (safe on existing DBs) ---
+    _post_cols = [r["name"] for r in c.execute("PRAGMA table_info(posts)").fetchall()]
+    if "privacy" not in _post_cols:
+        c.execute("ALTER TABLE posts ADD COLUMN privacy TEXT DEFAULT 'public'")
+    if "pinned" not in _post_cols:
+        c.execute("ALTER TABLE posts ADD COLUMN pinned INTEGER DEFAULT 0")
+    if "shared_post_id" not in _post_cols:
+        c.execute("ALTER TABLE posts ADD COLUMN shared_post_id INTEGER")
     conn.commit()
     conn.close()
 
@@ -379,9 +392,44 @@ def req_status(viewer_id, profile_id):
     return "pending_out" if row["user_id"] == viewer_id else "pending_in"
 
 
+def can_view_post(viewer, p):
+    """Privacy gate. viewer: user dict or None. p: post row dict.
+    Page posts follow page visibility (unchanged behavior); personal posts
+    respect their privacy setting."""
+    if not viewer:
+        return False
+    if viewer["id"] == p["user_id"]:
+        return True
+    if p.get("page_id"):
+        return True
+    priv = (p.get("privacy") or "public")
+    if priv == "public":
+        return True
+    if priv == "friends":
+        return viewer["id"] in friend_id_set(p["user_id"])
+    return False  # onlyme
+
+
 def post_card(p, viewer, owner_on=False):
-    """Build the post-card dict the partials/post_card.html template expects."""
+    """Build the post-card dict the partials/post_card.html template expects.
+    Share rows (shared_post_id set) render the ORIGINAL post's content with a
+    share banner; card actions target the original post. Returns None when the
+    viewer may not see the post (deleted original or privacy)."""
     conn = db()
+    # Resolve shares: a share row renders the ORIGINAL post's content.
+    share = None
+    if p.get("shared_post_id"):
+        share = {"id": p["id"], "by_id": p["user_id"],
+                 "at": fancy_time(p["created_at"])}
+        orig = conn.execute("SELECT * FROM posts WHERE id=?",
+                            (p["shared_post_id"],)).fetchone()
+        if not orig:
+            conn.close()
+            return None
+        p = dict(orig)
+    if viewer and not can_view_post(viewer, p):
+        conn.close()
+        return None
     a = conn.execute("SELECT id,name,avatar FROM users WHERE id=?",
                      (p["user_id"],)).fetchone()
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
@@ -393,19 +441,36 @@ def post_card(p, viewer, owner_on=False):
             (p["id"], viewer["id"])).fetchone())
     cc = conn.execute("SELECT COUNT(*) c FROM comments WHERE post_id=?",
                       (p["id"],)).fetchone()["c"]
+    share_count = conn.execute(
+        "SELECT COUNT(*) c FROM posts WHERE shared_post_id=?",
+        (p["id"],)).fetchone()["c"]
+    hidden_by_viewer = False
+    if viewer:
+        # Hiding is by root post: hiding a share hides the original everywhere
+        # for you, and vice versa.
+        hidden_by_viewer = bool(conn.execute(
+            "SELECT 1 FROM hidden_posts WHERE user_id=? AND post_id=?",
+            (viewer["id"], p["id"])).fetchone())
     page_name, page_id, is_page = "", 0, False
     if p["page_id"]:
         pg = conn.execute("SELECT id,name FROM pages WHERE id=?",
                           (p["page_id"],)).fetchone()
         if pg:
             page_name, page_id, is_page = pg["name"], pg["id"], True
+    shared_by_name = ""
+    if share:
+        s = conn.execute("SELECT name FROM users WHERE id=?",
+                         (share["by_id"],)).fetchone()
+        shared_by_name = s["name"] if s else "Deleted user"
     conn.close()
     media = p["media"] or ""
     avatar = ""
     if a and a["avatar"]:
         avatar = "/uploads/" + a["avatar"]
+    priv = p.get("privacy") or "public"
     return {
         "id": p["id"], "user_id": p["user_id"],
+        "dom_id": ("post-share-%d" % share["id"]) if share else ("post-%d" % p["id"]),
         "author_name": a["name"] if a else "Deleted user",
         "author_avatar": avatar,
         "kind": p["kind"], "body": p["body"] or "",
@@ -415,7 +480,23 @@ def post_card(p, viewer, owner_on=False):
         "embed_url": video_embed_url(p["video_url"]) if p["kind"] == "video" else "",
         "created_at": fancy_time(p["created_at"]),
         "likes": likes, "liked": liked, "comments_count": cc,
-        "can_delete": bool(viewer and (viewer["id"] == p["user_id"] or owner_on)),
+        "share_count": share_count,
+        "privacy": priv,
+        "pinned": bool(p.get("pinned")) and not share,
+        "can_pin": bool(viewer and viewer["id"] == p["user_id"]
+                         and not p.get("page_id") and not share),
+        "can_share": bool(viewer and not share and priv == "public"),
+        "can_hide": bool(viewer),
+        "hidden_by_viewer": hidden_by_viewer,
+        "is_share": bool(share),
+        "share_id": share["id"] if share else 0,
+        "shared_by_id": share["by_id"] if share else 0,
+        "shared_by_name": shared_by_name,
+        "shared_at": share["at"] if share else "",
+        "can_unshare": bool(share and viewer and
+                            (viewer["id"] == share["by_id"] or owner_on)),
+        "can_delete": bool(not share and viewer and
+                            (viewer["id"] == p["user_id"] or owner_on)),
         "is_page_post": is_page, "page_name": page_name, "page_id": page_id,
     }
 
@@ -518,11 +599,14 @@ async def logout(request: Request):
 
 # ---------------- home / posts ----------------
 def _home_posts(user, owner_on):
-    """Own posts + friends' posts + posts on joined pages, newest first."""
+    """Own posts + friends' posts + posts on joined pages, newest first.
+    Respects per-post privacy and the viewer's hidden-posts list."""
     fids = friend_id_set(user["id"])
     conn = db()
     page_ids = [r["page_id"] for r in conn.execute(
         "SELECT page_id FROM page_members WHERE user_id=?", (user["id"],)).fetchall()]
+    hidden = {r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM hidden_posts WHERE user_id=?", (user["id"],)).fetchall()}
     conn.close()
     clauses = ["p.user_id = ?"]
     params = [user["id"]]
@@ -538,7 +622,17 @@ def _home_posts(user, owner_on):
         "SELECT p.* FROM posts p WHERE " + " OR ".join(clauses) +
         " ORDER BY p.created_at DESC LIMIT 200", params).fetchall()
     conn.close()
-    return [post_card(dict(r), user, owner_on) for r in rows]
+    cards = []
+    for r in rows:
+        d = dict(r)
+        # hidden_posts stores root post ids: hiding hides the original and
+        # all of its shares for you.
+        if (d.get("shared_post_id") or d["id"]) in hidden:
+            continue
+        card = post_card(d, user, owner_on)
+        if card:
+            cards.append(card)
+    return cards
 
 
 @app.get("/home", response_class=HTMLResponse)
@@ -569,6 +663,11 @@ def create_post_from_form(user, form, page_id=None):
     kind = (form.get("kind") or "text").strip()
     if kind not in KINDS:
         return None, "Invalid post kind."
+    privacy = (form.get("privacy") or "public").strip()
+    if privacy not in PRIVACIES:
+        privacy = "public"
+    if page_id:
+        privacy = "public"  # page posts are visible to page viewers
     body = (form.get("body") or "").strip()
     feeling = (form.get("feeling") or "").strip()
     link_url = (form.get("link_url") or "").strip()
@@ -599,9 +698,9 @@ def create_post_from_form(user, form, page_id=None):
     conn = db()
     cur = conn.execute(
         "INSERT INTO posts(user_id, page_id, kind, body, feeling, link_url, "
-        "video_url, media, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        "video_url, media, privacy, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
         (user["id"], page_id, kind, body, feeling, link_url, video_url,
-         media, now_iso()))
+         media, privacy, now_iso()))
     pid = cur.lastrowid
     conn.commit()
     conn.close()
@@ -633,6 +732,14 @@ async def view_post(request: Request, pid: int):
     if not p:
         conn.close()
         return redir("/home", "Post not found.")
+    if p["shared_post_id"]:
+        # Share rows redirect to the original post.
+        orig_id = p["shared_post_id"]
+        conn.close()
+        return redir(f"/post/{orig_id}")
+    if not can_view_post(user, dict(p)):
+        conn.close()
+        return render(request, "post_gone.html", {})
     crows = conn.execute(
         "SELECT c.* FROM comments c WHERE c.post_id=? ORDER BY c.created_at ASC",
         (pid,)).fetchall()
@@ -660,10 +767,16 @@ async def add_comment(request: Request, pid: int):
     if err:
         return err
     conn = db()
-    p = conn.execute("SELECT id FROM posts WHERE id=?", (pid,)).fetchone()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
     conn.close()
     if not p:
         return redir("/home", "Post not found.")
+    p = dict(p)
+    if p.get("shared_post_id"):
+        # Comments land on the original post, not the share pointer.
+        return redir(f"/post/{p['shared_post_id']}")
+    if not can_view_post(user, p):
+        return render(request, "post_gone.html", {})
     form = await request.form()
     body = (form.get("body") or "").strip()
     if not body:
@@ -685,8 +798,19 @@ async def toggle_like(request: Request, pid: int):
     if err:
         return JSONResponse({"ok": False, "error": "login"}, status_code=401)
     conn = db()
-    p = conn.execute("SELECT id FROM posts WHERE id=?", (pid,)).fetchone()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
     if not p:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    p = dict(p)
+    if p.get("shared_post_id"):
+        # Likes land on the original post, not the share pointer.
+        pid = p["shared_post_id"]
+        p = dict(conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone() or {})
+        if not p:
+            conn.close()
+            return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    if not can_view_post(user, p):
         conn.close()
         return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
     existing = conn.execute("SELECT 1 FROM likes WHERE post_id=? AND user_id=?",
@@ -712,6 +836,15 @@ def _delete_post(pid):
     conn.execute("DELETE FROM comments WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM moderation_flags WHERE item_type='post' AND item_id=?",
                  (pid,))
+    # Shares pointing at this post die with it.
+    share_ids = [r["id"] for r in conn.execute(
+        "SELECT id FROM posts WHERE shared_post_id=?", (pid,)).fetchall()]
+    for sid in share_ids:
+        conn.execute("DELETE FROM likes WHERE post_id=?", (sid,))
+        conn.execute("DELETE FROM comments WHERE post_id=?", (sid,))
+        conn.execute("DELETE FROM hidden_posts WHERE post_id=?", (sid,))
+    conn.execute("DELETE FROM posts WHERE shared_post_id=?", (pid,))
+    conn.execute("DELETE FROM hidden_posts WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM posts WHERE id=?", (pid,))
     conn.commit()
     conn.close()
@@ -733,6 +866,141 @@ async def delete_post(request: Request, pid: int):
     return back(request, "/home")
 
 
+# ---------------- share / hide / pin ----------------
+def _root_post(pid):
+    """Follow shared_post_id chain to the original post row (dict or None)."""
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    seen = set()
+    while p and p["shared_post_id"] and p["id"] not in seen:
+        seen.add(p["id"])
+        p = conn.execute("SELECT * FROM posts WHERE id=?",
+                         (p["shared_post_id"],)).fetchone()
+    conn.close()
+    return dict(p) if p else None
+
+
+@app.post("/post/{pid}/share")
+async def share_post(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    root = _root_post(pid)
+    if not root or not can_view_post(user, root):
+        return back(request, "/home")
+    if (root.get("privacy") or "public") != "public":
+        return back(request, "/home")
+    conn = db()
+    exists = conn.execute(
+        "SELECT 1 FROM posts WHERE user_id=? AND shared_post_id=?",
+        (user["id"], root["id"])).fetchone()
+    if not exists:
+        conn.execute(
+            "INSERT INTO posts(user_id, kind, privacy, shared_post_id, created_at) "
+            "VALUES(?,'text','public',?,?)",
+            (user["id"], root["id"], now_iso()))
+        conn.commit()
+    conn.close()
+    if not exists and root["user_id"] != user["id"]:
+        notify(root["user_id"], "share",
+               f"{user['name']} shared your post.", f"/post/{root['id']}")
+    return back(request)
+
+
+@app.post("/share/{sid}/remove")
+async def unshare(request: Request, sid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    s = conn.execute(
+        "SELECT * FROM posts WHERE id=? AND shared_post_id IS NOT NULL",
+        (sid,)).fetchone()
+    if s and (s["user_id"] == user["id"] or is_owner(request)):
+        conn.execute("DELETE FROM hidden_posts WHERE post_id=?", (sid,))
+        conn.execute("DELETE FROM posts WHERE id=?", (sid,))
+        conn.commit()
+    conn.close()
+    return back(request)
+
+
+@app.post("/post/{pid}/hide")
+async def hide_post(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    p = conn.execute("SELECT id FROM posts WHERE id=?", (pid,)).fetchone()
+    if p:
+        conn.execute(
+            "INSERT OR IGNORE INTO hidden_posts(user_id, post_id, created_at) "
+            "VALUES(?,?,?)", (user["id"], pid, now_iso()))
+        conn.commit()
+    conn.close()
+    return back(request)
+
+
+@app.post("/post/{pid}/unhide")
+async def unhide_post(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("DELETE FROM hidden_posts WHERE user_id=? AND post_id=?",
+                 (user["id"], pid))
+    conn.commit()
+    conn.close()
+    return back(request)
+
+
+@app.get("/hidden", response_class=HTMLResponse)
+async def hidden_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    owner_on = is_owner(request)
+    conn = db()
+    rows = conn.execute(
+        "SELECT p.* FROM posts p JOIN hidden_posts h ON h.post_id=p.id "
+        "WHERE h.user_id=? ORDER BY h.created_at DESC", (user["id"],)).fetchall()
+    conn.close()
+    posts = []
+    for r in rows:
+        card = post_card(dict(r), user, owner_on)
+        if card:
+            posts.append(card)
+    return render(request, "hidden.html", {"posts": posts})
+
+
+@app.post("/post/{pid}/pin")
+async def pin_post(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    if p and p["user_id"] == user["id"] and not p["page_id"] \
+            and not p["shared_post_id"]:
+        conn.execute("UPDATE posts SET pinned=0 WHERE user_id=?", (user["id"],))
+        conn.execute("UPDATE posts SET pinned=1 WHERE id=?", (pid,))
+        conn.commit()
+    conn.close()
+    return back(request)
+
+
+@app.post("/post/{pid}/unpin")
+async def unpin_post(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("UPDATE posts SET pinned=0 WHERE id=? AND user_id=?",
+                 (pid, user["id"]))
+    conn.commit()
+    conn.close()
+    return back(request)
+
+
 # ---------------- profile / settings ----------------
 @app.get("/user/{uid}", response_class=HTMLResponse)
 async def profile(request: Request, uid: int):
@@ -751,7 +1019,9 @@ async def profile(request: Request, uid: int):
                           (uid,)).fetchone()["c"]
     prows = conn.execute(
         "SELECT * FROM posts WHERE user_id=? AND page_id IS NULL "
-        "ORDER BY created_at DESC LIMIT 100", (uid,)).fetchall()
+        "ORDER BY pinned DESC, created_at DESC LIMIT 100", (uid,)).fetchall()
+    hidden = {r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM hidden_posts WHERE user_id=?", (user["id"],)).fetchall()}
     conn.close()
     profile_ctx = {
         "id": prof["id"], "name": prof["name"], "bio": prof.get("bio", ""),
@@ -762,7 +1032,14 @@ async def profile(request: Request, uid: int):
         "req_status": req_status(user["id"], uid),
         "tap_count": tcount,
     }
-    posts = [post_card(dict(r), user, owner_on) for r in prows]
+    posts = []
+    for r in prows:
+        d = dict(r)
+        if (d.get("shared_post_id") or d["id"]) in hidden:
+            continue
+        card = post_card(d, user, owner_on)
+        if card:
+            posts.append(card)
     return render(request, "profile.html", {"profile": profile_ctx, "posts": posts})
 
 
@@ -888,6 +1165,21 @@ async def friend_decline(request: Request, uid: int):
     return redir("/friends")
 
 
+@app.post("/friends/cancel/{uid}")
+async def friend_cancel(request: Request, uid: int):
+    """Cancel an outgoing (sent) friend request."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute(
+        "DELETE FROM friendships WHERE user_id=? AND friend_id=? AND status='pending'",
+        (user["id"], uid))
+    conn.commit()
+    conn.close()
+    return back(request, "/friends")
+
+
 @app.post("/friends/remove/{uid}")
 async def friend_remove(request: Request, uid: int):
     user, err = require_login(request)
@@ -929,7 +1221,22 @@ async def inbox(request: Request):
     user, err = require_login(request)
     if err:
         return err
+    box = (request.query_params.get("box") or "inbox").strip()
     conn = db()
+    if box == "sent":
+        rows = conn.execute(
+            "SELECT m.*, u.name AS rname, u.avatar AS ravatar FROM messages m "
+            "JOIN users u ON u.id=m.receiver_id "
+            "WHERE m.sender_id=? ORDER BY m.created_at DESC LIMIT 200",
+            (user["id"],)).fetchall()
+        conn.close()
+        sent = [{"friend_id": r["receiver_id"],
+                 "friend_name": r["rname"] or "Deleted user",
+                 "friend_avatar": avatar_url(r["ravatar"]) if r["ravatar"] else "",
+                 "body": r["body"], "created_at": fancy_time(r["created_at"])}
+                for r in rows]
+        return render(request, "inbox.html",
+                      {"box": "sent", "threads": [], "sent": sent})
     rows = conn.execute(
         "SELECT CASE WHEN sender_id=? THEN receiver_id ELSE sender_id END AS fid, "
         "MAX(created_at) AS last_at FROM messages "
@@ -956,7 +1263,8 @@ async def inbox(request: Request):
             "unread": unread,
         })
     conn.close()
-    return render(request, "inbox.html", {"threads": threads})
+    return render(request, "inbox.html",
+                  {"box": "inbox", "threads": threads, "sent": []})
 
 
 @app.get("/messages/{fid}", response_class=HTMLResponse)
@@ -1050,7 +1358,9 @@ async def search(request: Request):
             (like,)).fetchall()
         conn.close()
         users = [{"id": r["id"], "name": r["name"],
-                  "avatar": avatar_url(r["avatar"])} for r in urows]
+                  "avatar": avatar_url(r["avatar"]),
+                  "is_self": r["id"] == user["id"],
+                  "req": req_status(user["id"], r["id"])} for r in urows]
         pages = [{"id": r["id"], "name": r["name"], "ptype": r["ptype"]}
                  for r in prows]
     return render(request, "search.html", {"q": q, "users": users, "pages": pages})
@@ -1158,7 +1468,11 @@ async def page_view(request: Request, pid: int):
         "SELECT * FROM posts WHERE page_id=? ORDER BY created_at DESC LIMIT 200",
         (pid,)).fetchall()
     conn.close()
-    posts = [post_card(dict(r), user, owner_on) for r in prows]
+    posts = []
+    for r in prows:
+        card = post_card(dict(r), user, owner_on)
+        if card:
+            posts.append(card)
     return render(request, "page.html",
                   {"page": page_ctx(dict(pg), user), "posts": posts})
 
