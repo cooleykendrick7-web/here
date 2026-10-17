@@ -86,6 +86,20 @@ img{max-width:100%}
   text-shadow:0 0 6px #fff,0 0 12px #FFD700,0 0 8px rgba(212,31,46,.8)}
 .verified-wrap{display:inline-flex;align-items:center;gap:4px}
 
+/* ===== MySpace-style full profile backgrounds ===== */
+body.has-profile-bg{background-color:#0b0b0e;background-size:cover;
+  background-position:center top;background-repeat:no-repeat;background-attachment:scroll}
+body.has-profile-bg .card{background:rgba(255,255,255,.94);
+  box-shadow:0 2px 16px rgba(0,0,0,.4)}
+body.has-profile-bg .flashmsg div{background:rgba(253,238,240,.95)}
+body.has-profile-bg .menu-item{color:#f2f2f2}
+body.has-profile-bg .menu-item:hover{background:rgba(255,255,255,.14)}
+body.has-profile-bg .menu-item.active{background:rgba(212,31,46,.25);color:#ffb3ba}
+body.has-profile-bg .side-right h4{color:#f0f0f0;text-shadow:0 1px 4px rgba(0,0,0,.7)}
+body.has-profile-bg .contact-item{color:#f2f2f2}
+body.has-profile-bg .contact-item:hover{background:rgba(255,255,255,.14)}
+body.has-profile-bg .contact-item .sub{color:#cfcfcf}
+
 /* ===== flash ===== */
 .flashmsg{max-width:1200px;margin:70px auto 0;padding:0 16px}
 .flashmsg div{background:var(--red-soft);border:1px solid var(--red);color:var(--red-dark);
@@ -240,7 +254,7 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
 </style>
 {% block head_extra %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 
 <header class="topbar">
   <a class="logo" href="/home">HERE</a>
