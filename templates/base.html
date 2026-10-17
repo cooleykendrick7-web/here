@@ -194,10 +194,20 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
   .side-right{display:none}
   .layout{grid-template-columns:280px minmax(0,1fr)}
 }
+.menu-toggle{display:none;border:none;color:#f0f0f0;cursor:pointer;font-size:22px}
+.mobmenu{display:none}
 @media (max-width:600px){
   .side-left{display:none}
-  .layout{grid-template-columns:minmax(0,1fr)}
-  .search-form{display:none}
+  .layout{grid-template-columns:minmax(0,1fr);margin-top:126px}
+  .topbar{flex-wrap:wrap;height:auto;row-gap:8px;padding:8px 12px}
+  .search-form{flex:1 1 100%;order:5;display:block}
+  .menu-toggle{display:flex}
+  .mobmenu{position:fixed;top:0;left:0;width:100%;z-index:1001;background:var(--black);
+    padding:12px 16px 20px;box-shadow:0 4px 12px rgba(0,0,0,.5)}
+  .mobmenu.open{display:block}
+  .mobmenu a{display:flex;align-items:center;gap:12px;padding:11px 8px;border-radius:8px;
+    font-weight:600;color:#f0f0f0;font-size:16px}
+  .mobmenu a:hover{background:var(--border)}
 }
 </style>
 {% block head_extra %}{% endblock %}
@@ -214,6 +224,7 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
     <a class="nav-ic" href="/messages" title="Messages">💬{% if unread_msgs %}<span class="badge">{{ unread_msgs }}</span>{% endif %}</a>
     <a class="nav-ic" href="/notifications" title="Notifications">🔔{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
     <a class="nav-ic" href="/friends" title="Friends">👥{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
+    <button class="nav-ic menu-toggle" title="Menu" aria-label="Menu" onclick="document.getElementById('mobmenu').classList.toggle('open')">☰</button>
     {% if user %}
     <a class="nav-av" href="/user/{{ user.id }}" title="{{ user.name|e }}">
       {% if user.avatar %}<img src="{{ user.avatar|e }}" alt="me">
@@ -222,6 +233,24 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
     {% endif %}
   </nav>
 </header>
+
+<div class="mobmenu" id="mobmenu">
+  <div style="display:flex;align-items:center;margin-bottom:4px">
+    <span class="logo" style="font-size:24px">HERE</span>
+    <button class="nav-ic" style="margin-left:auto;border:none;color:#f0f0f0;cursor:pointer" aria-label="Close menu" onclick="document.getElementById('mobmenu').classList.remove('open')">✕</button>
+  </div>
+  {% if user %}
+  <a href="/user/{{ user.id }}"><span>👤</span> My Profile</a>
+  {% endif %}
+  <a href="/friends"><span>👥</span> Friends</a>
+  <a href="/search"><span>🔎</span> Find Friends</a>
+  <a href="/discover"><span>🧭</span> Discover</a>
+  <a href="/messages"><span>💬</span> Messages</a>
+  <a href="/pages"><span>📄</span> Pages</a>
+  <a href="/hidden"><span>🙈</span> Hidden</a>
+  <a href="/notifications"><span>🔔</span> Notifications</a>
+  <a href="/logout"><span>🚪</span> Logout</a>
+</div>
 
 {% if flash %}
 <div class="flashmsg"><div>{{ flash|e }}</div></div>
