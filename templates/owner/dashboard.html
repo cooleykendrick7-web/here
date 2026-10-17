@@ -52,7 +52,44 @@ table.admin tr:last-child td{border-bottom:none}
   <div class="stat-card"><div class="num">{{ stats.msgs_today }}</div><div class="lbl">Messages today</div></div>
   <div class="stat-card"><div class="num">{{ stats.taps_today }}</div><div class="lbl">Taps today</div></div>
   <div class="stat-card"><div class="num">{{ stats.flags_pending }}</div><div class="lbl">Pending flags</div></div>
+  <div class="stat-card"><div class="num">{{ stats.verify_pending }}</div><div class="lbl">Verify requests</div></div>
 </div>
+
+<section>
+  <h2>⭐ Verification Requests</h2>
+  <p style="color:#9a9a9a;font-size:13px;margin-bottom:10px">Review the page and its posts before deciding. AI can pre-screen, but <strong>only you approve</strong> — content must be very interesting, eye-catching, and attention-grabbing.</p>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>ID</th><th>Type</th><th>Name</th><th>Requested by</th><th>Posts</th><th>Friends/Members</th><th>Requested</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for v in verifications %}
+        <tr>
+          <td>{{ v.id }}</td>
+          <td>{{ v.kind|e }}</td>
+          <td><a href="{{ v.link }}">{{ v.name|e }}</a>{% if v.status == 'approved' %} <span style="color:#FFD700" title="Verified">★</span>{% endif %}</td>
+          <td>{{ v.requester_name|e }}</td>
+          <td>{{ v.posts }}</td>
+          <td>{{ v.extra }} {{ v.extra_label|e }}</td>
+          <td>{{ v.created_at|e }}</td>
+          <td><span class="status-pill {{ v.status|e }}">{{ v.status|e }}</span></td>
+          <td style="white-space:nowrap">
+            {% if v.status == 'pending' %}
+            <form class="inline-form" action="/owner/verify/{{ v.id }}/approve" method="post">
+              <button type="submit" class="btn">Approve</button>
+            </form>
+            <form class="inline-form" action="/owner/verify/{{ v.id }}/decline" method="post" onsubmit="return confirm('Decline verification for {{ v.name|e }}?');">
+              <button type="submit" class="btn-ghost">Decline</button>
+            </form>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="empty">No verification requests.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 
 <section>
   <h2>🚩 Flagged Content Queue (AI flags only — you decide)</h2>
