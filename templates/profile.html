@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{{ profile.name|e }} — HERE{% endblock %}
+{% block body_class %}{% if profile.background %}has-profile-bg{% endif %}{% endblock %}
+{% block head_extra %}{% if profile.background %}
+<style>
+body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,14,.58)),url('{{ profile.background }}')}
+</style>
+{% endif %}{% endblock %}
 {% block content %}
 
 <div class="card">
