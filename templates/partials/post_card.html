@@ -12,7 +12,7 @@
     {% else %}<span class="av-ph av-40">{{ post.author_name[:1]|upper|e }}</span>{% endif %}
     <div class="post-who">
       <div class="nm">
-        <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a>
+        <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a>{% if post.author_verified %} <span class="verified-star" title="Verified — an important page on HERE">★</span>{% endif %}
         <span class="kind-tag">{{ kind_labels.get(post.kind, post.kind)|e }}</span>
         <span class="kind-tag" title="{{ priv_titles.get(post.privacy, 'Public')|e }}">{{ priv_icons.get(post.privacy, '🌍')|e }}</span>
         {% if post.pinned %}<span class="kind-tag">📌 Pinned</span>{% endif %}
