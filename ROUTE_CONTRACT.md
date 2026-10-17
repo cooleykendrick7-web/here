@@ -18,7 +18,7 @@ rebuild it fresh for HERE.
 
 ## DB schema (SQLite, tables created in init_db; all created_at = UTC ISO string)
 
-- users(id, name, email UNIQUE, pw_hash, bio DEFAULT '', avatar DEFAULT '', last_seen TEXT, is_verified INTEGER DEFAULT 0, verification_status TEXT DEFAULT 'none' ('none'|'pending'|'approved'|'declined'), created_at)
+- users(id, name, email UNIQUE, pw_hash, bio DEFAULT '', avatar DEFAULT '', background TEXT DEFAULT '' (relative path under uploads/backgrounds/, e.g. 'backgrounds/abc123.jpg'; '' = default site background), last_seen TEXT, is_verified INTEGER DEFAULT 0, verification_status TEXT DEFAULT 'none' ('none'|'pending'|'approved'|'declined'), created_at)
 - sessions(token PRIMARY KEY, user_id, created_at)
 - posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), privacy TEXT DEFAULT 'public' ('public'|'friends'|'onlyme'), pinned INTEGER DEFAULT 0, shared_post_id INTEGER NULL (points at original post for share rows), created_at)
 - hidden_posts(user_id, post_id, created_at) — UNIQUE(user_id, post_id); hides a post row from that user's feeds only
@@ -82,6 +82,8 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 Verification: users/pages carry is_verified (bool) and verification_status ('none'|'pending'|'approved'|'declined').
 Verified names show a golden five-point star ★ (color #FFD700, white/gold shine + light red glow) beside the name — on profiles, pages, post cards. Verification is owner-only; never auto-approved. Users apply via "⭐ Verify me" on their profile or settings; page owners apply via "⭐ Verify page" on their page.
 
+Profile backgrounds: every user can set a MySpace-style full-page background photo for their profile via Settings ("🖼️ Profile Background"; stored in users.background as 'backgrounds/<uuid>.<ext>', served from /uploads/). When set, the profile page body gets class has-profile-bg with the photo as a full-bleed background (cover, centered, scroll attachment for mobile) under a dark gradient scrim, and content cards render translucent white (rgba(255,255,255,.94)) so text never blends into the photo. Scoped to /user/{id} only; the rest of the site keeps the default background.
+
 ## Routes & templates
 
 | Method | Path | Template | Context / fields |
@@ -110,10 +112,10 @@ Verified names show a golden five-point star ★ (color #FFD700, white/gold shin
 | GET | /hidden | hidden.html | posts (your hidden posts, with Unhide buttons) |
 | POST | /post/{id}/pin | | author only, personal posts; unpins others; -> redirect back |
 | POST | /post/{id}/unpin | | author only; -> redirect back |
-| GET | /user/{id} | profile.html | profile {id,name,bio,avatar,created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count,is_verified,verification_status}, posts |
+| GET | /user/{id} | profile.html | profile {id,name,bio,avatar,background (full /uploads/ URL or ''),created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count,is_verified,verification_status}, posts; when background set, body gets class has-profile-bg + dark scrim overlay (MySpace-style full-page background; cards turn translucent white so text never blends in) |
 | POST | /verify/user/request | | logged in; once per user (re-request after decline allowed); sets verification_status='pending' + inserts verification_requests(kind='user'); -> redirect /user/{id} with flash |
 | GET | /settings/profile | profile_edit.html | profile |
-| POST | /settings/profile | fields: name, bio, avatar (file) | -> redirect /user/{id} |
+| POST | /settings/profile | fields: name, bio, avatar (file), background (file: jpg,png,gif,webp, max 5MB -> uploads/backgrounds/), remove_background ('1' clears it) | replaces/deletes old background file; -> redirect /user/{id} |
 | GET | /friends | friends.html | incoming [{id,name,avatar,created_at}], sent [{id,name,avatar}], friends [{id,name,avatar,online}] |
 | POST | /friends/request/{id} | | -> redirect back |
 | POST | /friends/accept/{id} | | -> redirect /friends |
