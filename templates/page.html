@@ -7,13 +7,22 @@
     {% if page.cover %}<img src="{{ page.cover|e }}" alt="">{% else %}{{ page.name[:1]|upper|e }}{% endif %}
   </div>
   <div style="padding:15px">
-    <h2 style="font-size:24px">{{ page.name|e }}</h2>
+    <h2 style="font-size:24px">{{ page.name|e }}{% if page.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">★</span>{% endif %}</h2>
     <span class="ptype-badge">{{ page.ptype|replace('_',' ')|e }}</span>
     {% if page.description %}<p style="margin:8px 0;white-space:pre-wrap">{{ page.description|e }}</p>{% endif %}
     <div class="pmeta" style="margin:8px 0">{{ page.members }} members · by {{ page.owner_name|e }}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       {% if page.is_owner %}
       <a class="btn-ghost btn-sm" href="/page/{{ page.id }}/edit">✏️ Edit Page</a>
+      {% if page.is_verified %}
+      <span class="kind-tag"><span class="verified-star">★</span> Verified</span>
+      {% elif page.verification_status == 'pending' %}
+      <span class="kind-tag">⏳ Verification pending</span>
+      {% else %}
+      <form class="inline-form" action="/verify/page/{{ page.id }}/request" method="post">
+        <button type="submit" class="btn-ghost btn-sm">⭐ Verify page</button>
+      </form>
+      {% endif %}
       {% elif page.joined %}
       <form class="inline-form" action="/page/{{ page.id }}/leave" method="post">
         <button type="submit" class="btn-ghost btn-sm">✓ Joined — Leave</button>

@@ -23,4 +23,18 @@
   </form>
 </div>
 
+<div class="card">
+  <div class="section-title">⭐ Verification</div>
+  {% if profile.is_verified %}
+  <p style="margin-top:8px"><span class="verified-star" title="Verified">★</span> Your profile is verified — the golden star shows beside your name everywhere.</p>
+  {% elif profile.verification_status == 'pending' %}
+  <p style="margin-top:8px">⏳ Your verification request is pending — the owner will review your page and posts before approving.</p>
+  {% else %}
+  <p style="margin-top:8px;color:var(--muted)">Apply for the golden verified star. The owner reviews your page and posts — make them interesting, eye-catching, and attention-grabbing.</p>
+  <form action="/verify/user/request" method="post" style="margin-top:10px">
+    <button type="submit" class="btn">⭐ Verify me</button>
+  </form>
+  {% endif %}
+</div>
+
 {% endblock %}
