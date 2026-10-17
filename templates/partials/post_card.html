@@ -1,6 +1,8 @@
 {% set kind_labels = {'text':'📝 Status','photo':'📷 Photo','feeling':'😊 Feeling','clothes':'👕 Clothes','link':'🔗 Link','video':'🎬 Video','audio':'🎵 Music'} %}
 {% set priv_icons = {'public':'🌍','friends':'👥','onlyme':'🔒'} %}
 {% set priv_titles = {'public':'Public — everyone can see this','friends':'Friends only','onlyme':'Only me'} %}
+{% set react_labels = {'like':'Liked','love':'Loved','laugh':'Haha','wow':'Wow','sad':'Sad','angry':'Angry'} %}
+{% set react_emojis = {'like':'👍','love':'❤️','laugh':'😂','wow':'😮','sad':'😢','angry':'😡'} %}
 <div class="card post" id="{{ post.dom_id }}">
   {% if post.is_share %}
   <div class="share-banner">🔁 <a href="/user/{{ post.shared_by_id }}">{{ post.shared_by_name|e }}</a> shared <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a>'s post <span class="post-meta">· {{ post.shared_at|e }}</span></div>
@@ -45,15 +47,26 @@
   {% endif %}
 
   <div class="post-stats">
-    <span>👍 <span class="stat-likes">{{ post.likes }}</span> Likes</span>
+    <span class="react-summary">{% if post.likes %}{% for r in post.reactions_top %}{{ r.emoji }}{% endfor %} <span class="stat-likes">{{ post.likes }}</span>{% endif %}</span>
     <a href="/post/{{ post.id }}">{{ post.comments_count }} Comments</a>
     <span>🔁 {{ post.share_count }} Shares</span>
   </div>
 
   <div class="post-actions">
     <form class="like-form inline-form" action="/post/{{ post.id }}/like" method="post">
-      <button type="submit" class="like-btn{% if post.liked %} liked{% endif %}">👍 {% if post.liked %}Liked{% else %}Like{% endif %} (<span class="like-count">{{ post.likes }}</span>)</button>
+      <button type="submit" class="like-btn{% if post.liked %} liked{% endif %}">{% if post.my_reaction %}{{ react_emojis.get(post.my_reaction,'👍') }} {{ react_labels.get(post.my_reaction,'Liked') }}{% else %}👍 Like{% endif %} (<span class="like-count">{{ post.likes }}</span>)</button>
     </form>
+    <div class="react-wrap">
+      <button type="button" class="action-link react-toggle" data-pid="{{ post.id }}" style="background:none;border:none;cursor:pointer">😊 React</button>
+      <div class="react-picker" id="react-picker-{{ post.id }}" hidden>
+        {% for k, e, label in post.reaction_kinds %}
+        <form class="react-form inline-form" action="/post/{{ post.id }}/react" method="post">
+          <input type="hidden" name="kind" value="{{ k }}">
+          <button type="submit" title="{{ label }}">{{ e }}</button>
+        </form>
+        {% endfor %}
+      </div>
+    </div>
     <a class="action-link" href="/post/{{ post.id }}">💬 Comment</a>
     {% if post.can_share %}
     <form class="inline-form" action="/post/{{ post.id }}/share" method="post">
