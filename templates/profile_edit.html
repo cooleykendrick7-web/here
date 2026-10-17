@@ -18,6 +18,23 @@
       {% if profile.avatar %}<img class="avatar av-100" src="{{ profile.avatar|e }}" alt="" style="margin-bottom:8px"><br>{% endif %}
       <input type="file" id="pe-avatar" name="avatar" accept="image/*">
     </div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+    <div class="section-title">🖼️ Profile Background</div>
+    <p style="margin-top:8px;color:var(--muted)">MySpace style — pick a full-page background photo for your profile. Your words stay readable automatically with a cool overlay, so nothing blends in.</p>
+    {% if profile.background %}
+    <div style="margin:10px 0;border-radius:8px;overflow:hidden;max-height:180px">
+      <img src="{{ profile.background|e }}" alt="Current background" style="width:100%;height:180px;object-fit:cover;display:block">
+    </div>
+    {% endif %}
+    <div class="field" style="margin-top:10px">
+      <label for="pe-bg">Upload a new background (jpg, png, gif, webp · max 5MB)</label>
+      <input type="file" id="pe-bg" name="background" accept="image/*">
+    </div>
+    {% if profile.background %}
+    <div class="field">
+      <label style="font-weight:500"><input type="checkbox" name="remove_background" value="1"> Remove my background (back to default)</label>
+    </div>
+    {% endif %}
     <button type="submit" class="btn">Save Changes</button>
     <a class="btn-ghost" href="/user/{{ profile.id }}" style="margin-left:8px">Cancel</a>
   </form>
