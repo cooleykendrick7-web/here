@@ -1,5 +1,10 @@
 {% set kind_labels = {'text':'📝 Status','photo':'📷 Photo','feeling':'😊 Feeling','clothes':'👕 Clothes','link':'🔗 Link','video':'🎬 Video','audio':'🎵 Music'} %}
-<div class="card post" id="post-{{ post.id }}">
+{% set priv_icons = {'public':'🌍','friends':'👥','onlyme':'🔒'} %}
+{% set priv_titles = {'public':'Public — everyone can see this','friends':'Friends only','onlyme':'Only me'} %}
+<div class="card post" id="{{ post.dom_id }}">
+  {% if post.is_share %}
+  <div class="share-banner">🔁 <a href="/user/{{ post.shared_by_id }}">{{ post.shared_by_name|e }}</a> shared <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a>'s post <span class="post-meta">· {{ post.shared_at|e }}</span></div>
+  {% endif %}
   <div class="post-header">
     {% if post.author_avatar %}<img class="avatar av-40" src="{{ post.author_avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ post.author_name[:1]|upper|e }}</span>{% endif %}
@@ -7,6 +12,8 @@
       <div class="nm">
         <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a>
         <span class="kind-tag">{{ kind_labels.get(post.kind, post.kind)|e }}</span>
+        <span class="kind-tag" title="{{ priv_titles.get(post.privacy, 'Public')|e }}">{{ priv_icons.get(post.privacy, '🌍')|e }}</span>
+        {% if post.pinned %}<span class="kind-tag">📌 Pinned</span>{% endif %}
       </div>
       <div class="post-meta">{{ post.created_at|e }}{% if post.is_page_post %} · <span class="page-tag">in <a href="/page/{{ post.page_id }}">{{ post.page_name|e }}</a></span>{% endif %}</div>
     </div>
@@ -40,6 +47,7 @@
   <div class="post-stats">
     <span>👍 <span class="stat-likes">{{ post.likes }}</span> Likes</span>
     <a href="/post/{{ post.id }}">{{ post.comments_count }} Comments</a>
+    <span>🔁 {{ post.share_count }} Shares</span>
   </div>
 
   <div class="post-actions">
@@ -47,10 +55,45 @@
       <button type="submit" class="like-btn{% if post.liked %} liked{% endif %}">👍 {% if post.liked %}Liked{% else %}Like{% endif %} (<span class="like-count">{{ post.likes }}</span>)</button>
     </form>
     <a class="action-link" href="/post/{{ post.id }}">💬 Comment</a>
-    {% if post.can_delete %}
-    <form class="inline-form" action="/post/{{ post.id }}/delete" method="post" onsubmit="return confirm('Delete this post?');" style="margin-left:auto">
-      <button type="submit" class="btn-danger btn-sm">🗑 Delete</button>
+    {% if post.can_share %}
+    <form class="inline-form" action="/post/{{ post.id }}/share" method="post">
+      <button type="submit" class="action-link" style="background:none;border:none;cursor:pointer;font-size:14px">🔁 Share</button>
     </form>
     {% endif %}
+    {% if post.can_pin %}
+      {% if post.pinned %}
+      <form class="inline-form" action="/post/{{ post.id }}/unpin" method="post">
+        <button type="submit" class="action-link" style="background:none;border:none;cursor:pointer;font-size:14px">📌 Unpin</button>
+      </form>
+      {% else %}
+      <form class="inline-form" action="/post/{{ post.id }}/pin" method="post">
+        <button type="submit" class="action-link" style="background:none;border:none;cursor:pointer;font-size:14px">📌 Pin</button>
+      </form>
+      {% endif %}
+    {% endif %}
+    <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      {% if post.is_share %}
+        {% if post.can_unshare %}
+        <form class="inline-form" action="/share/{{ post.share_id }}/remove" method="post" onsubmit="return confirm('Remove this share from your wall?');">
+          <button type="submit" class="btn-danger btn-sm">Remove share</button>
+        </form>
+        {% endif %}
+      {% else %}
+        {% if post.hidden_by_viewer %}
+        <form class="inline-form" action="/post/{{ post.id }}/unhide" method="post">
+          <button type="submit" class="btn-ghost btn-sm">↩ Unhide</button>
+        </form>
+        {% elif post.can_hide %}
+        <form class="inline-form" action="/post/{{ post.id }}/hide" method="post">
+          <button type="submit" class="btn-ghost btn-sm">🙈 Hide</button>
+        </form>
+        {% endif %}
+        {% if post.can_delete %}
+        <form class="inline-form" action="/post/{{ post.id }}/delete" method="post" onsubmit="return confirm('Delete this post?');">
+          <button type="submit" class="btn-danger btn-sm">🗑 Delete</button>
+        </form>
+        {% endif %}
+      {% endif %}
+    </span>
   </div>
 </div>
