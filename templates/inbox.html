@@ -3,6 +3,27 @@
 {% block content %}
 
 <div class="card">
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <a class="{% if box == 'sent' %}btn-ghost{% else %}btn{% endif %} btn-sm" href="/messages">📥 Inbox</a>
+    <a class="{% if box == 'sent' %}btn{% else %}btn-ghost{% endif %} btn-sm" href="/messages?box=sent">📤 Sent</a>
+  </div>
+
+  {% if box == 'sent' %}
+  <div class="section-title">📤 Sent Messages</div>
+  {% for m in sent %}
+  <a class="row-item" href="/messages/{{ m.friend_id }}" style="border-radius:8px;padding-left:8px;padding-right:8px">
+    {% if m.friend_avatar %}<img class="avatar av-40" src="{{ m.friend_avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ m.friend_name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm">To: {{ m.friend_name|e }}</div>
+      <div class="sub">{{ m.body|e }}</div>
+    </div>
+    <div class="sub">{{ m.created_at|e }}</div>
+  </a>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">No sent messages yet.</p>
+  {% endfor %}
+  {% else %}
   <div class="section-title">💬 Messages</div>
   {% for t in threads %}
   <a class="row-item{% if t.unread %} unread-hl{% endif %}" href="/messages/{{ t.friend_id }}" style="border-radius:8px;padding-left:8px;padding-right:8px">
@@ -17,6 +38,7 @@
   {% else %}
   <p style="color:var(--muted);font-size:14px">No conversations yet. Add a friend and say hi!</p>
   {% endfor %}
+  {% endif %}
 </div>
 
 {% endblock %}
