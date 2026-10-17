@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Story — HERE{% endblock %}
+{% block content %}
+<div class="card story-viewer" style="padding:16px">
+  <div class="post-header">
+    {% if author and author.avatar %}<img class="avatar av-40" src="{{ author.avatar|e }}" alt="">
+    {% elif author %}<span class="av-ph av-40">{{ author.name[:1]|upper|e }}</span>{% endif %}
+    <div class="post-who">
+      <div class="nm">{% if author %}<a href="/user/{{ author.id }}">{{ author.name|e }}</a>{% else %}Deleted user{% endif %}</div>
+      <div class="post-meta">{{ story.created_at|e }} · {{ story.pos }} of {{ story.total }} · disappears in 24h</div>
+    </div>
+    <a class="action-link" href="/home" style="margin-left:auto">✕ Close</a>
+  </div>
+
+  {% if story.is_video %}
+  <video class="story-media" src="{{ story.media|e }}" controls autoplay playsinline></video>
+  {% else %}
+  <img class="story-media" src="{{ story.media|e }}" alt="story">
+  {% endif %}
+
+  {% if story.caption %}
+  <div class="post-body" style="margin-top:10px">{{ story.caption|e }}</div>
+  {% endif %}
+
+  <div class="story-nav">
+    {% if prev_id %}<a class="btn-ghost btn-sm" href="/story/{{ prev_id }}">← Prev</a>{% else %}<span></span>{% endif %}
+    {% if is_own %}
+    <form class="inline-form" action="/story/{{ story.id }}/delete" method="post" onsubmit="return confirm('Delete this story?');">
+      <button class="btn-danger btn-sm" type="submit">🗑 Delete story</button>
+    </form>
+    {% endif %}
+    {% if next_id %}<a class="btn-ghost btn-sm" href="/story/{{ next_id }}">Next →</a>{% else %}<span></span>{% endif %}
+  </div>
+</div>
+{% endblock %}

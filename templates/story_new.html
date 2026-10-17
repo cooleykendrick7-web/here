@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}New Story — HERE{% endblock %}
+{% block content %}
+<div class="card" style="padding:18px;max-width:560px;margin:0 auto">
+  <h3 style="margin-bottom:6px">📸 New story</h3>
+  <p style="color:var(--muted);font-size:14px;margin-bottom:14px">A photo or short video your friends can see for 24 hours.</p>
+  {% if flash %}<p style="color:var(--red);font-weight:600;margin-bottom:10px">{{ flash|e }}</p>{% endif %}
+  <form action="/stories/new" method="post" enctype="multipart/form-data">
+    <div style="margin-bottom:12px">
+      <label class="fld" for="story-media">Photo or video (jpg, png, gif, webp, mp4, mov, webm · max 25MB)</label>
+      <input type="file" name="media" id="story-media" accept="image/*,video/*" required>
+    </div>
+    <div style="margin-bottom:14px">
+      <label class="fld" for="story-caption">Caption (optional)</label>
+      <input type="text" name="caption" id="story-caption" maxlength="280" placeholder="Say something about it..." style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+    </div>
+    <button class="btn-ghost" type="submit" style="font-weight:700">Share story</button>
+    <a class="action-link" href="/home" style="margin-left:8px">Cancel</a>
+  </form>
+</div>
+{% endblock %}

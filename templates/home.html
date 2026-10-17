@@ -2,6 +2,21 @@
 {% block title %}HERE — Home{% endblock %}
 {% block content %}
 
+<div class="stories-tray">
+  {% for t in stories_tray %}
+  <a class="story-item" href="/story/{{ t.first_id }}" title="{{ t.name|e }}{% if t.count > 1 %} ({{ t.count }}){% endif %}">
+    <span class="story-ring{% if t.all_viewed %} viewed{% endif %}">
+      {% if t.avatar %}<img src="{{ t.avatar|e }}" alt="">{% else %}<span class="story-ring-ph">{{ t.name[:1]|upper|e }}</span>{% endif %}
+    </span>
+    <span class="story-name">{% if t.is_self %}Your story{% else %}{{ t.name|e }}{% endif %}</span>
+  </a>
+  {% endfor %}
+  <a class="story-item" href="/stories/new" title="Add to your story">
+    <span class="story-ring story-add-ring">＋</span>
+    <span class="story-name">Add story</span>
+  </a>
+</div>
+
 <div class="card composer">
   <form action="/posts" method="post" enctype="multipart/form-data">
     <input type="hidden" name="kind" id="kind-input" value="text">
