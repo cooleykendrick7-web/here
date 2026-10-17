@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Hidden Posts — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">🙈 Hidden Posts</div>
+  <p style="color:var(--muted);font-size:14px">Posts you've hidden from your feeds. Hit ↩ Unhide on any of them to bring it back.</p>
+</div>
+
+{% for post in posts %}
+  {% include "partials/post_card.html" %}
+{% else %}
+<div class="card"><p style="color:var(--muted)">Nothing hidden — your feeds are showing everything.</p></div>
+{% endfor %}
+
+{% endblock %}

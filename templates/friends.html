@@ -36,6 +36,11 @@
       <div class="nm"><a href="/user/{{ r.id }}">{{ r.name|e }}</a></div>
       <div class="sub">waiting for a response</div>
     </div>
+    <div class="row-actions">
+      <form class="inline-form" action="/friends/cancel/{{ r.id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">Cancel request</button>
+      </form>
+    </div>
   </div>
   {% else %}
   <p style="color:var(--muted);font-size:14px">No sent requests.</p>
