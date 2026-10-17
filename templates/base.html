@@ -122,6 +122,9 @@ img{max-width:100%}
   color:var(--muted);font-size:14px}
 .post-stats a:hover{color:var(--red)}
 .post-actions{display:flex;gap:8px;align-items:center;padding-top:10px;border-top:1px solid var(--border)}
+.share-banner{background:var(--red-soft);border:1px solid var(--red);border-radius:8px;
+  padding:8px 12px;margin-bottom:10px;font-size:14px;font-weight:600;color:var(--red-dark)}
+.share-banner a{color:var(--red);text-decoration:underline}
 .like-btn{background:none;border:none;color:var(--muted);font-weight:700;font-size:14px;cursor:pointer;padding:6px 8px;border-radius:6px}
 .like-btn:hover{background:#f0f2f5}
 .like-btn.liked{color:var(--red)}
@@ -230,8 +233,10 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
     <a class="menu-item" href="/user/{{ user.id }}"><span class="menu-ic">👤</span> My Profile</a>
     {% endif %}
     <a class="menu-item" href="/friends"><span class="menu-ic">👥</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
+    <a class="menu-item" href="/search"><span class="menu-ic">🔎</span> Find Friends</a>
     <a class="menu-item" href="/messages"><span class="menu-ic">💬</span> Messages</a>
     <a class="menu-item" href="/pages"><span class="menu-ic">📄</span> Pages</a>
+    <a class="menu-item" href="/hidden"><span class="menu-ic">🙈</span> Hidden</a>
     <a class="menu-item" href="/notifications"><span class="menu-ic">🔔</span> Notifications</a>
     <a class="menu-item" href="/logout"><span class="menu-ic">🚪</span> Logout</a>
   </aside>

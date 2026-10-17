@@ -22,7 +22,29 @@
     <div class="grow">
       <div class="nm"><a href="/user/{{ u.id }}">{{ u.name|e }}</a></div>
     </div>
-    <a class="btn-ghost btn-sm" href="/user/{{ u.id }}">View</a>
+    <div class="row-actions">
+      {% if u.is_self %}
+      <span class="kind-tag">You</span>
+      {% elif u.req == 'none' %}
+      <form class="inline-form" action="/friends/request/{{ u.id }}" method="post">
+        <button type="submit" class="btn btn-sm">➕ Add Friend</button>
+      </form>
+      {% elif u.req == 'pending_out' %}
+      <span class="kind-tag">⏳ Request sent</span>
+      <form class="inline-form" action="/friends/cancel/{{ u.id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">Cancel</button>
+      </form>
+      {% elif u.req == 'pending_in' %}
+      <form class="inline-form" action="/friends/accept/{{ u.id }}" method="post">
+        <button type="submit" class="btn btn-sm">Accept</button>
+      </form>
+      <form class="inline-form" action="/friends/decline/{{ u.id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">Decline</button>
+      </form>
+      {% elif u.req == 'friends' %}
+      <span class="kind-tag">✓ Friends</span>
+      {% endif %}
+    </div>
   </div>
   {% else %}
   <p style="color:var(--muted);font-size:14px">No people found for “{{ q|e }}”.</p>

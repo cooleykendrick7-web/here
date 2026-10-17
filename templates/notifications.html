@@ -11,6 +11,7 @@
         {% if n.kind == 'friend_request' %}👥
         {% elif n.kind == 'tap' %}🖐️
         {% elif n.kind == 'message' %}💬
+        {% elif n.kind == 'share' %}🔁
         {% else %}🔔{% endif %}
         {{ n.text|e }}
       </div>
