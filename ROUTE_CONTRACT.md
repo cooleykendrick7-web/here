@@ -113,7 +113,8 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
 | GET | /messages/{fid} | thread.html | friend {id,name,avatar}, msgs [{id,sender_id,body,created_at,mine}] |
 | POST | /messages/{fid} | field: body | -> redirect /messages/{fid} |
 | GET | /notifications | notifications.html | notes [{id,kind,text,link,created_at,is_read}] (marks read on view) |
-| GET | /search | search.html | q, users [{id,name,avatar,is_self,req}], pages [{id,name,ptype}] |
+| GET | /discover | discover.html | people [{id,name,avatar,req,views}] = non-friends ranked by profile views received in last 7 days (fallback: newest signups; excludes self/friends/pending), trends [{label,q,count}] = top #hashtags of last 7 days (fallback: most frequent meaningful words) |
+| GET | /search | search.html | q (token-split; ANY token matches first/last/display name, case-insensitive partial; exact-phrase ranks first), users [{id,name,avatar,is_self,req}], pages [{id,name,ptype,joined}], posts [post_cards, privacy-respecting] |
 | GET | /pages | pages.html | pages [{id,name,ptype,description,cover,members,owner_name,joined}] |
 | GET | /pages/new | page_form.html | ptypes list |
 | POST | /pages | fields: name, ptype, description, cover (file) | -> redirect /page/{id} |
@@ -151,8 +152,15 @@ branding.
 Header (logged in): red HERE logo -> /home, search input -> GET /search?q=,
 icon buttons: 🏠 /home, 💬 /messages (badge unread_msgs), 🔔 /notifications
 (badge unread_count), 👥 /friends (badge pending_count), avatar -> /user/{self}.
-Left sidebar: My Profile, Friends, Messages, Pages, Notifications, Logout.
-Right sidebar: Contacts = friends, online dot for online friends.
+Left sidebar: My Profile, Friends, Find Friends, Discover, Messages, Pages, Hidden,
+Notifications, Logout.
+Right sidebar: Discover section (People you may know + Trending this week, only
+on /home), then Contacts = friends, online dot for online friends.
+Profile views: table profile_views(viewer_id, viewed_id, viewed_at); one counted
+view per viewer/viewed pair per hour; self-views never counted. Powers the
+Discover rankings.
+Avatars: avatar_url() returns '' when the file is missing from disk, so every
+avatar <img> falls back to the letter placeholder — no broken-image icons.
 
 All POST forms include no CSRF (keep same pattern as postit). Validate: kinds
 in the allowed set; video_url must contain youtube/vimeo else reject with flash;

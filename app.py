@@ -159,6 +159,14 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS hidden_posts (
         user_id INTEGER NOT NULL, post_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, UNIQUE(user_id, post_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS profile_views (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        viewer_id INTEGER NOT NULL, viewed_id INTEGER NOT NULL,
+        viewed_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pviews_pair "
+              "ON profile_views(viewer_id, viewed_id, viewed_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pviews_viewed "
+              "ON profile_views(viewed_id, viewed_at)")
     # --- one-go feature pass migrations (safe on existing DBs) ---
     _post_cols = [r["name"] for r in c.execute("PRAGMA table_info(posts)").fetchall()]
     if "privacy" not in _post_cols:
@@ -247,7 +255,8 @@ def render(request: Request, name, ctx=None):
         touch_seen(u["id"])
         u = get_user(u["id"])  # refresh (last_seen changed)
         ctx["user"] = {"id": u["id"], "name": u["name"], "email": u["email"],
-                       "bio": u.get("bio", ""), "avatar": u.get("avatar", "")}
+                       "bio": u.get("bio", ""),
+                       "avatar": avatar_url(u.get("avatar", ""))}
         conn = db()
         ctx["pending_count"] = conn.execute(
             "SELECT COUNT(*) c FROM friendships WHERE friend_id=? AND status='pending'",
@@ -392,6 +401,84 @@ def req_status(viewer_id, profile_id):
     return "pending_out" if row["user_id"] == viewer_id else "pending_in"
 
 
+def pending_id_set(uid):
+    """User ids with a pending friend request in either direction."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT user_id, friend_id FROM friendships "
+        "WHERE status='pending' AND (user_id=? OR friend_id=?)",
+        (uid, uid)).fetchall()
+    conn.close()
+    out = set()
+    for r in rows:
+        out.add(r["friend_id"] if r["user_id"] == uid else r["user_id"])
+    return out
+
+
+# ---------------- discovery: profile views, suggested people, trending ----------------
+def discover_people(uid, limit=10):
+    """People you may know: non-friends ranked by profile views received in
+    the last 7 days. Falls back to newest signups when there is no view data
+    yet, so the list is never empty. Excludes self, friends, and anyone with
+    a pending request in either direction."""
+    excluded = friend_id_set(uid) | pending_id_set(uid) | {uid}
+    conn = db()
+    rows = conn.execute(
+        "SELECT u.id, u.name, u.avatar, COUNT(v.id) AS views "
+        "FROM users u LEFT JOIN profile_views v "
+        "ON v.viewed_id=u.id AND v.viewed_at > datetime('now','-7 days') "
+        "GROUP BY u.id ORDER BY views DESC, u.created_at DESC").fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        if r["id"] in excluded:
+            continue
+        out.append({"id": r["id"], "name": r["name"],
+                    "avatar": avatar_url(r["avatar"]),
+                    "req": req_status(uid, r["id"]),
+                    "views": r["views"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+TREND_STOPWORDS = frozenset(
+    "about after again against all also always and are because been before being "
+    "both could does doing down each even every from further have having here hers "
+    "him himself into just know like more most much need only other over same "
+    "should some such than that their them then there these they this those "
+    "through under until want were what when where which while with would your "
+    "youre gonna gotta wanna".split())
+
+
+def trending_topics(limit=10):
+    """Top #hashtags from posts in the last 7 days. When nobody has used
+    hashtags yet, falls back to the most frequent meaningful words."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT body FROM posts WHERE created_at > datetime('now','-7 days')").fetchall()
+    conn.close()
+    tags = {}
+    for r in rows:
+        for m in re.findall(r"#(\w+)", r["body"] or ""):
+            t = m.lower()
+            if len(t) >= 2:
+                tags[t] = tags.get(t, 0) + 1
+    if tags:
+        top = sorted(tags.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+        return [{"label": "#" + t, "q": "#" + t, "count": c} for t, c in top]
+    words = {}
+    for r in rows:
+        for w in re.findall(r"[a-zA-Z]{4,}", r["body"] or ""):
+            w = w.lower()
+            if w in TREND_STOPWORDS:
+                continue
+            words[w] = words.get(w, 0) + 1
+    top = sorted(((w, c) for w, c in words.items() if c >= 2),
+                 key=lambda kv: (-kv[1], kv[0]))[:limit]
+    return [{"label": w, "q": w, "count": c} for w, c in top]
+
+
 def can_view_post(viewer, p):
     """Privacy gate. viewer: user dict or None. p: post row dict.
     Page posts follow page visibility (unchanged behavior); personal posts
@@ -466,7 +553,7 @@ def post_card(p, viewer, owner_on=False):
     media = p["media"] or ""
     avatar = ""
     if a and a["avatar"]:
-        avatar = "/uploads/" + a["avatar"]
+        avatar = avatar_url(a["avatar"])
     priv = p.get("privacy") or "public"
     return {
         "id": p["id"], "user_id": p["user_id"],
@@ -517,7 +604,18 @@ def flag_item(item_type, item_id, author_id, author_name, text):
 
 
 def avatar_url(path):
-    return "/uploads/" + path if path else ""
+    """Return the /uploads/ URL for a stored relative path, or '' when there
+    is no path or the file is missing from disk. The '' case makes every
+    template fall back to the letter-placeholder avatar instead of rendering
+    a broken <img> (iOS shows those as a box-with-question-mark)."""
+    if not path:
+        return ""
+    try:
+        if not os.path.isfile(os.path.join(UPLOAD_DIR, str(path))):
+            return ""
+    except Exception:
+        return ""
+    return "/uploads/" + path
 
 
 # ---------------- root / auth ----------------
@@ -655,7 +753,10 @@ async def home(request: Request):
                                  "online": is_online(f["last_seen"])})
         conn.close()
         contacts.sort(key=lambda c: (not c["online"], c["name"].lower()))
-    return render(request, "home.html", {"posts": posts, "contacts": contacts})
+    return render(request, "home.html",
+                  {"posts": posts, "contacts": contacts,
+                   "discover_people": discover_people(user["id"], 3),
+                   "trends": trending_topics(5)})
 
 
 def create_post_from_form(user, form, page_id=None):
@@ -1012,6 +1113,16 @@ async def profile(request: Request, uid: int):
     if not prof:
         return redir("/home", "User not found.")
     conn = db()
+    # --- profile view tracking: count one view per viewer/viewed pair per hour,
+    # never count self-views ---
+    if user["id"] != uid:
+        conn.execute(
+            "INSERT INTO profile_views (viewer_id, viewed_id, viewed_at) "
+            "SELECT ?, ?, ? WHERE NOT EXISTS ("
+            "SELECT 1 FROM profile_views WHERE viewer_id=? AND viewed_id=? "
+            "AND viewed_at > datetime('now','-1 hour'))",
+            (user["id"], uid, now_iso(), user["id"], uid))
+        conn.commit()
     fcount = conn.execute(
         "SELECT COUNT(*) c FROM friendships WHERE status='accepted' AND "
         "(user_id=? OR friend_id=?)", (uid, uid)).fetchone()["c"]
@@ -1339,6 +1450,17 @@ async def notifications_page(request: Request):
     return render(request, "notifications.html", {"notes": notes})
 
 
+# ---------------- discover ----------------
+@app.get("/discover", response_class=HTMLResponse)
+async def discover(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    return render(request, "discover.html",
+                  {"people": discover_people(user["id"], 20),
+                   "trends": trending_topics(15)})
+
+
 # ---------------- search ----------------
 @app.get("/search", response_class=HTMLResponse)
 async def search(request: Request):
@@ -1346,24 +1468,51 @@ async def search(request: Request):
     if err:
         return err
     q = (request.query_params.get("q") or "").strip()
-    users, pages = [], []
+    users, pages, posts = [], [], []
     if q:
-        like = f"%{q}%"
+        # Token-based people search: split the query into tokens and match
+        # ANY token against first/last/display name (the name field holds the
+        # full name, so "ken" and "cooley" both find "Kendrick Cooley"),
+        # case-insensitive partial match. Exact-phrase hits rank first.
+        tokens = [t for t in q.split() if t]
         conn = db()
+        ors = " OR ".join(["name LIKE ?"] * len(tokens))
+        params = [f"%{t}%" for t in tokens]
         urows = conn.execute(
-            "SELECT id,name,avatar FROM users WHERE name LIKE ? OR email LIKE ? "
-            "ORDER BY name LIMIT 50", (like, like)).fetchall()
+            f"SELECT id,name,avatar FROM users WHERE ({ors}) OR email LIKE ? "
+            f"ORDER BY CASE WHEN name LIKE ? THEN 0 ELSE 1 END, name LIMIT 50",
+            params + [f"%{q}%", f"%{q}%"]).fetchall()
         prows = conn.execute(
             "SELECT id,name,ptype FROM pages WHERE name LIKE ? ORDER BY name LIMIT 50",
-            (like,)).fetchall()
-        conn.close()
+            (f"%{q}%",)).fetchall()
         users = [{"id": r["id"], "name": r["name"],
                   "avatar": avatar_url(r["avatar"]),
                   "is_self": r["id"] == user["id"],
                   "req": req_status(user["id"], r["id"])} for r in urows]
-        pages = [{"id": r["id"], "name": r["name"], "ptype": r["ptype"]}
-                 for r in prows]
-    return render(request, "search.html", {"q": q, "users": users, "pages": pages})
+        pages = []
+        for r in prows:
+            joined = bool(conn.execute(
+                "SELECT 1 FROM page_members WHERE page_id=? AND user_id=?",
+                (r["id"], user["id"])).fetchone())
+            pages.append({"id": r["id"], "name": r["name"],
+                          "ptype": r["ptype"], "joined": joined})
+        # Post text search: match ANY token against body (privacy-respecting
+        # via post_card — non-viewable posts are dropped).
+        pors = " OR ".join(["body LIKE ?"] * len(tokens))
+        prow2 = conn.execute(
+            f"SELECT * FROM posts WHERE ({pors}) ORDER BY created_at DESC LIMIT 40",
+            params).fetchall()
+        conn.close()
+        owner_on = is_owner(request)
+        posts = []
+        for r in prow2:
+            card = post_card(dict(r), user, owner_on)
+            if card:
+                posts.append(card)
+                if len(posts) >= 20:
+                    break
+    return render(request, "search.html",
+                  {"q": q, "users": users, "pages": pages, "posts": posts})
 
 
 # ---------------- pages ----------------
