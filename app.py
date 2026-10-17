@@ -58,7 +58,7 @@ STORY_EXTS = IMG_EXTS | {"mp4", "mov", "webm"}
 STORY_TTL_HOURS = 24
 ONLINE_MINUTES = 5
 
-for _d in ("avatars", "posts", "pages"):
+for _d in ("avatars", "posts", "pages", "backgrounds"):
     os.makedirs(os.path.join(UPLOAD_DIR, _d), exist_ok=True)
 os.makedirs(os.path.join(BASE, "static"), exist_ok=True)
 
@@ -222,6 +222,10 @@ def init_db():
     c.execute("UPDATE users SET verification_status='none' WHERE verification_status IS NULL")
     c.execute("UPDATE pages SET is_verified=0 WHERE is_verified IS NULL")
     c.execute("UPDATE pages SET verification_status='none' WHERE verification_status IS NULL")
+    # --- MySpace-style full profile backgrounds (safe on existing DBs) ---
+    if "background" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN background TEXT DEFAULT ''")
+    c.execute("UPDATE users SET background='' WHERE background IS NULL")
     conn.commit()
     conn.close()
 
@@ -377,19 +381,20 @@ def notify(user_id, kind, text, link=""):
     conn.close()
 
 
-def save_upload(up, subdir, allowed):
+def save_upload(up, subdir, allowed, max_mb=0):
     """Save an uploaded file under UPLOAD_DIR/subdir with a uuid name.
     Returns the relative path (e.g. 'avatars/abc123.png') or '' if no file.
-    Raises ValueError on bad extension or oversize."""
+    Raises ValueError on bad extension or oversize. max_mb=0 uses MAX_UPLOAD_MB."""
     if up is None or not getattr(up, "filename", ""):
         return ""
     fname = up.filename or ""
     ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
     if ext not in allowed:
         raise ValueError(f"File type .{ext} not allowed.")
+    limit = (max_mb or MAX_UPLOAD_MB) * 1024 * 1024
     data = up.file.read()
-    if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
-        raise ValueError(f"File too large (max {MAX_UPLOAD_MB}MB).")
+    if len(data) > limit:
+        raise ValueError(f"File too large (max {max_mb or MAX_UPLOAD_MB}MB).")
     name = f"{uuid.uuid4().hex}.{ext}"
     dest = os.path.join(UPLOAD_DIR, subdir, name)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -1409,6 +1414,7 @@ async def profile(request: Request, uid: int):
         "tap_count": tcount,
         "is_verified": bool(prof.get("is_verified")),
         "verification_status": prof.get("verification_status") or "none",
+        "background": avatar_url(prof.get("background", "")),
     }
     posts = []
     for r in prows:
@@ -1430,8 +1436,20 @@ async def profile_edit_page(request: Request):
         "profile": {"id": user["id"], "name": user["name"],
                     "bio": user.get("bio", ""),
                     "avatar": avatar_url(user.get("avatar", "")),
+                    "background": avatar_url(user.get("background", "")),
                     "is_verified": bool(user.get("is_verified")),
                     "verification_status": user.get("verification_status") or "none"}})
+
+
+def _delete_upload(rel_path):
+    """Best-effort removal of a stored upload (e.g. replaced backgrounds)."""
+    try:
+        if rel_path and not rel_path.startswith(("http://", "https://", "/")):
+            p = os.path.join(UPLOAD_DIR, rel_path)
+            if os.path.isfile(p):
+                os.remove(p)
+    except Exception:
+        pass
 
 
 @app.post("/settings/profile")
@@ -1444,15 +1462,25 @@ async def profile_edit(request: Request):
     bio = (form.get("bio") or "").strip()
     try:
         avatar = save_upload(form.get("avatar"), "avatars", IMG_EXTS)
+        background = save_upload(form.get("background"), "backgrounds", IMG_EXTS, max_mb=5)
     except ValueError as e:
         return redir("/settings/profile", str(e))
+    remove_bg = (form.get("remove_background") or "") == "1"
     conn = db()
+    sets, vals = ["name=?", "bio=?"], [name, bio]
     if avatar:
-        conn.execute("UPDATE users SET name=?, bio=?, avatar=? WHERE id=?",
-                     (name, bio, avatar, user["id"]))
-    else:
-        conn.execute("UPDATE users SET name=?, bio=? WHERE id=?",
-                     (name, bio, user["id"]))
+        sets.append("avatar=?")
+        vals.append(avatar)
+    old_bg = user.get("background", "")
+    if background:
+        sets.append("background=?")
+        vals.append(background)
+        _delete_upload(old_bg)
+    elif remove_bg and old_bg:
+        sets.append("background=''")
+        _delete_upload(old_bg)
+    vals.append(user["id"])
+    conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?", vals)
     conn.commit()
     conn.close()
     return redir(f"/user/{user['id']}")
