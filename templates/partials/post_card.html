@@ -79,7 +79,7 @@
       <div class="aud-popup" id="aud-popup-{{ post.id }}" hidden>
         <form action="/post/{{ post.id }}/audience" method="post">
           <div class="aud-title">🙈 Hide this post from…</div>
-          <p class="aud-hint">Checked friends can't see this post.</p>
+          <p class="aud-hint">Checked friends can't see this post. Uncheck someone and Save to let them see this post again.</p>
           <div class="aud-list">
             {% for f in post.audience_friends %}
             <label class="aud-row"><input type="checkbox" name="hide_from" value="{{ f.id }}"{% if f.hidden %} checked{% endif %}> {{ f.name|e }}</label>
