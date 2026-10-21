@@ -44,7 +44,9 @@
 
   {% if post.media %}
     {% set _m = post.media|lower %}
-    {% if _m.endswith('.mp3') or _m.endswith('.wav') or _m.endswith('.ogg') or _m.endswith('.m4a') %}
+    {% if _m.endswith('.mp4') or _m.endswith('.mov') or _m.endswith('.webm') %}
+    <video class="post-video-file" controls preload="metadata" src="{{ post.media|e }}"></video>
+    {% elif _m.endswith('.mp3') or _m.endswith('.wav') or _m.endswith('.ogg') or _m.endswith('.m4a') %}
     <audio class="post-audio" controls src="{{ post.media|e }}"></audio>
     {% else %}
     <img class="post-img" src="{{ post.media|e }}" alt="post media">
