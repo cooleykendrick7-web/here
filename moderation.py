@@ -51,7 +51,7 @@ SLANDER_WORDS = {"liar", "thief", "scammer", "cheater", "fraud", "criminal",
                  "rapist", "pedophile", "molester"}
 
 _WORD_RE = {w: re.compile(r"\b" + re.escape(w) + r"\b", re.IGNORECASE)
-            for w in PROFANITY | SLURS}
+            for w in PROFANITY | SLURS | INSULTS}
 
 
 def _find_words(text, words):

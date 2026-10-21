@@ -82,7 +82,10 @@ Post card partial `partials/post_card.html`, context var `post` with keys:
   created_at (display string), likes (count), liked (bool), comments_count,
   can_delete (bool), is_page_post (bool), page_name ("" or name), page_id (0 or id),
   tagged_users [{id,name}], tagged_pages [{id,name}], hidden_from_count (int),
-  is_mine (bool), can_edit_audience (bool)
+  is_mine (bool), can_edit_audience (bool), body_html (body escaped with this
+  post's @tags rendered as profile/page links — render with |safe),
+  audience_friends [{id,name,hidden}] (author's friends + current hide-from
+  state; only populated on the author's own non-share posts, for the 👁 popup)
 
 Verification: users/pages carry is_verified (bool) and verification_status ('none'|'pending'|'approved'|'declined').
 Verified names show a golden five-point star ★ (color #FFD700, white/gold shine + light red glow) beside the name — on profiles, pages, post cards. Verification is owner-only; never auto-approved. Users apply via "⭐ Verify me" on their profile or settings; page owners apply via "⭐ Verify page" on their page.
@@ -100,7 +103,8 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | POST | /login | fields: email, password | -> redirect /home |
 | GET | /logout | | -> redirect /login |
 | GET | /home | home.html | posts (post-card dicts, newest first: friends' posts + public posts), contacts (friends: id,name,avatar,online), stories_tray (self + friends' active stories: user_id,name,avatar,is_self,first_id,count,all_viewed) |
-| POST | /posts | fields: kind, privacy ('public'|'friends'|'onlyme'), body, feeling, link_url, video_url, media (file), hide_from (friend ids, repeated), tag_users (friend ids, repeated), tag_pages (page ids, repeated) | -> redirect /home; tagged friends get a 'tag' notification |
+| POST | /posts | fields: kind, privacy ('public'|'friends'|'onlyme'), body, feeling, link_url, video_url, media (file), hide_from (friend ids, repeated), tags_json (JSON [{kind:'user'|'page', id, name}] from the composer @ picker — server re-validates: real friend / owned-or-member page AND the literal '@Name' must appear in body), tag_users/tag_pages (legacy checkbox fields, still accepted) | -> redirect /home; tagged friends get a 'tag' notification |
+| GET | /api/tag-suggest | ?q= partial name | login required; -> JSON {ok, results: [{kind:'user'|'page', id, name, avatar}]} — current user's friends + pages they own/belong to, case-insensitive substring match on name, friends first, max 8; 401 JSON when logged out |
 | GET | /post/{id} | post.html | post (with comments list of {id,user_id,author_name,author_avatar,body,created_at,can_delete}) |
 | POST | /post/{id}/comment | field: body | -> redirect /post/{id} |
 | POST | /post/{id}/like | | toggle 'like' (removes any existing reaction); -> JSON {ok, likes, liked} (share ids resolve to the original; privacy-gated) |
@@ -118,7 +122,7 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | POST | /post/{id}/pin | | author only, personal posts; unpins others; -> redirect back |
 | POST | /post/{id}/unpin | | author only; -> redirect back |
 | GET | /post/{id}/audience | audience.html | author (or owner session) only; friend checkboxes, current hide-from pre-checked; post_id, friends [{id,name,hidden}], hidden_count |
-| POST | /post/{id}/audience | field: hide_from (friend ids, repeated) | author (or owner session) only; replaces the post's hide-from list; -> redirect /post/{id} |
+| POST | /post/{id}/audience | field: hide_from (friend ids, repeated) | author (or owner session) only; replaces the post's hide-from list; -> redirect back to the submitting page (feed/wall/post) via same-origin referer, else /post/{id}. The post card's 👁 eyeball popup posts here too |
 | GET | /user/{id} | profile.html | profile {id,name,bio,avatar,background (full /uploads/ URL or ''),created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count,is_verified,verification_status}, posts, page_bg (= profile.background — the profile owner's background overrides the viewer's site-wide one) |
 | POST | /verify/user/request | | logged in; once per user (re-request after decline allowed); sets verification_status='pending' + inserts verification_requests(kind='user'); -> redirect /user/{id} with flash |
 | GET | /settings/profile | profile_edit.html | profile |
@@ -143,7 +147,7 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | POST | /verify/page/{id}/request | | page owner only; sets pages.verification_status='pending' + inserts verification_requests(kind='page'); -> redirect /page/{id} with flash |
 | POST | /page/{id}/join | | -> redirect /page/{id} |
 | POST | /page/{id}/leave | | -> redirect /page/{id} |
-| POST | /page/{id}/post | fields: kind, body, feeling, link_url, video_url, media (file), hide_from, tag_users, tag_pages (same as /posts) | -> redirect /page/{id} |
+| POST | /page/{id}/post | fields: kind, body, feeling, link_url, video_url, media (file), hide_from, tags_json (same @ picker as /posts), tag_users, tag_pages (legacy) | -> redirect /page/{id} |
 | GET | /page/{id}/edit | page_edit.html | page (owner only) |
 | POST | /page/{id}/edit | fields: name, description, cover (file) | (owner only) -> redirect /page/{id} |
 | GET | /owner/login | owner/login.html | error? |
@@ -162,7 +166,14 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 Composer (home + page): a kind selector (Status 📝 | Photo 📷 | Feeling 😊 |
 Clothes 👕 | Link 🔗 | Video 🎬 | Music 🎵). Home composer also has an
 audience selector: 🌍 Public | 👥 Friends | 🔒 Only me (page composer posts
-are always public). Fields shown per kind via JS:
+are always public). Tagging is Facebook-style: typing @ in the body box opens
+a dropdown (GET /api/tag-suggest) of friends + owned/member pages filtered by
+the typed name; picking one inserts "@Name" and records it in the hidden
+tags_json field (client prunes tags whose @Name was deleted; server
+re-validates). There are NO tag checkbox pickers anymore; the only checkbox
+picker left is "🙈 Hide this post from…" (hide_from). On the author's own
+posts, a 👁 eyeball button opens an in-place popup listing their friends
+(checked = hidden from this post) that saves via POST /post/{id}/audience. Fields shown per kind via JS:
 text: body. photo: body + media(file). feeling: body + feeling(select of common
 feelings). clothes: body + media(file). link: body + link_url. video: body +
 video_url. audio: body + media(file .mp3). All POST to /posts (or /page/{id}/post

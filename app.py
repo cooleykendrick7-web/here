@@ -11,12 +11,15 @@ owner_sessions; the owner password hash is baked in as OWNER_PW_HASH.
 
 Implements the binding contract in ROUTE_CONTRACT.md exactly.
 """
+import html
+import json
 import os
 import re
 import secrets
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 import bcrypt
 from fastapi import FastAPI, Request, UploadFile
@@ -538,6 +541,70 @@ def composer_choices(user):
     return friends, taggable_pages(user["id"])
 
 
+def _tags_from_json(form, body, user):
+    """Parse the composer @-picker's hidden tags_json field
+    ([{kind:'user'|'page', id, name}, ...]) into (user_ids, page_ids).
+
+    Server re-validates everything the client claimed: the id must be a
+    real friend (users) or an owned/member page, AND the literal text
+    '@<canonical name>' must appear in the post body — a tag whose @Name
+    was deleted from the text is dropped here even if the client kept it.
+    """
+    uids, pids = set(), set()
+    raw = form.get("tags_json") or ""
+    if not raw:
+        return uids, pids
+    try:
+        items = json.loads(raw)
+    except Exception:
+        return uids, pids
+    if not isinstance(items, list):
+        return uids, pids
+    fids = friend_id_set(user["id"])
+    page_names = {pg["id"]: pg["name"] for pg in taggable_pages(user["id"])}
+    conn = db()
+    for it in items[:20]:
+        if not isinstance(it, dict):
+            continue
+        try:
+            tid = int(it.get("id"))
+        except (TypeError, ValueError):
+            continue
+        kind = it.get("kind")
+        if kind == "user" and tid in fids:
+            u = conn.execute("SELECT name FROM users WHERE id=?",
+                             (tid,)).fetchone()
+            if u and ("@" + u["name"]) in body:
+                uids.add(tid)
+        elif kind == "page" and tid in page_names:
+            if ("@" + page_names[tid]) in body:
+                pids.add(tid)
+    conn.close()
+    return uids, pids
+
+
+def linkify_tags(body, tagged_users, tagged_pages):
+    """HTML for a post body: escaped text, with '@Name' mentions of this
+    post's actual tags turned into profile/page links (Facebook-style).
+    Longest names match first so 'Anna' wins over 'Ann'; a single regex
+    pass means an inserted link is never re-matched."""
+    if not body:
+        return ""
+    text = html.escape(body)
+    targets = {}
+    for t in tagged_users:
+        targets[html.escape("@" + t["name"])] = f"/user/{t['id']}"
+    for t in tagged_pages:
+        targets[html.escape("@" + t["name"])] = f"/page/{t['id']}"
+    if not targets:
+        return text
+    needles = sorted(targets, key=len, reverse=True)
+    pat = re.compile("|".join(re.escape(n) for n in needles))
+    return pat.sub(
+        lambda m: f'<a class="tag-link" href="{targets[m.group(0)]}">'
+                  f'{m.group(0)}</a>', text)
+
+
 # ---------------- discovery: profile views, suggested people, trending ----------------
 def discover_people(uid, limit=10):
     """People you may know: non-friends ranked by profile views received in
@@ -690,6 +757,15 @@ def post_card(p, viewer, owner_on=False):
     hidden_from_count = conn.execute(
         "SELECT COUNT(*) c FROM post_hidden_from WHERE post_id=?",
         (p["id"],)).fetchone()["c"]
+    # Eyeball popup data (author's own posts only): the author's friends
+    # with their current hidden-from state pre-checked.
+    audience_friends = []
+    if viewer and viewer["id"] == p["user_id"] and not share:
+        _hidden = hidden_from_ids(p["id"])
+        _friends, _ = composer_choices(viewer)
+        audience_friends = [{"id": f["id"], "name": f["name"],
+                             "hidden": f["id"] in _hidden}
+                            for f in _friends]
     page_name, page_id, is_page = "", 0, False
     if p.get("page_id"):
         pg = conn.execute("SELECT id,name FROM pages WHERE id=?",
@@ -714,6 +790,7 @@ def post_card(p, viewer, owner_on=False):
         "author_avatar": avatar,
         "author_verified": bool(a["is_verified"]) if a else False,
         "kind": p["kind"], "body": p["body"] or "",
+        "body_html": linkify_tags(p["body"] or "", tagged_users, tagged_pages),
         "feeling": p["feeling"] or "", "link_url": p["link_url"] or "",
         "video_url": p["video_url"] or "",
         "media": "/uploads/" + media if media else "",
@@ -742,6 +819,7 @@ def post_card(p, viewer, owner_on=False):
         "is_page_post": is_page, "page_name": page_name, "page_id": page_id,
         "tagged_users": tagged_users, "tagged_pages": tagged_pages,
         "hidden_from_count": hidden_from_count,
+        "audience_friends": audience_friends,
         "is_mine": bool(viewer and viewer["id"] == p["user_id"] and not share),
         "can_edit_audience": bool(viewer and viewer["id"] == p["user_id"]
                                   and not share),
@@ -893,6 +971,44 @@ def _home_posts(user, owner_on):
     return cards
 
 
+@app.get("/api/tag-suggest")
+async def tag_suggest(request: Request):
+    """Composer @-tag autocomplete: the current user's friends plus pages
+    they own or belong to, filtered by ?q= (case-insensitive substring).
+    Up to 8 results, friends first. Login required."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    q = (request.query_params.get("q") or "").strip().lower()
+    uid = user["id"]
+    conn = db()
+    out = []
+    frows = []
+    for fid in friend_id_set(uid):
+        f = conn.execute("SELECT id,name,avatar FROM users WHERE id=?",
+                         (fid,)).fetchone()
+        if f:
+            frows.append(f)
+    frows.sort(key=lambda r: r["name"].lower())
+    for f in frows:
+        if q and q not in f["name"].lower():
+            continue
+        out.append({"kind": "user", "id": f["id"], "name": f["name"],
+                    "avatar": avatar_url(f["avatar"])})
+    prows = conn.execute(
+        "SELECT DISTINCT pg.id, pg.name, pg.cover FROM pages pg "
+        "LEFT JOIN page_members pm ON pm.page_id=pg.id AND pm.user_id=? "
+        "WHERE pg.owner_id=? OR pm.user_id IS NOT NULL ORDER BY pg.name",
+        (uid, uid)).fetchall()
+    conn.close()
+    for pg in prows:
+        if q and q not in pg["name"].lower():
+            continue
+        out.append({"kind": "page", "id": pg["id"], "name": pg["name"],
+                    "avatar": avatar_url(pg["cover"])})
+    return JSONResponse({"ok": True, "results": out[:8]})
+
+
 @app.get("/home", response_class=HTMLResponse)
 async def home(request: Request):
     user, err = require_login(request)
@@ -976,6 +1092,11 @@ def create_post_from_form(user, form, page_id=None):
     tag_uids = _form_ids(form, "tag_users") & fids
     valid_pids = {pg["id"] for pg in taggable_pages(user["id"])}
     tag_pids = _form_ids(form, "tag_pages") & valid_pids
+    # Facebook-style @tags from the composer picker (validated: real
+    # friend / owned-or-member page + the @Name must be in the body).
+    at_uids, at_pids = _tags_from_json(form, body, user)
+    tag_uids |= at_uids
+    tag_pids |= at_pids
     if hide_ids or tag_uids or tag_pids:
         conn = db()
         for hid in hide_ids:
@@ -1551,7 +1672,20 @@ async def audience_save(request: Request, pid: int):
             "created_at) VALUES(?,?,?)", (pid, hid, now_iso()))
     conn.commit()
     conn.close()
-    return redir(f"/post/{pid}", "Audience updated.")
+    # Return to the page the form was submitted from (feed, wall, or the
+    # post page itself) when it's one of ours; else the post page.
+    dest = f"/post/{pid}"
+    ref = request.headers.get("referer", "")
+    if ref:
+        try:
+            pr = urlparse(ref)
+            if pr.path.startswith("/") and (
+                    not pr.netloc
+                    or pr.netloc == request.headers.get("host", "")):
+                dest = pr.path
+        except Exception:
+            pass
+    return redir(dest, "Audience updated.")
 
 
 # ---------------- profile / settings ----------------
