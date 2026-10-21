@@ -31,7 +31,7 @@
   {% endif %}
 
   {% if post.body %}
-  <div class="post-body">{{ post.body|e }}</div>
+  <div class="post-body">{{ post.body_html|safe }}</div>
   {% endif %}
 
   {% if post.link_url %}
@@ -74,7 +74,23 @@
     </div>
     <a class="action-link" href="/post/{{ post.id }}">💬 Comment</a>
     {% if post.can_edit_audience %}
-    <a class="action-link" href="/post/{{ post.id }}/audience">👁 Audience</a>
+    <div class="aud-wrap">
+      <button type="button" class="action-link aud-toggle" data-pid="{{ post.id }}" title="Hide this post from…" style="background:none;border:none;cursor:pointer">👁</button>
+      <div class="aud-popup" id="aud-popup-{{ post.id }}" hidden>
+        <form action="/post/{{ post.id }}/audience" method="post">
+          <div class="aud-title">🙈 Hide this post from…</div>
+          <p class="aud-hint">Checked friends can't see this post.</p>
+          <div class="aud-list">
+            {% for f in post.audience_friends %}
+            <label class="aud-row"><input type="checkbox" name="hide_from" value="{{ f.id }}"{% if f.hidden %} checked{% endif %}> {{ f.name|e }}</label>
+            {% else %}
+            <p class="aud-hint">You have no friends to hide this post from yet.</p>
+            {% endfor %}
+          </div>
+          <button type="submit" class="btn btn-sm" style="margin-top:8px">Save</button>
+        </form>
+      </div>
+    </div>
     {% endif %}
     {% if post.can_share %}
     <form class="inline-form" action="/post/{{ post.id }}/share" method="post">
