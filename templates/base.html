@@ -150,6 +150,9 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 .aud-list{max-height:200px;overflow-y:auto}
 .aud-row{display:flex;align-items:center;gap:8px;padding:7px 4px;font-size:14px;font-weight:600;cursor:pointer;color:#1c1e21}
 .aud-row input{accent-color:var(--red);width:18px;height:18px;flex-shrink:0}
+/* ===== composer eyeball (hide-from picker behind a 👁 button, before posting) ===== */
+.composer-aud{position:relative;display:inline-block;margin-top:10px}
+.composer-aud-popup{top:calc(100% + 6px);bottom:auto}
 
 /* ===== post card ===== */
 .post-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -544,6 +547,37 @@ document.addEventListener('click', function(ev){
   });
   ta.addEventListener('blur', function(){ setTimeout(closeDrop, 200); });
   form.addEventListener('submit', syncHidden);
+})();
+</script>
+<script>
+/* ===== Composer eyeball: hide-from picker behind a 👁 button =====
+   The hide_from checkboxes live inside a popup in the composer; the button
+   label shows how many friends are picked ("👁 Hide from (2)"). Opening it
+   closes the @ tag dropdown, and typing in the post box closes it again,
+   so the two composer popups never fight. Server side is unchanged — the
+   checkboxes still submit as the regular hide_from form field. */
+(function(){
+  var btn = document.getElementById('composer-aud-toggle');
+  var pop = document.getElementById('composer-aud-popup');
+  if (!btn || !pop) return;
+  function paint(){
+    var n = pop.querySelectorAll('input[name="hide_from"]:checked').length;
+    btn.textContent = n ? '👁 Hide from (' + n + ')' : '👁 Hide from…';
+  }
+  btn.addEventListener('click', function(){
+    var opening = pop.hidden;
+    pop.hidden = !pop.hidden;
+    if (opening){
+      var ts = document.getElementById('tag-suggest');
+      if (ts) ts.hidden = true;
+    }
+  });
+  pop.addEventListener('change', paint);
+  var done = pop.querySelector('.composer-aud-done');
+  if (done) done.addEventListener('click', function(){ pop.hidden = true; });
+  var ta = document.getElementById('composer-body');
+  if (ta) ta.addEventListener('input', function(){ pop.hidden = true; });
+  paint();
 })();
 </script>
 {% block scripts %}{% endblock %}

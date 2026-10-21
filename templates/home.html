@@ -64,11 +64,18 @@
     </div>
 
     {% if composer_friends %}
-    <label class="fld">🙈 Hide this post from…</label>
-    <div class="picker-list">
-      {% for f in composer_friends %}
-      <label class="picker-chip"><input type="checkbox" name="hide_from" value="{{ f.id }}"> {{ f.name|e }}</label>
-      {% endfor %}
+    <div class="composer-aud">
+      <button type="button" class="btn-ghost btn-sm" id="composer-aud-toggle">👁 Hide from…</button>
+      <div class="aud-popup composer-aud-popup" id="composer-aud-popup" hidden>
+        <div class="aud-title">🙈 Hide this post from…</div>
+        <p class="aud-hint">Checked friends won't see this post.</p>
+        <div class="aud-list">
+          {% for f in composer_friends %}
+          <label class="aud-row"><input type="checkbox" name="hide_from" value="{{ f.id }}"> {{ f.name|e }}</label>
+          {% endfor %}
+        </div>
+        <button type="button" class="btn btn-sm composer-aud-done" style="margin-top:8px">Done</button>
+      </div>
     </div>
     {% endif %}
 
