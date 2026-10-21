@@ -12,7 +12,7 @@
     {% else %}<span class="av-ph av-32">{{ c.author_name[:1]|upper|e }}</span>{% endif %}
     <div class="cbub">
       <div class="cnm"><a href="/user/{{ c.user_id }}">{{ c.author_name|e }}</a></div>
-      <div class="ctxt">{{ c.body|e }}</div>
+      <div class="ctxt">{{ c.body_html|safe }}</div>
       <div class="cmeta">{{ c.created_at|e }}</div>
     </div>
   </div>

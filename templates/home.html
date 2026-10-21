@@ -25,7 +25,6 @@
       <button type="button" class="kind-tab" data-kind="photo">📷 Photo</button>
       <button type="button" class="kind-tab" data-kind="feeling">😊 Feeling</button>
       <button type="button" class="kind-tab" data-kind="clothes">👕 Clothes</button>
-      <button type="button" class="kind-tab" data-kind="link">🔗 Link</button>
       <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
       <button type="button" class="kind-tab" data-kind="audio">🎵 Music</button>
     </div>
@@ -33,7 +32,7 @@
       <textarea name="body" id="composer-body" placeholder="What's on your mind?"></textarea>
       <div class="tag-suggest" id="tag-suggest" hidden></div>
     </div>
-    <div class="tag-hint">Tip: type @ to tag a friend or a page.</div>
+    <div class="tag-hint">Tip: type @ to tag a friend or a page. Paste any link — it turns clickable, and YouTube links play right here.</div>
     <input type="hidden" name="tags_json" id="tags-json" value="">
 
     <div id="fld-feeling" style="display:none">
@@ -49,18 +48,8 @@
     </div>
 
     <div id="fld-media" style="display:none">
-      <label class="fld" for="media-file">Upload <span id="media-kind-label">photo</span> (jpg, png, gif, webp · mp3 for music · max 25MB)</label>
-      <input type="file" name="media" id="media-file" accept="image/*,audio/*">
-    </div>
-
-    <div id="fld-link" style="display:none">
-      <label class="fld" for="link-url">Link URL (must start with http)</label>
-      <input type="url" name="link_url" id="link-url" placeholder="https://example.com">
-    </div>
-
-    <div id="fld-video" style="display:none">
-      <label class="fld" for="video-url">Video URL (YouTube or Vimeo)</label>
-      <input type="url" name="video_url" id="video-url" placeholder="https://www.youtube.com/watch?v=...">
+      <label class="fld" for="media-file">Upload <span id="media-kind-label">photo</span> <span id="media-kind-hint">(jpg, png, gif, webp · max 25MB)</span></label>
+      <input type="file" name="media" id="media-file" accept="image/*">
     </div>
 
     {% if composer_friends %}
@@ -108,15 +97,14 @@
   var bodyBox = document.getElementById('composer-body');
   var fFeeling = document.getElementById('fld-feeling');
   var fMedia = document.getElementById('fld-media');
-  var fLink = document.getElementById('fld-link');
-  var fVideo = document.getElementById('fld-video');
   var mediaLbl = document.getElementById('media-kind-label');
+  var mediaHint = document.getElementById('media-kind-hint');
+  var mediaInput = document.getElementById('media-file');
   var placeholders = {
     text: "What's on your mind?",
     photo: "Say something about this photo…",
     feeling: "What's going on?",
     clothes: "Show off the fit…",
-    link: "Why share this link?",
     video: "What is this video about?",
     audio: "Drop a track…"
   };
@@ -125,12 +113,11 @@
     tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.kind === kind); });
     bodyBox.placeholder = placeholders[kind] || placeholders.text;
     fFeeling.style.display = (kind === 'feeling') ? 'block' : 'none';
-    fMedia.style.display = (kind === 'photo' || kind === 'clothes' || kind === 'audio') ? 'block' : 'none';
-    if (kind === 'audio') mediaLbl.textContent = 'mp3';
-    else if (kind === 'clothes') mediaLbl.textContent = 'outfit photo';
-    else mediaLbl.textContent = 'photo';
-    fLink.style.display = (kind === 'link') ? 'block' : 'none';
-    fVideo.style.display = (kind === 'video') ? 'block' : 'none';
+    fMedia.style.display = (kind === 'photo' || kind === 'clothes' || kind === 'audio' || kind === 'video') ? 'block' : 'none';
+    if (kind === 'audio') { mediaLbl.textContent = 'music'; mediaHint.textContent = '(mp3, wav, ogg, m4a · max 25MB)'; mediaInput.accept = 'audio/*'; }
+    else if (kind === 'video') { mediaLbl.textContent = 'video'; mediaHint.textContent = '(mp4, mov, webm · max 200MB)'; mediaInput.accept = 'video/*,.mp4,.mov,.webm'; }
+    else if (kind === 'clothes') { mediaLbl.textContent = 'outfit photo'; mediaHint.textContent = '(jpg, png, gif, webp · max 25MB)'; mediaInput.accept = 'image/*'; }
+    else { mediaLbl.textContent = 'photo'; mediaHint.textContent = '(jpg, png, gif, webp · max 25MB)'; mediaInput.accept = 'image/*'; }
   }
   tabs.forEach(function(t){ t.addEventListener('click', function(){ setKind(t.dataset.kind); }); });
   setKind('text');
