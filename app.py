@@ -49,7 +49,13 @@ PRIVACY_LABELS = {"public": "Public", "friends": "Friends only", "onlyme": "Only
 PTYPES = ("community", "market", "fan_club", "seller")
 IMG_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
 AUD_EXTS = {"mp3", "wav", "ogg", "m4a"}
+VID_EXTS = {"mp4", "mov", "webm"}
 MAX_UPLOAD_MB = 25
+# Post video uploads get a much bigger cap than other media. The hard
+# ceiling is the 1GB disk at /data (DB + ALL uploads live there) plus
+# upload time on a phone connection — there are no chunked/resumable
+# uploads, so one interrupted upload restarts from zero.
+POST_VIDEO_MAX_MB = 200
 # Post reactions (extends likes; likes.kind defaults to 'like' for old rows)
 REACTIONS = [("like", "👍", "Like"), ("love", "❤️", "Love"),
              ("laugh", "😂", "Haha"), ("wow", "😮", "Wow"),
@@ -404,22 +410,42 @@ def notify(user_id, kind, text, link=""):
 def save_upload(up, subdir, allowed, max_mb=0):
     """Save an uploaded file under UPLOAD_DIR/subdir with a uuid name.
     Returns the relative path (e.g. 'avatars/abc123.png') or '' if no file.
-    Raises ValueError on bad extension or oversize. max_mb=0 uses MAX_UPLOAD_MB."""
+    Raises ValueError on bad extension or oversize. max_mb=0 uses MAX_UPLOAD_MB.
+    Streams to disk in 1MB chunks so a 200MB video never sits in RAM; an
+    oversize upload aborts mid-stream and the partial file is removed."""
     if up is None or not getattr(up, "filename", ""):
         return ""
     fname = up.filename or ""
     ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
     if ext not in allowed:
         raise ValueError(f"File type .{ext} not allowed.")
-    limit = (max_mb or MAX_UPLOAD_MB) * 1024 * 1024
-    data = up.file.read()
-    if len(data) > limit:
-        raise ValueError(f"File too large (max {max_mb or MAX_UPLOAD_MB}MB).")
+    cap_mb = max_mb or MAX_UPLOAD_MB
+    limit = cap_mb * 1024 * 1024
     name = f"{uuid.uuid4().hex}.{ext}"
     dest = os.path.join(UPLOAD_DIR, subdir, name)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with open(dest, "wb") as f:
-        f.write(data)
+    src = up.file
+    try:
+        src.seek(0)
+    except Exception:
+        pass
+    total = 0
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError(f"File too large (max {cap_mb}MB).")
+                f.write(chunk)
+    except Exception:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
     return f"{subdir}/{name}"
 
 
@@ -583,11 +609,30 @@ def _tags_from_json(form, body, user):
     return uids, pids
 
 
-def linkify_tags(body, tagged_users, tagged_pages):
-    """HTML for a post body: escaped text, with '@Name' mentions of this
-    post's actual tags turned into profile/page links (Facebook-style).
-    Longest names match first so 'Anna' wins over 'Ann'; a single regex
-    pass means an inserted link is never re-matched."""
+_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+_URL_TAIL = ".,;:!?"
+
+
+def _split_url_tail(s):
+    """Peel sentence punctuation off the end of a matched URL so
+    'check https://x.com.' links the URL, not the period."""
+    tail = ""
+    while s and s[-1] in _URL_TAIL:
+        tail = s[-1] + tail
+        s = s[:-1]
+    if s.endswith(")") and "(" not in s:
+        tail = ")" + tail
+        s = s[:-1]
+    return s, tail
+
+
+def linkify_body(body, tagged_users=(), tagged_pages=()):
+    """HTML for post/comment text: the text is HTML-escaped FIRST, then
+    bare URLs become clickable links and '@Name' mentions of this post's
+    actual tags become profile/page links (Facebook-style). A single
+    regex pass means inserted links are never re-matched, and a tag name
+    inside a URL is never linkified separately. Longest tag names match
+    first so 'Anna' wins over 'Ann'."""
     if not body:
         return ""
     text = html.escape(body)
@@ -596,13 +641,34 @@ def linkify_tags(body, tagged_users, tagged_pages):
         targets[html.escape("@" + t["name"])] = f"/user/{t['id']}"
     for t in tagged_pages:
         targets[html.escape("@" + t["name"])] = f"/page/{t['id']}"
-    if not targets:
-        return text
-    needles = sorted(targets, key=len, reverse=True)
-    pat = re.compile("|".join(re.escape(n) for n in needles))
-    return pat.sub(
-        lambda m: f'<a class="tag-link" href="{targets[m.group(0)]}">'
-                  f'{m.group(0)}</a>', text)
+    alts = [_URL_RE.pattern]
+    if targets:
+        needles = sorted(targets, key=len, reverse=True)
+        alts.append("|".join(re.escape(n) for n in needles))
+    pat = re.compile("|".join(alts))
+
+    def repl(m):
+        s = m.group(0)
+        if s in targets:
+            return f'<a class="tag-link" href="{targets[s]}">{s}</a>'
+        core, tail = _split_url_tail(s)
+        if len(core) <= len("https://"):
+            return s
+        return (f'<a href="{core}" target="_blank" rel="noopener">'
+                f"{core}</a>{tail}")
+
+    return pat.sub(repl, text)
+
+
+def first_embed_in_text(body):
+    """First YouTube/Vimeo URL in free text -> embed src, or ''."""
+    if not body:
+        return ""
+    for m in _URL_RE.finditer(body):
+        emb = video_embed_url(m.group(0))
+        if emb:
+            return emb
+    return ""
 
 
 # ---------------- discovery: profile views, suggested people, trending ----------------
@@ -790,11 +856,16 @@ def post_card(p, viewer, owner_on=False):
         "author_avatar": avatar,
         "author_verified": bool(a["is_verified"]) if a else False,
         "kind": p["kind"], "body": p["body"] or "",
-        "body_html": linkify_tags(p["body"] or "", tagged_users, tagged_pages),
+        "body_html": linkify_body(p["body"] or "", tagged_users, tagged_pages),
         "feeling": p["feeling"] or "", "link_url": p["link_url"] or "",
         "video_url": p["video_url"] or "",
         "media": "/uploads/" + media if media else "",
-        "embed_url": video_embed_url(p["video_url"]) if p["kind"] == "video" else "",
+        # Embeds: an old Video-kind post's URL wins, then an old Link-kind
+        # post's URL, then the first YouTube/Vimeo URL pasted in the body
+        # (links just work now — no separate link/video box anymore).
+        "embed_url": (video_embed_url(p["video_url"])
+                      or video_embed_url(p["link_url"])
+                      or first_embed_in_text(p["body"])),
         "created_at": fancy_time(p["created_at"]),
         "likes": likes, "liked": liked, "comments_count": cc,
         "my_reaction": my_reaction, "reactions_top": reactions_top,
@@ -1053,25 +1124,31 @@ def create_post_from_form(user, form, page_id=None):
     link_url = (form.get("link_url") or "").strip()
     video_url = (form.get("video_url") or "").strip()
 
+    # link_url / video_url are no longer offered in the composer (any link
+    # pasted in the body just works, and YouTube/Vimeo links auto-embed),
+    # but the fields are still accepted so old clients don't break and old
+    # posts keep rendering exactly as before.
     if link_url and not (link_url.startswith("http://") or
                          link_url.startswith("https://")):
         return None, "Link must start with http:// or https://."
-    if kind == "video":
-        if not video_url or ("youtube" not in video_url and "youtu.be" not in video_url
-                             and "vimeo" not in video_url):
-            return None, "Video URL must be a YouTube or Vimeo link."
-    elif video_url and ("youtube" not in video_url and "youtu.be" not in video_url
-                        and "vimeo" not in video_url):
+    if video_url and ("youtube" not in video_url and "youtu.be" not in video_url
+                      and "vimeo" not in video_url):
         return None, "Video URL must be a YouTube or Vimeo link."
 
     media_file = form.get("media")
-    allowed = IMG_EXTS | AUD_EXTS
+    allowed = IMG_EXTS | AUD_EXTS | VID_EXTS
     if kind in ("photo", "clothes"):
         allowed = IMG_EXTS
     elif kind == "audio":
         allowed = AUD_EXTS
+    elif kind == "video":
+        allowed = VID_EXTS
+    # Post videos get the big cap; photos/audio keep the default cap.
+    _mname = getattr(media_file, "filename", "") or ""
+    _mext = _mname.rsplit(".", 1)[-1].lower() if "." in _mname else ""
+    cap = POST_VIDEO_MAX_MB if _mext in VID_EXTS else 0
     try:
-        media = save_upload(media_file, "posts", allowed)
+        media = save_upload(media_file, "posts", allowed, max_mb=cap)
     except ValueError as e:
         return None, str(e)
 
@@ -1163,7 +1240,8 @@ async def view_post(request: Request, pid: int):
             "id": c["id"], "user_id": c["user_id"],
             "author_name": a["name"] if a else "Deleted user",
             "author_avatar": avatar_url(a["avatar"]) if a and a["avatar"] else "",
-            "body": c["body"], "created_at": fancy_time(c["created_at"]),
+            "body": c["body"], "body_html": linkify_body(c["body"]),
+            "created_at": fancy_time(c["created_at"]),
             "can_delete": bool(user["id"] == c["user_id"] or
                                user["id"] == p["user_id"] or owner_on),
         })

@@ -78,12 +78,14 @@ last_seen: updated to now on every authenticated page view; online = within 5 mi
 
 Post card partial `partials/post_card.html`, context var `post` with keys:
   id, user_id, author_name, author_avatar, author_verified (bool — golden ★ beside name when true), kind, body, feeling, link_url,
-  video_url, media (full /uploads url or ""), embed_url (for video kind, "" if none),
+  video_url, media (full /uploads url or ""), embed_url (first available of:
+  video_url embed, link_url embed, first YouTube/Vimeo URL in body; "" if none),
   created_at (display string), likes (count), liked (bool), comments_count,
   can_delete (bool), is_page_post (bool), page_name ("" or name), page_id (0 or id),
   tagged_users [{id,name}], tagged_pages [{id,name}], hidden_from_count (int),
-  is_mine (bool), can_edit_audience (bool), body_html (body escaped with this
-  post's @tags rendered as profile/page links — render with |safe),
+  is_mine (bool), can_edit_audience (bool), body_html (body escaped, then
+  bare URLs linkified AND this post's @tags rendered as profile/page links —
+  render with |safe; comments carry body_html too, URLs only),
   audience_friends [{id,name,hidden}] (author's friends + current hide-from
   state; only populated on the author's own non-share posts, for the 👁 popup)
 
@@ -174,9 +176,14 @@ re-validates). There are NO tag checkbox pickers anymore; the only checkbox
 picker left is "🙈 Hide this post from…" (hide_from). On the author's own
 posts, a 👁 eyeball button opens an in-place popup listing their friends
 (checked = hidden from this post) that saves via POST /post/{id}/audience. Fields shown per kind via JS:
-text: body. photo: body + media(file). feeling: body + feeling(select of common
-feelings). clothes: body + media(file). link: body + link_url. video: body +
-video_url. audio: body + media(file .mp3). All POST to /posts (or /page/{id}/post
+text: body. photo: body + media(file, images). feeling: body + feeling(select of common
+feelings). clothes: body + media(file, images). video: body + media(file,
+mp4/mov/webm, max 200MB). audio: body + media(file, audio). There is NO link
+kind/box anymore: any http(s) URL pasted in the body renders as a clickable
+link, and a YouTube/Vimeo URL in the body auto-embeds under the post. The
+link_url/video_url form fields are still accepted server-side (back-compat;
+old kind='link'/'video' posts render as before, incl. their 🔗 line/embed).
+All POST to /posts (or /page/{id}/post
 when on a page, with hidden page context handled by the route itself).
 
 Login/signup pages: dark design, big HERE branding, red accents, email+password
@@ -198,7 +205,10 @@ Avatars: avatar_url() returns '' when the file is missing from disk, so every
 avatar <img> falls back to the letter placeholder — no broken-image icons.
 
 All POST forms include no CSRF (keep same pattern as postit). Validate: kinds
-in the allowed set; video_url must contain youtube/vimeo else reject with flash;
-link_url must start with http; file ext in allowed sets.
+in the allowed set; video_url (if sent) must contain youtube/vimeo else reject with flash;
+link_url (if sent) must start with http; file ext in allowed sets. Upload caps:
+25MB default; post video files (mp4/mov/webm) 200MB, streamed to disk in
+chunks by save_upload (never fully in RAM). Uploads are served via the
+/uploads StaticFiles mount, which supports HTTP Range (video seek/streaming).
 
 Health check route: GET /healthz -> {"ok": true}.
