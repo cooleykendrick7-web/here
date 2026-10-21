@@ -22,6 +22,8 @@ rebuild it fresh for HERE.
 - sessions(token PRIMARY KEY, user_id, created_at)
 - posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), privacy TEXT DEFAULT 'public' ('public'|'friends'|'onlyme'), pinned INTEGER DEFAULT 0, shared_post_id INTEGER NULL (points at original post for share rows), created_at)
 - hidden_posts(user_id, post_id, created_at) — UNIQUE(user_id, post_id); hides a post row from that user's feeds only
+- post_hidden_from(post_id, user_id, created_at) — UNIQUE(post_id, user_id); per-post custom audience: these users must NOT see the post (enforced everywhere via can_view_post; author + owner context exempt)
+- post_tags(id, post_id, user_id NULL, page_id NULL, created_at) — friends/pages tagged in a post; renders "— with …" / tagged page names; tagging never overrides privacy or the hide-from list
 - comments(id, post_id, user_id, body, created_at)
 - likes(post_id, user_id, kind TEXT DEFAULT 'like' ('like'|'love'|'laugh'|'wow'|'sad'|'angry'), created_at) — UNIQUE(post_id, user_id)
 - stories(id, user_id, media (relative upload path), caption DEFAULT '', created_at, expires_at) — 24h TTL, friends + self only
@@ -32,7 +34,7 @@ rebuild it fresh for HERE.
 - verification_requests(id, kind TEXT ('user'|'page'), target_id, requester_id, status TEXT 'pending'|'approved'|'declined' DEFAULT 'pending', created_at, reviewed_at TEXT NULL, note TEXT DEFAULT '')
 - page_members(page_id, user_id, created_at) — UNIQUE(page_id, user_id); owner auto-member
 - taps(id, tapper_id, tapped_id, created_at)
-- notifications(id, user_id, kind TEXT ('friend_request'|'tap'|'message'), text, link, is_read INTEGER DEFAULT 0, created_at)
+- notifications(id, user_id, kind TEXT ('friend_request'|'tap'|'message'|'share'|'tag'), text, link, is_read INTEGER DEFAULT 0, created_at)
 - moderation_flags(id, item_type TEXT ('post'|'comment'|'message'|'story'), item_id INTEGER, author_id, reasons TEXT (comma-joined), excerpt TEXT, status TEXT 'pending'|'dismissed'|'removed' DEFAULT 'pending', created_at)
 - owner_sessions(token PRIMARY KEY, created_at)
 
@@ -72,17 +74,20 @@ last_seen: updated to now on every authenticated page view; online = within 5 mi
 - `pending_count` — incoming friend requests (0 for guests)
 - `unread_count` — unread notifications (0 for guests)
 - `unread_msgs` — unread messages (0 for guests)
+- `page_bg` — full /uploads/ URL of the background to render site-wide, or '': the logged-in viewer's own profile background; profile pages override it with the profile owner's background; '' = default site look
 
 Post card partial `partials/post_card.html`, context var `post` with keys:
   id, user_id, author_name, author_avatar, author_verified (bool — golden ★ beside name when true), kind, body, feeling, link_url,
   video_url, media (full /uploads url or ""), embed_url (for video kind, "" if none),
   created_at (display string), likes (count), liked (bool), comments_count,
-  can_delete (bool), is_page_post (bool), page_name ("" or name), page_id (0 or id)
+  can_delete (bool), is_page_post (bool), page_name ("" or name), page_id (0 or id),
+  tagged_users [{id,name}], tagged_pages [{id,name}], hidden_from_count (int),
+  is_mine (bool), can_edit_audience (bool)
 
 Verification: users/pages carry is_verified (bool) and verification_status ('none'|'pending'|'approved'|'declined').
 Verified names show a golden five-point star ★ (color #FFD700, white/gold shine + light red glow) beside the name — on profiles, pages, post cards. Verification is owner-only; never auto-approved. Users apply via "⭐ Verify me" on their profile or settings; page owners apply via "⭐ Verify page" on their page.
 
-Profile backgrounds: every user can set a MySpace-style full-page background photo for their profile via Settings ("🖼️ Profile Background"; stored in users.background as 'backgrounds/<uuid>.<ext>', served from /uploads/). When set, the profile page body gets class has-profile-bg with the photo as a full-bleed background (cover, centered, scroll attachment for mobile) under a dark gradient scrim, and content cards render translucent white (rgba(255,255,255,.94)) so text never blends into the photo. Scoped to /user/{id} only; the rest of the site keeps the default background.
+Profile backgrounds: every user can set a MySpace-style full-page background photo for their profile via Settings ("🖼️ Profile Background"; stored in users.background as 'backgrounds/<uuid>.<ext>', served from /uploads/). The background is rendered full-bleed (cover, centered, scroll attachment for mobile) under a dark gradient scrim, and content cards render translucent frosted glass so text never blends into the photo. It FOLLOWS the logged-in user: their own background is the page background on every logged-in page (via the global `page_bg` context + base.html). Exception: on a profile page, the profile owner's background shows instead. No background set = the default site look, unchanged.
 
 ## Routes & templates
 
@@ -95,7 +100,7 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | POST | /login | fields: email, password | -> redirect /home |
 | GET | /logout | | -> redirect /login |
 | GET | /home | home.html | posts (post-card dicts, newest first: friends' posts + public posts), contacts (friends: id,name,avatar,online), stories_tray (self + friends' active stories: user_id,name,avatar,is_self,first_id,count,all_viewed) |
-| POST | /posts | fields: kind, privacy ('public'|'friends'|'onlyme'), body, feeling, link_url, video_url, media (file) | -> redirect /home |
+| POST | /posts | fields: kind, privacy ('public'|'friends'|'onlyme'), body, feeling, link_url, video_url, media (file), hide_from (friend ids, repeated), tag_users (friend ids, repeated), tag_pages (page ids, repeated) | -> redirect /home; tagged friends get a 'tag' notification |
 | GET | /post/{id} | post.html | post (with comments list of {id,user_id,author_name,author_avatar,body,created_at,can_delete}) |
 | POST | /post/{id}/comment | field: body | -> redirect /post/{id} |
 | POST | /post/{id}/like | | toggle 'like' (removes any existing reaction); -> JSON {ok, likes, liked} (share ids resolve to the original; privacy-gated) |
@@ -112,7 +117,9 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | GET | /hidden | hidden.html | posts (your hidden posts, with Unhide buttons) |
 | POST | /post/{id}/pin | | author only, personal posts; unpins others; -> redirect back |
 | POST | /post/{id}/unpin | | author only; -> redirect back |
-| GET | /user/{id} | profile.html | profile {id,name,bio,avatar,background (full /uploads/ URL or ''),created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count,is_verified,verification_status}, posts; when background set, body gets class has-profile-bg + dark scrim overlay (MySpace-style full-page background; cards turn translucent white so text never blends in) |
+| GET | /post/{id}/audience | audience.html | author (or owner session) only; friend checkboxes, current hide-from pre-checked; post_id, friends [{id,name,hidden}], hidden_count |
+| POST | /post/{id}/audience | field: hide_from (friend ids, repeated) | author (or owner session) only; replaces the post's hide-from list; -> redirect /post/{id} |
+| GET | /user/{id} | profile.html | profile {id,name,bio,avatar,background (full /uploads/ URL or ''),created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count,is_verified,verification_status}, posts, page_bg (= profile.background — the profile owner's background overrides the viewer's site-wide one) |
 | POST | /verify/user/request | | logged in; once per user (re-request after decline allowed); sets verification_status='pending' + inserts verification_requests(kind='user'); -> redirect /user/{id} with flash |
 | GET | /settings/profile | profile_edit.html | profile |
 | POST | /settings/profile | fields: name, bio, avatar (file), background (file: jpg,png,gif,webp, max 5MB -> uploads/backgrounds/), remove_background ('1' clears it) | replaces/deletes old background file; -> redirect /user/{id} |
@@ -136,7 +143,7 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | POST | /verify/page/{id}/request | | page owner only; sets pages.verification_status='pending' + inserts verification_requests(kind='page'); -> redirect /page/{id} with flash |
 | POST | /page/{id}/join | | -> redirect /page/{id} |
 | POST | /page/{id}/leave | | -> redirect /page/{id} |
-| POST | /page/{id}/post | fields: kind, body, feeling, link_url, video_url, media (file) | -> redirect /page/{id} |
+| POST | /page/{id}/post | fields: kind, body, feeling, link_url, video_url, media (file), hide_from, tag_users, tag_pages (same as /posts) | -> redirect /page/{id} |
 | GET | /page/{id}/edit | page_edit.html | page (owner only) |
 | POST | /page/{id}/edit | fields: name, description, cover (file) | (owner only) -> redirect /page/{id} |
 | GET | /owner/login | owner/login.html | error? |

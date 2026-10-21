@@ -226,6 +226,18 @@ def init_db():
     if "background" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN background TEXT DEFAULT ''")
     c.execute("UPDATE users SET background='' WHERE background IS NULL")
+    # --- hide-from-specific-people + post tags (safe on existing DBs) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS post_hidden_from (
+        post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, UNIQUE(post_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS post_tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL, user_id INTEGER, page_id INTEGER,
+        created_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_post_tags_post "
+              "ON post_tags(post_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hidden_from_post "
+              "ON post_hidden_from(post_id)")
     conn.commit()
     conn.close()
 
@@ -319,11 +331,16 @@ def render(request: Request, name, ctx=None):
             "SELECT COUNT(*) c FROM messages WHERE receiver_id=? AND is_read=0",
             (u["id"],)).fetchone()["c"]
         conn.close()
+        # The viewer's own profile background follows them around the whole
+        # logged-in site. Routes may override page_bg (profile pages show the
+        # profile owner's background instead).
+        ctx.setdefault("page_bg", avatar_url(u.get("background", "")))
     else:
         ctx["user"] = None
         ctx["pending_count"] = 0
         ctx["unread_count"] = 0
         ctx["unread_msgs"] = 0
+        ctx.setdefault("page_bg", "")
     ctx.setdefault("flash", request.query_params.get("flash", ""))
     return templates.TemplateResponse(request, name, ctx)
 
@@ -467,6 +484,60 @@ def pending_id_set(uid):
     return out
 
 
+def hidden_from_ids(post_id):
+    """User ids the author chose to hide this specific post from."""
+    conn = db()
+    rows = conn.execute("SELECT user_id FROM post_hidden_from WHERE post_id=?",
+                        (post_id,)).fetchall()
+    conn.close()
+    return {r["user_id"] for r in rows}
+
+
+def _form_ids(form, field):
+    """Parse a repeated checkbox form field into a set of ints."""
+    out = set()
+    try:
+        vals = form.getlist(field)
+    except Exception:
+        vals = []
+    if not vals:
+        single = form.get(field)
+        if single:
+            vals = [single]
+    for v in vals:
+        try:
+            out.add(int(v))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def taggable_pages(user_id):
+    """Pages the user owns or is a member of (id+name, name order)."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT DISTINCT pg.id, pg.name FROM pages pg "
+        "LEFT JOIN page_members pm ON pm.page_id=pg.id AND pm.user_id=? "
+        "WHERE pg.owner_id=? OR pm.user_id IS NOT NULL ORDER BY pg.name",
+        (user_id, user_id)).fetchall()
+    conn.close()
+    return [{"id": r["id"], "name": r["name"]} for r in rows]
+
+
+def composer_choices(user):
+    """(friends, pages) lists for the composer tag / hide-from pickers."""
+    fids = friend_id_set(user["id"])
+    conn = db()
+    friends = []
+    for fid in fids:
+        f = conn.execute("SELECT id,name FROM users WHERE id=?", (fid,)).fetchone()
+        if f:
+            friends.append({"id": f["id"], "name": f["name"]})
+    conn.close()
+    friends.sort(key=lambda x: x["name"].lower())
+    return friends, taggable_pages(user["id"])
+
+
 # ---------------- discovery: profile views, suggested people, trending ----------------
 def discover_people(uid, limit=10):
     """People you may know: non-friends ranked by profile views received in
@@ -531,14 +602,18 @@ def trending_topics(limit=10):
     return [{"label": w, "q": w, "count": c} for w, c in top]
 
 
-def can_view_post(viewer, p):
+def can_view_post(viewer, p, owner_on=False):
     """Privacy gate. viewer: user dict or None. p: post row dict.
     Page posts follow page visibility (unchanged behavior); personal posts
-    respect their privacy setting."""
+    respect their privacy setting. On top of all of that, a viewer on the
+    post's hide-from list never sees it (the author always does, and the
+    site owner does in the owner context). Tagging never grants access."""
     if not viewer:
         return False
     if viewer["id"] == p["user_id"]:
         return True
+    if not owner_on and viewer["id"] in hidden_from_ids(p["id"]):
+        return False
     if p.get("page_id"):
         return True
     priv = (p.get("privacy") or "public")
@@ -566,7 +641,7 @@ def post_card(p, viewer, owner_on=False):
             conn.close()
             return None
         p = dict(orig)
-    if viewer and not can_view_post(viewer, p):
+    if viewer and not can_view_post(viewer, p, owner_on):
         conn.close()
         return None
     a = conn.execute("SELECT id,name,avatar,is_verified FROM users WHERE id=?",
@@ -600,6 +675,21 @@ def post_card(p, viewer, owner_on=False):
         hidden_by_viewer = bool(conn.execute(
             "SELECT 1 FROM hidden_posts WHERE user_id=? AND post_id=?",
             (viewer["id"], p["id"])).fetchone())
+    tagged_users, tagged_pages = [], []
+    for t in conn.execute(
+            "SELECT t.user_id, t.page_id, u.name AS uname, pg.name AS pname "
+            "FROM post_tags t LEFT JOIN users u ON u.id=t.user_id "
+            "LEFT JOIN pages pg ON pg.id=t.page_id "
+            "WHERE t.post_id=? ORDER BY t.id", (p["id"],)).fetchall():
+        if t["user_id"]:
+            tagged_users.append({"id": t["user_id"],
+                                 "name": t["uname"] or "Deleted user"})
+        elif t["page_id"]:
+            tagged_pages.append({"id": t["page_id"],
+                                 "name": t["pname"] or "Deleted page"})
+    hidden_from_count = conn.execute(
+        "SELECT COUNT(*) c FROM post_hidden_from WHERE post_id=?",
+        (p["id"],)).fetchone()["c"]
     page_name, page_id, is_page = "", 0, False
     if p.get("page_id"):
         pg = conn.execute("SELECT id,name FROM pages WHERE id=?",
@@ -650,6 +740,11 @@ def post_card(p, viewer, owner_on=False):
         "can_delete": bool(not share and viewer and
                             (viewer["id"] == p["user_id"] or owner_on)),
         "is_page_post": is_page, "page_name": page_name, "page_id": page_id,
+        "tagged_users": tagged_users, "tagged_pages": tagged_pages,
+        "hidden_from_count": hidden_from_count,
+        "is_mine": bool(viewer and viewer["id"] == p["user_id"] and not share),
+        "can_edit_audience": bool(viewer and viewer["id"] == p["user_id"]
+                                  and not share),
     }
 
 
@@ -818,11 +913,13 @@ async def home(request: Request):
                                  "online": is_online(f["last_seen"])})
         conn.close()
         contacts.sort(key=lambda c: (not c["online"], c["name"].lower()))
+    cfriends, cpages = composer_choices(user)
     return render(request, "home.html",
                   {"posts": posts, "contacts": contacts,
                    "stories_tray": stories_tray(user["id"]),
                    "discover_people": discover_people(user["id"], 3),
-                   "trends": trending_topics(5)})
+                   "trends": trending_topics(5),
+                   "composer_friends": cfriends, "composer_pages": cpages})
 
 
 def create_post_from_form(user, form, page_id=None):
@@ -871,6 +968,33 @@ def create_post_from_form(user, form, page_id=None):
     pid = cur.lastrowid
     conn.commit()
     conn.close()
+    # --- hide-from list + tags: validated server-side. Only friends can be
+    # hidden from or tagged; only pages the author owns or belongs to can be
+    # tagged. Invalid ids are silently dropped. ---
+    fids = friend_id_set(user["id"])
+    hide_ids = _form_ids(form, "hide_from") & fids
+    tag_uids = _form_ids(form, "tag_users") & fids
+    valid_pids = {pg["id"] for pg in taggable_pages(user["id"])}
+    tag_pids = _form_ids(form, "tag_pages") & valid_pids
+    if hide_ids or tag_uids or tag_pids:
+        conn = db()
+        for hid in hide_ids:
+            conn.execute(
+                "INSERT OR IGNORE INTO post_hidden_from(post_id, user_id, "
+                "created_at) VALUES(?,?,?)", (pid, hid, now_iso()))
+        for tuid in sorted(tag_uids):
+            conn.execute(
+                "INSERT INTO post_tags(post_id, user_id, created_at) "
+                "VALUES(?,?,?)", (pid, tuid, now_iso()))
+        for tpid in sorted(tag_pids):
+            conn.execute(
+                "INSERT INTO post_tags(post_id, page_id, created_at) "
+                "VALUES(?,?,?)", (pid, tpid, now_iso()))
+        conn.commit()
+        conn.close()
+    for tuid in sorted(tag_uids):
+        notify(tuid, "tag", f"{user['name']} tagged you in a post.",
+               f"/post/{pid}")
     flag_item("post", pid, user["id"], user["name"],
               " ".join(x for x in (body, feeling, link_url, video_url) if x))
     return pid, None
@@ -904,7 +1028,7 @@ async def view_post(request: Request, pid: int):
         orig_id = p["shared_post_id"]
         conn.close()
         return redir(f"/post/{orig_id}")
-    if not can_view_post(user, dict(p)):
+    if not can_view_post(user, dict(p), is_owner(request)):
         conn.close()
         return render(request, "post_gone.html", {})
     crows = conn.execute(
@@ -942,7 +1066,7 @@ async def add_comment(request: Request, pid: int):
     if p.get("shared_post_id"):
         # Comments land on the original post, not the share pointer.
         return redir(f"/post/{p['shared_post_id']}")
-    if not can_view_post(user, p):
+    if not can_view_post(user, p, is_owner(request)):
         return render(request, "post_gone.html", {})
     form = await request.form()
     body = (form.get("body") or "").strip()
@@ -977,7 +1101,7 @@ async def toggle_like(request: Request, pid: int):
         if not p:
             conn.close()
             return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
-    if not can_view_post(user, p):
+    if not can_view_post(user, p, is_owner(request)):
         conn.close()
         return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
     existing = conn.execute("SELECT 1 FROM likes WHERE post_id=? AND user_id=?",
@@ -1020,7 +1144,7 @@ async def react_post(request: Request, pid: int):
         if not p:
             conn.close()
             return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
-    if not can_view_post(user, p):
+    if not can_view_post(user, p, is_owner(request)):
         conn.close()
         return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
     row = conn.execute("SELECT kind FROM likes WHERE post_id=? AND user_id=?",
@@ -1205,6 +1329,8 @@ def _delete_post(pid):
     conn = db()
     conn.execute("DELETE FROM likes WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM comments WHERE post_id=?", (pid,))
+    conn.execute("DELETE FROM post_hidden_from WHERE post_id=?", (pid,))
+    conn.execute("DELETE FROM post_tags WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM moderation_flags WHERE item_type='post' AND item_id=?",
                  (pid,))
     # Shares pointing at this post die with it.
@@ -1214,6 +1340,8 @@ def _delete_post(pid):
         conn.execute("DELETE FROM likes WHERE post_id=?", (sid,))
         conn.execute("DELETE FROM comments WHERE post_id=?", (sid,))
         conn.execute("DELETE FROM hidden_posts WHERE post_id=?", (sid,))
+        conn.execute("DELETE FROM post_hidden_from WHERE post_id=?", (sid,))
+        conn.execute("DELETE FROM post_tags WHERE post_id=?", (sid,))
     conn.execute("DELETE FROM posts WHERE shared_post_id=?", (pid,))
     conn.execute("DELETE FROM hidden_posts WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM posts WHERE id=?", (pid,))
@@ -1257,7 +1385,7 @@ async def share_post(request: Request, pid: int):
     if err:
         return err
     root = _root_post(pid)
-    if not root or not can_view_post(user, root):
+    if not root or not can_view_post(user, root, is_owner(request)):
         return back(request, "/home")
     if (root.get("privacy") or "public") != "public":
         return back(request, "/home")
@@ -1372,6 +1500,60 @@ async def unpin_post(request: Request, pid: int):
     return back(request)
 
 
+# ---------------- per-post audience (hide from specific people) ----------------
+def _own_post_or_none(user, request, pid):
+    """The post row when the caller may edit its audience (author or owner
+    session), else None. Share rows have no audience of their own."""
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    if not p or p["shared_post_id"]:
+        return None
+    if p["user_id"] != user["id"] and not is_owner(request):
+        return None
+    return dict(p)
+
+
+@app.get("/post/{pid}/audience", response_class=HTMLResponse)
+async def audience_page(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    p = _own_post_or_none(user, request, pid)
+    if not p:
+        return redir("/home", "Post not found.")
+    hidden = hidden_from_ids(pid)
+    author = get_user(p["user_id"]) or user
+    friends, _ = composer_choices(author)
+    for f in friends:
+        f["hidden"] = f["id"] in hidden
+    return render(request, "audience.html",
+                  {"post_id": pid, "friends": friends,
+                   "hidden_count": len(hidden)})
+
+
+@app.post("/post/{pid}/audience")
+async def audience_save(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    p = _own_post_or_none(user, request, pid)
+    if not p:
+        return redir("/home", "Post not found.")
+    form = await request.form()
+    # Only the author's friends can be on the hide-from list.
+    hide_ids = _form_ids(form, "hide_from") & friend_id_set(p["user_id"])
+    conn = db()
+    conn.execute("DELETE FROM post_hidden_from WHERE post_id=?", (pid,))
+    for hid in hide_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO post_hidden_from(post_id, user_id, "
+            "created_at) VALUES(?,?,?)", (pid, hid, now_iso()))
+    conn.commit()
+    conn.close()
+    return redir(f"/post/{pid}", "Audience updated.")
+
+
 # ---------------- profile / settings ----------------
 @app.get("/user/{uid}", response_class=HTMLResponse)
 async def profile(request: Request, uid: int):
@@ -1424,7 +1606,11 @@ async def profile(request: Request, uid: int):
         card = post_card(d, user, owner_on)
         if card:
             posts.append(card)
-    return render(request, "profile.html", {"profile": profile_ctx, "posts": posts})
+    # On a profile page the PROFILE OWNER's background wins over the
+    # viewer's own (render() only defaults page_bg when unset).
+    return render(request, "profile.html",
+                  {"profile": profile_ctx, "posts": posts,
+                   "page_bg": profile_ctx["background"]})
 
 
 @app.get("/settings/profile", response_class=HTMLResponse)
@@ -1921,8 +2107,10 @@ async def page_view(request: Request, pid: int):
         card = post_card(dict(r), user, owner_on)
         if card:
             posts.append(card)
+    cfriends, cpages = composer_choices(user)
     return render(request, "page.html",
-                  {"page": page_ctx(dict(pg), user), "posts": posts})
+                  {"page": page_ctx(dict(pg), user), "posts": posts,
+                   "composer_friends": cfriends, "composer_pages": cpages})
 
 
 @app.post("/page/{pid}/join")
@@ -2243,6 +2431,8 @@ async def owner_user_remove(request: Request, uid: int):
     conn = db()
     conn.execute("DELETE FROM comments WHERE user_id=?", (uid,))
     conn.execute("DELETE FROM likes WHERE user_id=?", (uid,))
+    conn.execute("DELETE FROM post_hidden_from WHERE user_id=?", (uid,))
+    conn.execute("DELETE FROM post_tags WHERE user_id=?", (uid,))
     conn.execute("DELETE FROM messages WHERE sender_id=? OR receiver_id=?", (uid, uid))
     conn.execute("DELETE FROM friendships WHERE user_id=? OR friend_id=?", (uid, uid))
     conn.execute("DELETE FROM taps WHERE tapper_id=? OR tapped_id=?", (uid, uid))
