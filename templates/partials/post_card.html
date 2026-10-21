@@ -17,9 +17,14 @@
         <span class="kind-tag" title="{{ priv_titles.get(post.privacy, 'Public')|e }}">{{ priv_icons.get(post.privacy, '🌍')|e }}</span>
         {% if post.pinned %}<span class="kind-tag">📌 Pinned</span>{% endif %}
       </div>
-      <div class="post-meta">{{ post.created_at|e }}{% if post.is_page_post %} · <span class="page-tag">in <a href="/page/{{ post.page_id }}">{{ post.page_name|e }}</a></span>{% endif %}</div>
+      <div class="post-meta">{{ post.created_at|e }}{% if post.is_page_post %} · <span class="page-tag">in <a href="/page/{{ post.page_id }}">{{ post.page_name|e }}</a></span>{% endif %}{% if post.tagged_pages %} · <span class="page-tag">tagged {% for tp in post.tagged_pages %}<a href="/page/{{ tp.id }}">{{ tp.name|e }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}</div>
+      {% if post.is_mine and post.hidden_from_count %}<div class="post-meta" style="color:var(--red-dark);font-weight:600">🙈 Hidden from {{ post.hidden_from_count }} {{ 'person' if post.hidden_from_count == 1 else 'people' }}</div>{% endif %}
     </div>
   </div>
+
+  {% if post.tagged_users %}
+  <div class="with-line">— with {% for t in post.tagged_users %}<a href="/user/{{ t.id }}">{{ t.name|e }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</div>
+  {% endif %}
 
   {% if post.feeling %}
   <div class="feeling-line">— feeling <strong>{{ post.feeling|e }}</strong></div>
@@ -68,6 +73,9 @@
       </div>
     </div>
     <a class="action-link" href="/post/{{ post.id }}">💬 Comment</a>
+    {% if post.can_edit_audience %}
+    <a class="action-link" href="/post/{{ post.id }}/audience">👁 Audience</a>
+    {% endif %}
     {% if post.can_share %}
     <form class="inline-form" action="/post/{{ post.id }}/share" method="post">
       <button type="submit" class="action-link" style="background:none;border:none;cursor:pointer;font-size:14px">🔁 Share</button>
