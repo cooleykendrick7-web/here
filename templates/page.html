@@ -78,6 +78,29 @@
       <input type="url" name="video_url" id="video-url" placeholder="https://www.youtube.com/watch?v=...">
     </div>
 
+    {% if composer_friends %}
+    <label class="fld">🏷 Tag friends</label>
+    <div class="picker-list">
+      {% for f in composer_friends %}
+      <label class="picker-chip"><input type="checkbox" name="tag_users" value="{{ f.id }}"> {{ f.name|e }}</label>
+      {% endfor %}
+    </div>
+    <label class="fld">🙈 Hide this post from…</label>
+    <div class="picker-list">
+      {% for f in composer_friends %}
+      <label class="picker-chip"><input type="checkbox" name="hide_from" value="{{ f.id }}"> {{ f.name|e }}</label>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if composer_pages %}
+    <label class="fld">📄 Tag a page</label>
+    <div class="picker-list">
+      {% for pg in composer_pages %}
+      <label class="picker-chip"><input type="checkbox" name="tag_pages" value="{{ pg.id }}"> {{ pg.name|e }}</label>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="post-row">
       <button type="submit" class="btn">Post to Page</button>
     </div>

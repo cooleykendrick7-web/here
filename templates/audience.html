@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Edit audience — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">👁 Edit audience</div>
+  <p style="color:var(--muted);font-size:14px;margin-bottom:6px">
+    Pick the friends who should <strong>not</strong> see this post. Everyone else
+    who can normally see it still can.{% if hidden_count %} Currently hidden from
+    {{ hidden_count }} {{ 'person' if hidden_count == 1 else 'people' }}.{% endif %}
+  </p>
+  <form action="/post/{{ post_id }}/audience" method="post">
+    {% if friends %}
+    <div class="picker-list">
+      {% for f in friends %}
+      <label class="picker-chip"><input type="checkbox" name="hide_from" value="{{ f.id }}"{% if f.hidden %} checked{% endif %}> {{ f.name|e }}</label>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:var(--muted);font-size:14px">You have no friends to hide this post from yet.</p>
+    {% endif %}
+    <div style="margin-top:16px;display:flex;gap:8px;align-items:center">
+      <button type="submit" class="btn">Save audience</button>
+      <a class="btn-ghost" href="/post/{{ post_id }}">Back to post</a>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

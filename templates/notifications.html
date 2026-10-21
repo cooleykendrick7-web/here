@@ -12,6 +12,7 @@
         {% elif n.kind == 'tap' %}🖐️
         {% elif n.kind == 'message' %}💬
         {% elif n.kind == 'share' %}🔁
+        {% elif n.kind == 'tag' %}🏷
         {% else %}🔔{% endif %}
         {{ n.text|e }}
       </div>

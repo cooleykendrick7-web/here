@@ -122,6 +122,14 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
   width:100%;border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:15px;margin-top:4px}
 .composer input[type=file]{margin-top:6px;font-size:14px}
 .composer .post-row{margin-top:12px;text-align:right}
+/* ===== tag / hide-from pickers ===== */
+.picker-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.picker-chip{display:inline-flex;align-items:center;gap:5px;background:#f5f6f7;
+  border:1px solid var(--border);border-radius:16px;padding:5px 11px;font-size:13px;
+  font-weight:600;cursor:pointer;color:#333}
+.picker-chip input{accent-color:var(--red)}
+.with-line{font-size:13px;color:var(--muted);margin-bottom:8px}
+.with-line a{color:var(--red);font-weight:600}
 
 /* ===== post card ===== */
 .post-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -257,8 +265,13 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
 }
 </style>
 {% block head_extra %}{% endblock %}
+{% if page_bg %}
+<style>
+body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,14,.58)),url('{{ page_bg }}')}
+</style>
+{% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %}">
+<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}">
 
 <header class="topbar">
   <a class="logo" href="/home">HERE</a>
