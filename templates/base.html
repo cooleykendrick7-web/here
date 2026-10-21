@@ -130,6 +130,26 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 .picker-chip input{accent-color:var(--red)}
 .with-line{font-size:13px;color:var(--muted);margin-bottom:8px}
 .with-line a{color:var(--red);font-weight:600}
+/* ===== @ tag autocomplete (composer) ===== */
+.composer-body-wrap{position:relative}
+.tag-suggest{position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid var(--border);
+  border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.2);z-index:70;max-height:280px;overflow-y:auto;margin-top:4px}
+.tag-suggest[hidden]{display:none}
+.tag-item{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;min-height:48px}
+.tag-item:hover,.tag-item.sel{background:var(--red-soft)}
+.tag-item-name{font-weight:600;font-size:15px}
+.tag-hint{font-size:12px;color:var(--muted);margin-top:4px}
+.tag-link{color:var(--red);font-weight:600}
+/* ===== eyeball audience popup (on your own posts) ===== */
+.aud-wrap{position:relative;display:inline-block}
+.aud-popup{position:absolute;bottom:135%;left:0;width:250px;background:#fff;border:1px solid var(--border);
+  border-radius:8px;padding:12px;box-shadow:0 4px 14px rgba(0,0,0,.18);z-index:60;text-align:left}
+.aud-popup[hidden]{display:none}
+.aud-title{font-weight:700;font-size:14px;margin-bottom:4px;color:#1c1e21}
+.aud-hint{font-size:12px;color:var(--muted);margin-bottom:6px}
+.aud-list{max-height:200px;overflow-y:auto}
+.aud-row{display:flex;align-items:center;gap:8px;padding:7px 4px;font-size:14px;font-weight:600;cursor:pointer;color:#1c1e21}
+.aud-row input{accent-color:var(--red);width:18px;height:18px;flex-shrink:0}
 
 /* ===== post card ===== */
 .post-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -423,7 +443,108 @@ document.addEventListener('click', function(ev){
     var pk = document.getElementById('react-picker-' + t.getAttribute('data-pid'));
     if (pk) pk.hidden = !pk.hidden;
   }
+  var a = ev.target.closest ? ev.target.closest('.aud-toggle') : null;
+  if (a){
+    var ap = document.getElementById('aud-popup-' + a.getAttribute('data-pid'));
+    if (ap) ap.hidden = !ap.hidden;
+  }
 });
+</script>
+<script>
+/* ===== Facebook-style @ tagging in the composer =====
+   Type @ in the post box: a dropdown of your friends + your pages appears,
+   filtered as you type. Picking one inserts "@Name" and records the tag in
+   the hidden tags_json field; tags whose @Name you delete are pruned before
+   the form submits, and the server re-validates everything anyway. */
+(function(){
+  var ta = document.getElementById('composer-body');
+  if (!ta) return;
+  var form = ta.closest('form');
+  var hidden = document.getElementById('tags-json');
+  var drop = document.getElementById('tag-suggest');
+  if (!form || !hidden || !drop) return;
+  var picked = [], items = [], selIdx = -1, timer = null, fetchSeq = 0;
+  function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function syncHidden(){
+    var body = ta.value;
+    picked = picked.filter(function(t){ return body.indexOf('@' + t.name) !== -1; });
+    hidden.value = JSON.stringify(picked);
+  }
+  function closeDrop(){ drop.hidden = true; items = []; selIdx = -1; }
+  function currentWord(){
+    var pos = ta.selectionStart;
+    if (pos == null) return null;
+    var val = ta.value, start = pos;
+    while (start > 0 && !/[\s@]/.test(val[start - 1])) start--;
+    if (start === 0 || val[start - 1] !== '@') return null;
+    var at = start - 1;
+    if (at > 0 && !/\s/.test(val[at - 1])) return null; /* e.g. an email */
+    return {at: at, query: val.slice(start, pos)};
+  }
+  function renderDrop(){
+    if (!items.length){ drop.hidden = true; return; }
+    drop.innerHTML = items.map(function(it, i){
+      var av = it.avatar
+        ? '<img class="avatar av-32" src="' + esc(it.avatar) + '" alt="">'
+        : '<span class="av-ph av-32">' + esc(it.name.charAt(0).toUpperCase()) + '</span>';
+      return '<div class="tag-item' + (i === selIdx ? ' sel' : '') + '" data-idx="' + i + '">'
+        + av + '<span class="tag-item-name">' + esc(it.name) + '</span>'
+        + (it.kind === 'page' ? '<span class="kind-tag">📄 Page</span>' : '') + '</div>';
+    }).join('');
+    drop.hidden = false;
+  }
+  function pick(it){
+    var w = currentWord();
+    if (!w) return;
+    var insert = '@' + it.name + ' ';
+    var caret = ta.selectionStart;
+    ta.value = ta.value.slice(0, w.at) + insert + ta.value.slice(caret);
+    var newPos = w.at + insert.length;
+    ta.focus();
+    try { ta.setSelectionRange(newPos, newPos); } catch (e) {}
+    if (!picked.some(function(t){ return t.kind === it.kind && t.id === it.id; }))
+      picked.push({kind: it.kind, id: it.id, name: it.name});
+    closeDrop();
+    syncHidden();
+  }
+  ta.addEventListener('input', function(){
+    syncHidden();
+    if (!currentWord()){ closeDrop(); return; }
+    clearTimeout(timer);
+    timer = setTimeout(function(){
+      var w = currentWord();
+      if (!w){ closeDrop(); return; }
+      var seq = ++fetchSeq;
+      fetch('/api/tag-suggest?q=' + encodeURIComponent(w.query),
+            {credentials: 'same-origin'})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (seq !== fetchSeq || !currentWord()) return;
+          items = (d && d.results) || [];
+          selIdx = items.length ? 0 : -1;
+          renderDrop();
+        })
+        .catch(function(){});
+    }, 150);
+  });
+  ta.addEventListener('keydown', function(ev){
+    if (drop.hidden || !items.length) return;
+    if (ev.key === 'Escape'){ closeDrop(); }
+    else if (ev.key === 'ArrowDown'){ ev.preventDefault();
+      selIdx = Math.min(selIdx + 1, items.length - 1); renderDrop(); }
+    else if (ev.key === 'ArrowUp'){ ev.preventDefault();
+      selIdx = Math.max(selIdx - 1, 0); renderDrop(); }
+    else if (ev.key === 'Enter' && selIdx >= 0 && items[selIdx]){
+      ev.preventDefault(); pick(items[selIdx]); }
+  });
+  drop.addEventListener('mousedown', function(ev){
+    var el = ev.target.closest ? ev.target.closest('.tag-item') : null;
+    if (el){ ev.preventDefault(); pick(items[parseInt(el.getAttribute('data-idx'), 10)]); }
+  });
+  ta.addEventListener('blur', function(){ setTimeout(closeDrop, 200); });
+  form.addEventListener('submit', syncHidden);
+})();
 </script>
 {% block scripts %}{% endblock %}
 </body>

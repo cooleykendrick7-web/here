@@ -49,7 +49,12 @@
       <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
       <button type="button" class="kind-tab" data-kind="audio">🎵 Music</button>
     </div>
-    <textarea name="body" id="composer-body" placeholder="Post to {{ page.name|e }}…"></textarea>
+    <div class="composer-body-wrap">
+      <textarea name="body" id="composer-body" placeholder="Post to {{ page.name|e }}…"></textarea>
+      <div class="tag-suggest" id="tag-suggest" hidden></div>
+    </div>
+    <div class="tag-hint">Tip: type @ to tag a friend or a page.</div>
+    <input type="hidden" name="tags_json" id="tags-json" value="">
 
     <div id="fld-feeling" style="display:none">
       <label class="fld" for="feeling-select">Feeling</label>
@@ -79,24 +84,10 @@
     </div>
 
     {% if composer_friends %}
-    <label class="fld">🏷 Tag friends</label>
-    <div class="picker-list">
-      {% for f in composer_friends %}
-      <label class="picker-chip"><input type="checkbox" name="tag_users" value="{{ f.id }}"> {{ f.name|e }}</label>
-      {% endfor %}
-    </div>
     <label class="fld">🙈 Hide this post from…</label>
     <div class="picker-list">
       {% for f in composer_friends %}
       <label class="picker-chip"><input type="checkbox" name="hide_from" value="{{ f.id }}"> {{ f.name|e }}</label>
-      {% endfor %}
-    </div>
-    {% endif %}
-    {% if composer_pages %}
-    <label class="fld">📄 Tag a page</label>
-    <div class="picker-list">
-      {% for pg in composer_pages %}
-      <label class="picker-chip"><input type="checkbox" name="tag_pages" value="{{ pg.id }}"> {{ pg.name|e }}</label>
       {% endfor %}
     </div>
     {% endif %}
