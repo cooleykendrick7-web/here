@@ -117,15 +117,22 @@ body.has-profile-bg .contact-item{color:#f2f2f2}
 body.has-profile-bg .contact-item:hover{background:rgba(255,255,255,.14)}
 body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 
-/* ===== Your Spot: per-profile name + theme (profile pages only) =====
-   The wrapper on /user/{id} pages carries the PROFILE OWNER's choices as
-   CSS vars (--spot-text / --spot-card-rgb / --spot-card-alpha, emitted
-   inline only for values actually set) plus .spot-has-text/.spot-has-card
-   flags. Rules are scoped to .spot-scope so a spot NEVER leaks into the
-   home feed or other pages. Specificity beats the body.has-profile-bg
-   glass rules above, so a chosen bubble color/tint replaces the default
-   glass on that profile while keeping the same blur. With nothing set,
-   no vars/flags are emitted and the profile renders exactly as default. */
+/* ===== Your Spot: per-profile name + theme =====
+   Two layers share the same CSS vars (--spot-text / --spot-card-rgb /
+   --spot-card-alpha):
+   1) Profile pages: the .spot-scope wrapper on /user/{id} carries the
+      PROFILE OWNER's choices (all three vars always emitted inline —
+      owner's values or the theme defaults) plus .spot-has-text /
+      .spot-has-card flags. The rules below are scoped to .spot-scope,
+      and profile routes blank the viewer vars, so a profile is ruled
+      entirely by its owner. Specificity beats the body.has-profile-bg
+      glass rules above, so a chosen bubble color/tint replaces the
+      default glass on that profile while keeping the same blur.
+   2) Everywhere else: the logged-in VIEWER's own spot follows them —
+      render() puts their vars + viewer-spot-text / viewer-spot-card
+      classes on <body> and the body-level rules mirror the profile
+      treatment exactly. With nothing set, no vars/classes are emitted
+      and pages render exactly as the default theme. */
 .spot-title{font-size:32px;font-weight:900;line-height:1.15;word-wrap:break-word}
 .spot-owner-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:3px}
 .spot-real-name{font-size:17px;font-weight:700}
@@ -139,6 +146,16 @@ body .spot-scope.spot-has-text .card{color:var(--spot-text)}
 body .spot-scope.spot-has-text .card .post-meta,
 body .spot-scope.spot-has-text .card .comment .cmeta,
 body .spot-scope.spot-has-text .card .with-line{color:var(--spot-text);opacity:.72}
+body.viewer-spot-card .card{
+  background:rgba(var(--spot-card-rgb,232,232,238),var(--spot-card-alpha,.55));
+  backdrop-filter:blur(10px) saturate(1.25);-webkit-backdrop-filter:blur(10px) saturate(1.25)}
+body.viewer-spot-card .comment .cbub{
+  background:rgba(var(--spot-card-rgb,232,232,238),var(--spot-card-alpha,.55));
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+body.viewer-spot-text .card{color:var(--spot-text)}
+body.viewer-spot-text .card .post-meta,
+body.viewer-spot-text .card .comment .cmeta,
+body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 
 /* ===== Your Spot settings card ===== */
 .spot-swatches{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
@@ -495,7 +512,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 </style>
 {% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}">
+<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}"{% if viewer_spot_style %} style="{{ viewer_spot_style }}"{% endif %}>
 
 <header class="topbar">
   <a class="logo" href="/home">HERE</a>
