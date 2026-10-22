@@ -311,8 +311,10 @@ check("tray ring shows the viewed (gray) state",
 r = B.get(f"/story/{oldest_id}")
 check("viewer reopens an all-viewed story (200)",
       r.status_code == 200 and 'id="story-viewer"' in r.text)
-check("viewer offers Watch again + clickable segments",
-      "Watch again" in r.text and 'id="sv-again"' in r.text
+check("viewer has clickable segments and NO end card / Watch again "
+      "(removed by owner order — running out of stories just closes)",
+      "Watch again" not in r.text and "caught up" not in r.text.lower()
+      and 'id="sv-end"' not in r.text and 'id="sv-again"' not in r.text
       and "Jump to this story" in r.text)
 check("viewer start target is the group's FIRST story even though seen",
       oldest_id == min(all_ids) and gA2["stories"][0]["seen"] is True)
