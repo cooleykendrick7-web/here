@@ -3,6 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0a0a0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HERE">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
 <title>HERE — Log In</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
@@ -23,6 +31,21 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 .owner-h{position:fixed;bottom:10px;left:0;right:0;text-align:center}
 .owner-h a{color:#ffd400;font-size:12px;text-decoration:none;opacity:.85}
 .owner-h a:hover{opacity:1}
+.app-card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:22px 28px;width:100%;max-width:400px;margin-top:20px;margin-bottom:30px;text-align:center}
+.app-card h3{font-size:18px;margin-bottom:6px}
+.app-card p{color:#9a9a9a;font-size:14px;margin-bottom:16px}
+.app-btn{display:block;width:100%;border-radius:8px;padding:12px;font-size:15px;font-weight:800;cursor:pointer;margin-bottom:10px;text-decoration:none;border:none}
+.app-btn.android{background:#d41f2e;color:#fff}
+.app-btn.android:hover{background:#a8151f}
+.app-btn.iphone{background:#1f1f1f;color:#f0f0f0;border:1px solid #333}
+.app-btn.iphone:hover{border-color:#d41f2e}
+.app-rec{display:none;font-size:11px;font-weight:700;color:#ffd400;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.ios-steps{display:none;text-align:left;background:#1f1f1f;border:1px solid #333;border-radius:8px;padding:14px 16px;margin-top:4px}
+.ios-steps.open{display:block}
+.ios-steps ol{margin-left:18px;font-size:14px;color:#ddd}
+.ios-steps li{margin-bottom:8px}
+.ios-steps li:last-child{margin-bottom:0}
+.ios-note{font-size:12px;color:#9a9a9a;margin-top:10px}
 </style>
 </head>
 <body>
@@ -44,6 +67,40 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
   </form>
   <div class="switch">New to HERE? <a href="/signup">Create an account</a></div>
 </div>
+<div class="app-card" id="app-card">
+  <h3>📱 Get the HERE app</h3>
+  <p>Same HERE you know — right on your home screen, fullscreen, one tap away.</p>
+  <div class="app-rec" id="rec-android">Recommended for your phone</div>
+  <a class="app-btn android" href="/download/android" download>🤖 Download for Android</a>
+  <div class="app-rec" id="rec-iphone">Recommended for your phone</div>
+  <button type="button" class="app-btn iphone" id="ios-btn">🍎 Add to iPhone Home Screen</button>
+  <div class="ios-steps" id="ios-steps">
+    <ol>
+      <li>Tap the <strong>Share</strong> button at the bottom of Safari — the square with an arrow pointing up.</li>
+      <li>Scroll down and tap <strong>“Add to Home Screen”</strong>.</li>
+      <li>Tap <strong>“Add”</strong> — HERE lands on your home screen and opens like a real app.</li>
+    </ol>
+    <div class="ios-note">Apple doesn't let websites hand out iPhone app files, so this is how iPhone installs HERE. Same app, same everything.</div>
+  </div>
+</div>
 <div class="owner-h"><a href="/owner/login" title="">H</a></div>
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("/sw.js").catch(function () {});
+  });
+}
+(function () {
+  // Already running as the installed app? No need to pitch the download.
+  var standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  if (standalone) { document.getElementById("app-card").style.display = "none"; return; }
+  var ua = navigator.userAgent || "";
+  if (/Android/i.test(ua)) document.getElementById("rec-android").style.display = "block";
+  if (/iPhone|iPad|iPod/i.test(ua)) document.getElementById("rec-iphone").style.display = "block";
+  document.getElementById("ios-btn").addEventListener("click", function () {
+    document.getElementById("ios-steps").classList.toggle("open");
+  });
+})();
+</script>
 </body>
 </html>
