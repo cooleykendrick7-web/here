@@ -951,6 +951,16 @@ async def download_android():
     )
 
 
+@app.get("/app", response_class=HTMLResponse)
+async def app_page(request: Request):
+    # The "Get the HERE app" card for people who are already logged in —
+    # /login bounces them to /home, so they need their own way to reach it.
+    user, err = require_login(request)
+    if err:
+        return err
+    return render(request, "app.html")
+
+
 # ---------------- root / auth ----------------
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
