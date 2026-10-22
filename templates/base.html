@@ -117,6 +117,43 @@ body.has-profile-bg .contact-item{color:#f2f2f2}
 body.has-profile-bg .contact-item:hover{background:rgba(255,255,255,.14)}
 body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 
+/* ===== Your Spot: per-profile name + theme (profile pages only) =====
+   The wrapper on /user/{id} pages carries the PROFILE OWNER's choices as
+   CSS vars (--spot-text / --spot-card-rgb / --spot-card-alpha, emitted
+   inline only for values actually set) plus .spot-has-text/.spot-has-card
+   flags. Rules are scoped to .spot-scope so a spot NEVER leaks into the
+   home feed or other pages. Specificity beats the body.has-profile-bg
+   glass rules above, so a chosen bubble color/tint replaces the default
+   glass on that profile while keeping the same blur. With nothing set,
+   no vars/flags are emitted and the profile renders exactly as default. */
+.spot-title{font-size:32px;font-weight:900;line-height:1.15;word-wrap:break-word}
+.spot-owner-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:3px}
+.spot-real-name{font-size:17px;font-weight:700}
+body .spot-scope.spot-has-card .card{
+  background:rgba(var(--spot-card-rgb,232,232,238),var(--spot-card-alpha,.55));
+  backdrop-filter:blur(10px) saturate(1.25);-webkit-backdrop-filter:blur(10px) saturate(1.25)}
+body .spot-scope.spot-has-card .comment .cbub{
+  background:rgba(var(--spot-card-rgb,232,232,238),var(--spot-card-alpha,.55));
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+body .spot-scope.spot-has-text .card{color:var(--spot-text)}
+body .spot-scope.spot-has-text .card .post-meta,
+body .spot-scope.spot-has-text .card .comment .cmeta,
+body .spot-scope.spot-has-text .card .with-line{color:var(--spot-text);opacity:.72}
+
+/* ===== Your Spot settings card ===== */
+.spot-swatches{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.spot-swatch{width:34px;height:34px;border-radius:50%;border:2px solid var(--border);
+  cursor:pointer;padding:0;flex-shrink:0}
+.spot-swatch:hover{border-color:var(--red)}
+.field input[type=color]{width:72px;height:42px;padding:2px;border:1px solid var(--border);
+  border-radius:8px;background:#fff;cursor:pointer;vertical-align:middle}
+.field input[type=range]{width:100%;max-width:340px;accent-color:var(--red);vertical-align:middle}
+.spot-preview{border-radius:10px;padding:14px;margin-top:6px;background-size:cover;
+  background-position:center;background-color:#141419}
+.spot-preview .card{margin-bottom:0}
+.spot-preview-title{font-size:21px;font-weight:900;line-height:1.15;word-wrap:break-word}
+.spot-preview .comment{border-top:none;padding-bottom:0}
+
 /* ===== flash ===== */
 .flashmsg{max-width:1200px;margin:70px auto 0;padding:0 16px}
 .flashmsg div{background:var(--red-soft);border:1px solid var(--red);color:var(--red-dark);

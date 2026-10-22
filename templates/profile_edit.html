@@ -40,6 +40,62 @@
   </form>
 </div>
 
+<div class="card" id="spot">
+  <div class="section-title">🏠 Your Spot</div>
+  <p style="margin-top:8px;color:var(--muted)">This is YOUR place on HERE — nobody else's profile can look like yours. Name your spot, pick your colors, and everybody who visits your profile sees it your way. Your real name still shows under the title.</p>
+  <form action="/settings/spot" method="post" style="margin-top:12px">
+    <div class="field">
+      <label for="spot-name">Name your spot</label>
+      <input type="text" id="spot-name" name="spot_name" maxlength="60" value="{{ profile.spot_name|e }}" placeholder="Robert's House, John's Spot, The Trap…">
+    </div>
+    <div class="field">
+      <label for="spot-text-color">Text color — your words on your profile</label>
+      <input type="color" id="spot-text-color" name="spot_text_color" value="{{ profile.spot_text_color or '#1c1e21' }}">
+      <div class="spot-swatches" data-for="spot-text-color">
+        {% for c in ['#111111','#ffffff','#d41f2e','#ffd700','#22c55e','#f97316','#a855f7','#ec4899'] %}
+        <button type="button" class="spot-swatch" data-color="{{ c }}" style="background:{{ c }}" title="{{ c }}" aria-label="Text color {{ c }}"></button>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="field">
+      <label for="spot-card-color">Bubble color — your cards &amp; comment bubbles</label>
+      <input type="color" id="spot-card-color" name="spot_card_color" value="{{ profile.spot_card_color or '#e8e8ee' }}">
+      <div class="spot-swatches" data-for="spot-card-color">
+        {% for c in ['#ffffff','#e8e8ee','#111111','#d41f2e','#ffd700','#22c55e','#f97316','#a855f7'] %}
+        <button type="button" class="spot-swatch" data-color="{{ c }}" style="background:{{ c }}" title="{{ c }}" aria-label="Bubble color {{ c }}"></button>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="field">
+      <label for="spot-opacity">Bubble see-through — <span id="spot-opacity-val">{{ profile.spot_card_opacity if profile.spot_card_opacity is not none else 55 }}%</span> solid</label>
+      <input type="range" id="spot-opacity" name="spot_card_opacity" min="30" max="100" step="1" value="{{ profile.spot_card_opacity if profile.spot_card_opacity is not none else 55 }}">
+      <div style="font-size:12px;color:var(--muted);margin-top:2px">100% = solid bubbles · 30% = very see-through</div>
+    </div>
+    <div class="field">
+      <label>Preview — this is what visitors see</label>
+      <div class="spot-preview" id="spot-preview"{% if profile.background %} style="background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,14,.58)),url('{{ profile.background|e }}')"{% endif %}>
+        <div class="card" id="spot-preview-card">
+          <div class="spot-preview-title" id="spot-preview-title">{{ profile.spot_name|e or profile.name|e }}</div>
+          <div class="post-meta" id="spot-preview-meta">{{ profile.name|e }} · your spot on HERE</div>
+          <p id="spot-preview-text" style="margin-top:8px">Welcome to my spot — this is how my words look here. 🏠</p>
+          <div class="comment">
+            <span class="av-ph av-32">{{ profile.name[:1]|upper|e }}</span>
+            <div class="cbub" id="spot-preview-bubble">
+              <div class="cnm">{{ profile.name|e }}</div>
+              <div class="ctxt">…and this is a comment bubble at my spot.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <button type="submit" class="btn">Save My Spot</button>
+  </form>
+  <form action="/settings/spot" method="post" style="margin-top:10px">
+    <input type="hidden" name="reset" value="1">
+    <button type="submit" class="btn-ghost" onclick="return confirm('Reset your spot to the default HERE look?');">Reset to default</button>
+  </form>
+</div>
+
 <div class="card">
   <div class="section-title">⚡ Status</div>
   <p style="margin-top:8px;color:var(--muted)">Your lightning bolt tells people if you're around: <span style="color:#22c55e">⚡ green</span> = active, <span style="color:#eab308">⚡ yellow</span> = away, <span style="color:#ef4444">⚡ red</span> = offline.</p>
@@ -78,4 +134,53 @@
   {% endif %}
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  var nameIn = document.getElementById('spot-name');
+  if (!nameIn) return;
+  var myName = {{ profile.name|tojson }};
+  var textIn = document.getElementById('spot-text-color');
+  var cardIn = document.getElementById('spot-card-color');
+  var opIn = document.getElementById('spot-opacity');
+  var opVal = document.getElementById('spot-opacity-val');
+  var pTitle = document.getElementById('spot-preview-title');
+  var pCard = document.getElementById('spot-preview-card');
+  var pMeta = document.getElementById('spot-preview-meta');
+  var pBubble = document.getElementById('spot-preview-bubble');
+  function hexRgb(h){
+    h = (h || '').replace('#','');
+    if (h.length !== 6) return [232,232,238];
+    return [parseInt(h.substr(0,2),16), parseInt(h.substr(2,2),16), parseInt(h.substr(4,2),16)];
+  }
+  function update(){
+    var rgb = hexRgb(cardIn.value);
+    var bg = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (opIn.value/100) + ')';
+    pCard.style.background = bg;
+    pBubble.style.background = bg;
+    pCard.style.color = textIn.value;
+    pMeta.style.color = textIn.value;
+    pMeta.style.opacity = '.72';
+    opVal.textContent = opIn.value + '%';
+    var n = nameIn.value.trim();
+    pTitle.textContent = n ? n : myName;
+  }
+  [nameIn, textIn, cardIn, opIn].forEach(function(el){
+    el.addEventListener('input', update);
+    el.addEventListener('change', update);
+  });
+  document.querySelectorAll('.spot-swatches').forEach(function(row){
+    var target = document.getElementById(row.getAttribute('data-for'));
+    row.querySelectorAll('.spot-swatch').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        target.value = btn.getAttribute('data-color');
+        update();
+      });
+    });
+  });
+  update();
+})();
+</script>
 {% endblock %}

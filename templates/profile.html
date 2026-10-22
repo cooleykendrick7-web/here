@@ -1,12 +1,26 @@
 {% extends "base.html" %}
-{% block title %}{{ profile.name|e }} — HERE{% endblock %}
+{% block title %}{% if profile.spot_name %}{{ profile.spot_name|e }} · HERE{% else %}{{ profile.name|e }} — HERE{% endif %}{% endblock %}
 {% block content %}
 
+<div class="spot-scope{% if profile.spot_classes %} {{ profile.spot_classes }}{% endif %}"{% if profile.spot_style %} style="{{ profile.spot_style }}"{% endif %}>
 <div class="card">
   <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
     {% if profile.avatar %}<img class="avatar av-100" src="{{ profile.avatar|e }}" alt="">
     {% else %}<span class="av-ph av-100">{{ profile.name[:1]|upper|e }}</span>{% endif %}
     <div style="flex:1;min-width:200px">
+      {% if profile.spot_name %}
+      <h2 class="spot-title">{{ profile.spot_name|e }}</h2>
+      <div class="spot-owner-line">
+        <span class="spot-real-name">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">★</span>{% endif %}</span>
+        {% if not profile.is_self %}
+        <form class="inline-form" action="/tap/{{ profile.id }}" method="post">
+          <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">🖐️ Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>
+        </form>
+        {% elif profile.tap_count %}
+        <span class="kind-tag">🖐️ {{ profile.tap_count }} taps</span>
+        {% endif %}
+      </div>
+      {% else %}
       <h2 style="font-size:24px">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">★</span>{% endif %}
         {% if not profile.is_self %}
         <form class="inline-form" action="/tap/{{ profile.id }}" method="post">
@@ -16,12 +30,14 @@
         <span class="kind-tag">🖐️ {{ profile.tap_count }} taps</span>
         {% endif %}
       </h2>
+      {% endif %}
       <div class="post-meta" style="margin-top:4px">{{ profile.friend_count }} friends · joined {{ profile.created_at|e }}</div>
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
       {% if profile.bio %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
         {% if profile.is_self %}
         <a class="btn-ghost" href="/settings/profile">✏️ Edit Profile</a>
+        <a class="btn-ghost" href="/settings/profile#spot">🏠 Customize my spot</a>
         {% if profile.is_verified %}
         <span class="kind-tag"><span class="verified-star">★</span> Verified</span>
         {% elif profile.verification_status == 'pending' %}
@@ -63,5 +79,6 @@
 {% else %}
 <div class="card"><p style="color:var(--muted)">No posts yet.</p></div>
 {% endfor %}
+</div>
 
 {% endblock %}
