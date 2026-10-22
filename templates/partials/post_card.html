@@ -42,6 +42,20 @@
   <div class="post-video"><iframe src="{{ post.embed_url|e }}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
   {% endif %}
 
+  {% if post.music %}
+  <div class="post-music" data-vid="{{ post.music.video_id|e }}" data-start="{{ post.music.start }}">
+    <div class="post-music-bar">
+      {% if post.music.thumb %}<img class="post-music-thumb" src="{{ post.music.thumb|e }}" alt="">{% endif %}
+      <div class="post-music-info">
+        <div class="t">🎵 {{ post.music.title|e }}</div>
+        <div class="a">{{ post.music.artist|e }}</div>
+      </div>
+      <button type="button" class="post-music-play" aria-label="Play song">▶</button>
+    </div>
+    <div class="post-music-player" hidden></div>
+  </div>
+  {% endif %}
+
   {% if post.media %}
     {% set _m = post.media|lower %}
     {% if _m.endswith('.mp4') or _m.endswith('.mov') or _m.endswith('.webm') %}
