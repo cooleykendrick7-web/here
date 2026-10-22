@@ -18,7 +18,7 @@ rebuild it fresh for HERE.
 
 ## DB schema (SQLite, tables created in init_db; all created_at = UTC ISO string)
 
-- users(id, name, email UNIQUE, pw_hash, bio DEFAULT '', avatar DEFAULT '', background TEXT DEFAULT '' (relative path under uploads/backgrounds/, e.g. 'backgrounds/abc123.jpg'; '' = default site background), last_seen TEXT, is_verified INTEGER DEFAULT 0, verification_status TEXT DEFAULT 'none' ('none'|'pending'|'approved'|'declined'), created_at)
+- users(id, name, email UNIQUE, pw_hash, bio DEFAULT '', avatar DEFAULT '', background TEXT DEFAULT '' (relative path under uploads/backgrounds/, e.g. 'backgrounds/abc123.jpg'; '' = default site background), last_seen TEXT, last_seen_at TEXT (presence heartbeat, UTC ISO; refreshed by touch_presence() on authenticated activity, throttled to one write per ~30s per user), status_mode TEXT DEFAULT 'auto' ('auto'|'online'|'away'|'offline'|'hidden'), inbox_status INTEGER DEFAULT 1 (0 = no status bolt in Messages), is_verified INTEGER DEFAULT 0, verification_status TEXT DEFAULT 'none' ('none'|'pending'|'approved'|'declined'), created_at)
 - sessions(token PRIMARY KEY, user_id, created_at)
 - posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), privacy TEXT DEFAULT 'public' ('public'|'friends'|'onlyme'), pinned INTEGER DEFAULT 0, shared_post_id INTEGER NULL (points at original post for share rows), created_at)
 - hidden_posts(user_id, post_id, created_at) — UNIQUE(user_id, post_id); hides a post row from that user's feeds only
@@ -97,6 +97,8 @@ Verified names show a golden five-point star ★ (color #FFD700, white/gold shin
 
 Profile backgrounds: every user can set a MySpace-style full-page background photo for their profile via Settings ("🖼️ Profile Background"; stored in users.background as 'backgrounds/<uuid>.<ext>', served from /uploads/). The background is rendered full-bleed (cover, centered, scroll attachment for mobile) under a dark gradient scrim, and content cards render translucent frosted glass so text never blends into the photo. It FOLLOWS the logged-in user: their own background is the page background on every logged-in page (via the global `page_bg` context + base.html). Exception: on a profile page, the profile owner's background shows instead. No background set = the default site look, unchanged.
 
+Presence (lightning bolt): every user carries a presence computed by `presence_of(user)` -> {status: 'online'|'away'|'offline', label: 'Active now'|'Away'|'Offline'} or None. Rendered everywhere people appear (profile header with label, Friends/Find Friends/Discover/Search rows, home Contacts + "People you may know" sidebars via partials/presence_bolt.html) as a ⚡ span colored #22c55e (online) / #eab308 (away) / #ef4444 (offline) with the label as its title. Mode rules (users.status_mode): 'online'/'away'/'offline' force that color; 'hidden' -> None (no bolt anywhere, for anyone); 'auto' derives from users.last_seen_at: <=3 min online, <=30 min away, else offline (never seen = offline). Messages surfaces (inbox list, sent list, thread header) additionally gate on users.inbox_status via presence_of(u, inbox=True): inbox_status=0 -> None there, bolt still shows elsewhere. Settings: POST /settings/status (Settings page "⚡ Status" card); the Settings page always shows the owner their own effective status as text (status_label), even when hidden.
+
 ## Routes & templates
 
 | Method | Path | Template | Context / fields |
@@ -132,19 +134,20 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | POST | /post/{id}/unpin | | author only; -> redirect back |
 | GET | /post/{id}/audience | audience.html | author (or owner session) only; friend checkboxes, current hide-from pre-checked; post_id, friends [{id,name,hidden}], hidden_count |
 | POST | /post/{id}/audience | field: hide_from (friend ids, repeated) | author (or owner session) only; replaces the post's hide-from list; -> redirect back to the submitting page (feed/wall/post) via same-origin referer, else /post/{id}. The post card's 👁 eyeball popup posts here too |
-| GET | /user/{id} | profile.html | profile {id,name,bio,avatar,background (full /uploads/ URL or ''),created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count,is_verified,verification_status}, posts, page_bg (= profile.background — the profile owner's background overrides the viewer's site-wide one) |
+| GET | /user/{id} | profile.html | profile {id,name,bio,avatar,background (full /uploads/ URL or ''),created_at,friend_count,is_self,req_status ('none'|'pending_out'|'pending_in'|'friends'),tap_count,is_verified,verification_status,presence ({status ('online'|'away'|'offline'),label} or None when hidden)}, posts, page_bg (= profile.background — the profile owner's background overrides the viewer's site-wide one) |
 | POST | /verify/user/request | | logged in; once per user (re-request after decline allowed); sets verification_status='pending' + inserts verification_requests(kind='user'); -> redirect /user/{id} with flash |
-| GET | /settings/profile | profile_edit.html | profile |
+| GET | /settings/profile | profile_edit.html | profile (incl. status_mode, inbox_status, status_label = the effective status text the owner sees) |
 | POST | /settings/profile | fields: name, bio, avatar (file), background (file: jpg,png,gif,webp, max 5MB -> uploads/backgrounds/), remove_background ('1' clears it) | replaces/deletes old background file; -> redirect /user/{id} |
-| GET | /friends | friends.html | incoming [{id,name,avatar,created_at}], sent [{id,name,avatar}], friends [{id,name,avatar,online}] |
+| POST | /settings/status | fields: status_mode ('auto'|'online'|'away'|'offline'|'hidden'; anything else -> 'auto'), inbox_status ('1' = show my status in Messages; absent = off) | updates users.status_mode/inbox_status; -> redirect /settings/profile with flash |
+| GET | /friends | friends.html | incoming [{id,name,avatar,presence,created_at}], sent [{id,name,avatar,presence}], friends [{id,name,avatar,presence}] — presence = {status,label} or None (hidden) |
 | POST | /friends/request/{id} | | -> redirect back |
 | POST | /friends/accept/{id} | | -> redirect /friends |
 | POST | /friends/decline/{id} | | -> redirect /friends |
 | POST | /friends/cancel/{id} | | cancel an outgoing request; -> redirect back |
 | POST | /friends/remove/{id} | | -> redirect /friends |
 | POST | /tap/{id} | | -> redirect back; creates tap + notification |
-| GET | /messages | inbox.html | box ('inbox'|'sent'); threads [{friend_id,friend_name,friend_avatar,last_body,last_at,unread}]; sent [{friend_id,friend_name,friend_avatar,body,created_at}] |
-| GET | /messages/{fid} | thread.html | friend {id,name,avatar}, msgs [{id,sender_id,body,created_at,mine}] |
+| GET | /messages | inbox.html | box ('inbox'|'sent'); threads [{friend_id,friend_name,friend_avatar,presence (inbox-gated: None when the user hid status or turned off inbox status),last_body,last_at,unread}]; sent [{friend_id,friend_name,friend_avatar,presence (inbox-gated),body,created_at}] |
+| GET | /messages/{fid} | thread.html | friend {id,name,avatar,presence (inbox-gated)}, msgs [{id,sender_id,body,created_at,mine}] |
 | POST | /messages/{fid} | field: body | -> redirect /messages/{fid} |
 | POST | /calls/start | JSON {user_id, kind ('voice'\|'video')} | JSON. Friends only (Ken's rule): non-friend -> {ok:false, needs_request:true}. Busy (either side already ringing/active) -> {ok:false, busy:true} + a 'busy' call row + thread note; caller already in a call -> 409. Success -> {ok:true, call} in 'ringing' |
 | GET | /calls/incoming | | JSON {incoming (ringing call for me), current (my live call either direction)} — feeds the global poller in base.html (incoming-call sheet + call re-attach) |
@@ -160,7 +163,7 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | POST | /call-requests/{id}/decline | | target only; -> 'declined' + thread note to the requester + 24h re-request cooldown |
 | GET | /notifications | notifications.html | notes [{id,kind,text,link,created_at,is_read}] (marks read on view) |
 | GET | /discover | discover.html | people [{id,name,avatar,req,views}] = non-friends ranked by profile views received in last 7 days (fallback: newest signups; excludes self/friends/pending), trends [{label,q,count}] = top #hashtags of last 7 days (fallback: most frequent meaningful words) |
-| GET | /search | search.html | q (token-split; ANY token matches first/last/display name, case-insensitive partial; exact-phrase ranks first), users [{id,name,avatar,is_self,req}], pages [{id,name,ptype,joined}], posts [post_cards, privacy-respecting] |
+| GET | /search | search.html | q (token-split; ANY token matches first/last/display name, case-insensitive partial; exact-phrase ranks first), users [{id,name,avatar,presence,is_self,req}], pages [{id,name,ptype,joined}], posts [post_cards, privacy-respecting] |
 | GET | /pages | pages.html | pages [{id,name,ptype,description,cover,members,owner_name,joined}] |
 | GET | /pages/new | page_form.html | ptypes list |
 | POST | /pages | fields: name, ptype, description, cover (file) | -> redirect /page/{id} |

@@ -122,7 +122,9 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, pw_hash TEXT NOT NULL,
         bio TEXT DEFAULT '', avatar TEXT DEFAULT '',
-        last_seen TEXT, created_at TEXT NOT NULL)""")
+        last_seen TEXT, last_seen_at TEXT,
+        status_mode TEXT DEFAULT 'auto', inbox_status INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS sessions (
         token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS posts (
@@ -235,6 +237,19 @@ def init_db():
     if "background" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN background TEXT DEFAULT ''")
     c.execute("UPDATE users SET background='' WHERE background IS NULL")
+    # --- presence: lightning-bolt status (safe on existing DBs) ---
+    # last_seen_at is the throttled heartbeat timestamp (written at most
+    # every ~30s per user); status_mode is the user's chosen display mode
+    # ('auto'|'online'|'away'|'offline'|'hidden'); inbox_status toggles
+    # whether the bolt may show in Messages at all.
+    if "last_seen_at" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN last_seen_at TEXT")
+    if "status_mode" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN status_mode TEXT DEFAULT 'auto'")
+    if "inbox_status" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN inbox_status INTEGER DEFAULT 1")
+    c.execute("UPDATE users SET status_mode='auto' WHERE status_mode IS NULL")
+    c.execute("UPDATE users SET inbox_status=1 WHERE inbox_status IS NULL")
     # --- hide-from-specific-people + post tags (safe on existing DBs) ---
     c.execute("""CREATE TABLE IF NOT EXISTS post_hidden_from (
         post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
@@ -312,7 +327,10 @@ def current_user(request: Request):
     conn.close()
     if not s:
         return None
-    return get_user(s["user_id"])
+    u = get_user(s["user_id"])
+    if u:
+        touch_presence(u)
+    return u
 
 
 def is_owner(request: Request):
@@ -355,6 +373,94 @@ def is_online(last_seen):
         return datetime.now(timezone.utc) - dt <= timedelta(minutes=ONLINE_MINUTES)
     except Exception:
         return False
+
+
+# ---------------- presence (lightning-bolt status) ----------------
+# Every user gets a ⚡ bolt wherever people are listed: green = active,
+# yellow = away / undetermined, red = offline. In Settings each user can
+# force a status, hide it completely (no bolt anywhere), and separately
+# choose whether the bolt shows in Messages (inbox list + thread header).
+PRESENCE_ONLINE_SECONDS = 3 * 60     # auto: seen within 3 min -> green
+PRESENCE_AWAY_SECONDS = 30 * 60      # auto: seen within 30 min -> yellow
+PRESENCE_WRITE_SECONDS = 30          # heartbeat writes at most this often
+STATUS_MODES = ("auto", "online", "away", "offline", "hidden")
+STATUS_LABELS = {"online": "Active now", "away": "Away", "offline": "Offline"}
+
+
+def _parse_ts(value):
+    """Parse a stored UTC ISO timestamp into an aware datetime (or None)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _uget(u, key, default=None):
+    """Read a field from a user record whether it's a dict or sqlite3.Row."""
+    if u is None:
+        return default
+    if isinstance(u, dict):
+        return u.get(key, default)
+    try:
+        return u[key]
+    except Exception:
+        return default
+
+
+def touch_presence(u):
+    """Throttled heartbeat: refresh users.last_seen_at, but only when the
+    stored value is missing or older than ~30s, so the ~4s call poller and
+    normal page loads don't turn into a DB write per request."""
+    if not u:
+        return
+    last = _parse_ts(_uget(u, "last_seen_at"))
+    if last is not None and (datetime.now(timezone.utc) - last) \
+            <= timedelta(seconds=PRESENCE_WRITE_SECONDS):
+        return
+    conn = db()
+    conn.execute("UPDATE users SET last_seen_at=? WHERE id=?",
+                 (now_iso(), u["id"]))
+    conn.commit()
+    conn.close()
+
+
+def presence_of(u, inbox=False):
+    """The presence OTHERS may see for a user row/dict, as
+    {'status': 'online'|'away'|'offline', 'label': str} — or None when
+    nothing may be shown: the user hid their status entirely, or
+    (inbox=True) the user turned off status in Messages. Manual modes
+    force their color; 'auto' derives from last_seen_at."""
+    if not u:
+        return None
+    if inbox:
+        show_inbox = _uget(u, "inbox_status")
+        if show_inbox is None:
+            show_inbox = 1
+        if not show_inbox:
+            return None
+    mode = (_uget(u, "status_mode") or "auto")
+    if mode == "hidden":
+        return None
+    if mode in STATUS_LABELS:
+        status = mode
+    else:
+        last = _parse_ts(_uget(u, "last_seen_at"))
+        if last is None:
+            status = "offline"
+        else:
+            age = (datetime.now(timezone.utc) - last).total_seconds()
+            if age <= PRESENCE_ONLINE_SECONDS:
+                status = "online"
+            elif age <= PRESENCE_AWAY_SECONDS:
+                status = "away"
+            else:
+                status = "offline"
+    return {"status": status, "label": STATUS_LABELS[status]}
 
 
 def render(request: Request, name, ctx=None):
@@ -719,7 +825,8 @@ def discover_people(uid, limit=10):
     excluded = friend_id_set(uid) | pending_id_set(uid) | {uid}
     conn = db()
     rows = conn.execute(
-        "SELECT u.id, u.name, u.avatar, COUNT(v.id) AS views "
+        "SELECT u.id, u.name, u.avatar, u.last_seen_at, u.status_mode, "
+        "u.inbox_status, COUNT(v.id) AS views "
         "FROM users u LEFT JOIN profile_views v "
         "ON v.viewed_id=u.id AND v.viewed_at > datetime('now','-7 days') "
         "GROUP BY u.id ORDER BY views DESC, u.created_at DESC").fetchall()
@@ -730,6 +837,7 @@ def discover_people(uid, limit=10):
             continue
         out.append({"id": r["id"], "name": r["name"],
                     "avatar": avatar_url(r["avatar"]),
+                    "presence": presence_of(r),
                     "req": req_status(uid, r["id"]),
                     "views": r["views"]})
         if len(out) >= limit:
@@ -1183,14 +1291,17 @@ async def home(request: Request):
     if fids:
         conn = db()
         for fid in fids:
-            f = conn.execute("SELECT id,name,avatar,last_seen FROM users WHERE id=?",
-                             (fid,)).fetchone()
+            f = conn.execute(
+                "SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
+                "FROM users WHERE id=?", (fid,)).fetchone()
             if f:
                 contacts.append({"id": f["id"], "name": f["name"],
                                  "avatar": avatar_url(f["avatar"]),
-                                 "online": is_online(f["last_seen"])})
+                                 "presence": presence_of(f)})
         conn.close()
-        contacts.sort(key=lambda c: (not c["online"], c["name"].lower()))
+        contacts.sort(key=lambda c: (
+            0 if (c["presence"] and c["presence"]["status"] == "online") else 1,
+            c["name"].lower()))
     cfriends, cpages = composer_choices(user)
     return render(request, "home.html",
                   {"posts": posts, "contacts": contacts,
@@ -1900,6 +2011,7 @@ async def profile(request: Request, uid: int):
         "is_verified": bool(prof.get("is_verified")),
         "verification_status": prof.get("verification_status") or "none",
         "background": avatar_url(prof.get("background", "")),
+        "presence": presence_of(prof),
     }
     posts = []
     for r in prows:
@@ -1921,13 +2033,41 @@ async def profile_edit_page(request: Request):
     user, err = require_login(request)
     if err:
         return err
+    mode = (user.get("status_mode") or "auto")
+    if mode == "hidden":
+        status_label = "Hidden — nobody sees a bolt for you"
+    else:
+        pres = presence_of(user)
+        status_label = pres["label"] if pres else "Offline"
     return render(request, "profile_edit.html", {
         "profile": {"id": user["id"], "name": user["name"],
                     "bio": user.get("bio", ""),
                     "avatar": avatar_url(user.get("avatar", "")),
                     "background": avatar_url(user.get("background", "")),
                     "is_verified": bool(user.get("is_verified")),
-                    "verification_status": user.get("verification_status") or "none"}})
+                    "verification_status": user.get("verification_status") or "none",
+                    "status_mode": mode,
+                    "inbox_status": 1 if user.get("inbox_status") is None
+                    else (1 if user.get("inbox_status") else 0),
+                    "status_label": status_label}})
+
+
+@app.post("/settings/status")
+async def settings_status(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    mode = (form.get("status_mode") or "auto").strip()
+    if mode not in STATUS_MODES:
+        mode = "auto"
+    inbox_on = 1 if (form.get("inbox_status") or "") == "1" else 0
+    conn = db()
+    conn.execute("UPDATE users SET status_mode=?, inbox_status=? WHERE id=?",
+                 (mode, inbox_on, user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile", "Your status settings were saved.")
 
 
 def _delete_upload(rel_path):
@@ -1983,15 +2123,18 @@ async def friends_page(request: Request):
         return err
     conn = db()
     incoming = conn.execute(
-        "SELECT u.id,u.name,u.avatar,f.created_at FROM friendships f "
+        "SELECT u.id,u.name,u.avatar,u.last_seen_at,u.status_mode,u.inbox_status,"
+        "f.created_at FROM friendships f "
         "JOIN users u ON u.id=f.user_id WHERE f.friend_id=? AND f.status='pending' "
         "ORDER BY f.created_at DESC", (user["id"],)).fetchall()
     sent = conn.execute(
-        "SELECT u.id,u.name,u.avatar FROM friendships f "
+        "SELECT u.id,u.name,u.avatar,u.last_seen_at,u.status_mode,u.inbox_status "
+        "FROM friendships f "
         "JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.status='pending' "
         "ORDER BY f.created_at DESC", (user["id"],)).fetchall()
     acc = conn.execute(
-        "SELECT u.id,u.name,u.avatar,u.last_seen FROM friendships f "
+        "SELECT u.id,u.name,u.avatar,u.last_seen_at,u.status_mode,u.inbox_status "
+        "FROM friendships f "
         "JOIN users u ON u.id = CASE WHEN f.user_id=? THEN f.friend_id ELSE f.user_id END "
         "WHERE f.status='accepted' AND (f.user_id=? OR f.friend_id=?) "
         "ORDER BY u.name", (user["id"], user["id"], user["id"])).fetchall()
@@ -1999,12 +2142,14 @@ async def friends_page(request: Request):
     return render(request, "friends.html", {
         "incoming": [{"id": r["id"], "name": r["name"],
                       "avatar": avatar_url(r["avatar"]),
+                      "presence": presence_of(r),
                       "created_at": fancy_time(r["created_at"])} for r in incoming],
         "sent": [{"id": r["id"], "name": r["name"],
-                  "avatar": avatar_url(r["avatar"])} for r in sent],
+                  "avatar": avatar_url(r["avatar"]),
+                  "presence": presence_of(r)} for r in sent],
         "friends": [{"id": r["id"], "name": r["name"],
                      "avatar": avatar_url(r["avatar"]),
-                     "online": is_online(r["last_seen"])} for r in acc],
+                     "presence": presence_of(r)} for r in acc],
     })
 
 
@@ -2122,7 +2267,9 @@ async def inbox(request: Request):
     conn = db()
     if box == "sent":
         rows = conn.execute(
-            "SELECT m.*, u.name AS rname, u.avatar AS ravatar FROM messages m "
+            "SELECT m.*, u.name AS rname, u.avatar AS ravatar, "
+            "u.last_seen_at AS rlast, u.status_mode AS rmode, "
+            "u.inbox_status AS rinbox FROM messages m "
             "JOIN users u ON u.id=m.receiver_id "
             "WHERE m.sender_id=? ORDER BY m.created_at DESC LIMIT 200",
             (user["id"],)).fetchall()
@@ -2130,6 +2277,9 @@ async def inbox(request: Request):
         sent = [{"friend_id": r["receiver_id"],
                  "friend_name": r["rname"] or "Deleted user",
                  "friend_avatar": avatar_url(r["ravatar"]) if r["ravatar"] else "",
+                 "presence": presence_of(
+                     {"last_seen_at": r["rlast"], "status_mode": r["rmode"],
+                      "inbox_status": r["rinbox"]}, inbox=True),
                  "body": r["body"], "created_at": fancy_time(r["created_at"])}
                 for r in rows]
         return render(request, "inbox.html",
@@ -2142,7 +2292,9 @@ async def inbox(request: Request):
     threads = []
     for r in rows:
         fid = r["fid"]
-        f = conn.execute("SELECT id,name,avatar FROM users WHERE id=?", (fid,)).fetchone()
+        f = conn.execute(
+            "SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
+            "FROM users WHERE id=?", (fid,)).fetchone()
         last = conn.execute(
             "SELECT body, created_at FROM messages WHERE "
             "((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) "
@@ -2155,6 +2307,7 @@ async def inbox(request: Request):
             "friend_id": fid,
             "friend_name": f["name"] if f else "Deleted user",
             "friend_avatar": avatar_url(f["avatar"]) if f and f["avatar"] else "",
+            "presence": presence_of(f, inbox=True) if f else None,
             "last_body": last["body"] if last else "",
             "last_at": fancy_time(last["created_at"]) if last else "",
             "unread": unread,
@@ -2197,7 +2350,8 @@ async def thread(request: Request, fid: int):
              "mine": r["sender_id"] == user["id"]} for r in rows]
     return render(request, "thread.html", {
         "friend": {"id": friend["id"], "name": friend["name"],
-                   "avatar": avatar_url(friend.get("avatar", ""))},
+                   "avatar": avatar_url(friend.get("avatar", "")),
+                   "presence": presence_of(friend, inbox=True)},
         "msgs": msgs,
         "is_friend": fid in friend_id_set(user["id"]),
         "call_req": call_req})
@@ -2890,7 +3044,8 @@ async def search(request: Request):
         ors = " OR ".join(["name LIKE ?"] * len(tokens))
         params = [f"%{t}%" for t in tokens]
         urows = conn.execute(
-            f"SELECT id,name,avatar FROM users WHERE ({ors}) OR email LIKE ? "
+            f"SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
+            f"FROM users WHERE ({ors}) OR email LIKE ? "
             f"ORDER BY CASE WHEN name LIKE ? THEN 0 ELSE 1 END, name LIMIT 50",
             params + [f"%{q}%", f"%{q}%"]).fetchall()
         prows = conn.execute(
@@ -2898,6 +3053,7 @@ async def search(request: Request):
             (f"%{q}%",)).fetchall()
         users = [{"id": r["id"], "name": r["name"],
                   "avatar": avatar_url(r["avatar"]),
+                  "presence": presence_of(r),
                   "is_self": r["id"] == user["id"],
                   "req": req_status(user["id"], r["id"])} for r in urows]
         pages = []
