@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Get the HERE app — HERE{% endblock %}
+{% block content %}
+
+<style>
+.app-dl-card{text-align:center}
+.app-dl-card h3{font-size:20px;margin-bottom:6px}
+.app-dl-card p{color:var(--muted);font-size:14px;margin-bottom:16px}
+.app-dl-btn{display:block;width:100%;border-radius:8px;padding:12px;font-size:15px;font-weight:800;cursor:pointer;margin-bottom:10px;text-decoration:none;border:none}
+.app-dl-btn.android{background:var(--red);color:#fff}
+.app-dl-btn.android:hover{background:var(--red-dark)}
+.app-dl-btn.iphone{background:#1f1f1f;color:#f0f0f0;border:1px solid #333}
+.app-dl-btn.iphone:hover{border-color:var(--red)}
+.app-dl-rec{display:none;font-size:11px;font-weight:700;color:#b8860b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.ios-steps{display:none;text-align:left;background:rgba(0,0,0,.05);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-top:4px}
+body.has-profile-bg .ios-steps{background:rgba(0,0,0,.35)}
+.ios-steps.open{display:block}
+.ios-steps ol{margin-left:18px;font-size:14px}
+.ios-steps li{margin-bottom:8px}
+.ios-steps li:last-child{margin-bottom:0}
+.ios-note{font-size:12px;color:var(--muted);margin-top:10px}
+body.has-profile-bg .ios-note{color:#ccc}
+</style>
+
+<div class="card app-dl-card">
+  <h3 id="app-card-title">📱 Get the HERE app</h3>
+  <p>Same HERE you know — right on your home screen, fullscreen, one tap away.</p>
+  <div class="app-dl-rec" id="rec-android">Recommended for your phone</div>
+  <a class="app-dl-btn android" href="/download/android" download>🤖 Download for Android</a>
+  <div class="app-dl-rec" id="rec-iphone">Recommended for your phone</div>
+  <button type="button" class="app-dl-btn iphone" id="ios-btn">🍎 Add to iPhone Home Screen</button>
+  <div class="ios-steps" id="ios-steps">
+    <ol>
+      <li>Tap the <strong>Share</strong> button at the bottom of Safari — the square with an arrow pointing up.</li>
+      <li>Scroll down and tap <strong>“Add to Home Screen”</strong>.</li>
+      <li>Tap <strong>“Add”</strong> — HERE lands on your home screen and opens like a real app.</li>
+    </ol>
+    <div class="ios-note">Apple doesn't let websites hand out iPhone app files, so this is how iPhone installs HERE. Same app, same everything.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // The card stays visible no matter what — inside the installed app we
+  // just swap the heading.
+  var standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  if (standalone) {
+    document.getElementById("app-card-title").textContent = "You're using the HERE app ✅";
+  }
+  var ua = navigator.userAgent || "";
+  if (/Android/i.test(ua)) document.getElementById("rec-android").style.display = "block";
+  if (/iPhone|iPad|iPod/i.test(ua)) document.getElementById("rec-iphone").style.display = "block";
+  document.getElementById("ios-btn").addEventListener("click", function () {
+    document.getElementById("ios-steps").classList.toggle("open");
+  });
+})();
+</script>
+
+{% endblock %}
