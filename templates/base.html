@@ -185,6 +185,16 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 .inc-btn{flex:1;border:none;border-radius:24px;padding:12px;font-size:16px;font-weight:800;cursor:pointer}
 .inc-answer{background:var(--green);color:#fff}
 .inc-decline{background:var(--red);color:#fff}
+.inc-reply-btn{background:#3a3a3c;color:#fff}
+#inc-reply-panel{margin-top:12px}
+#inc-reply-panel[hidden]{display:none}
+.inc-chips{display:flex;flex-wrap:wrap;gap:8px}
+.inc-chip{border:1px solid var(--red);background:transparent;color:#fff;border-radius:18px;
+  padding:8px 14px;font-size:14px;font-weight:700;cursor:pointer}
+.inc-reply-row{display:flex;gap:8px;margin-top:10px}
+#inc-reply-text{flex:1;min-width:0;background:#1c1c1e;border:1px solid #444;border-radius:20px;
+  padding:10px 14px;color:#fff;font-size:15px}
+#inc-reply-send{flex:0 0 auto;padding:10px 18px;font-size:15px}
 #call-overlay{position:fixed;inset:0;background:#000;z-index:3100;color:#fff;
   display:flex;flex-direction:column}
 #call-overlay[hidden]{display:none}
@@ -484,6 +494,20 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <button type="button" class="inc-btn inc-answer" id="inc-answer">📞 Answer</button>
     <button type="button" class="inc-btn inc-decline" id="inc-decline">✖ Decline</button>
   </div>
+  <div class="inc-actions">
+    <button type="button" class="inc-btn inc-reply-btn" id="inc-reply">💬 Reply &amp; decline</button>
+  </div>
+  <div id="inc-reply-panel" hidden>
+    <div class="inc-chips">
+      <button type="button" class="inc-chip" data-reply-msg="I'll call you later">I'll call you later</button>
+      <button type="button" class="inc-chip" data-reply-msg="Can't talk right now">Can't talk right now</button>
+      <button type="button" class="inc-chip" data-reply-msg="Give me 5 minutes">Give me 5 minutes</button>
+    </div>
+    <div class="inc-reply-row">
+      <input type="text" id="inc-reply-text" maxlength="300" placeholder="Or type your own message…" autocomplete="off">
+      <button type="button" class="inc-btn inc-answer" id="inc-reply-send">Send</button>
+    </div>
+  </div>
 </div>
 
 <div id="request-sheet" hidden>
@@ -752,7 +776,9 @@ document.addEventListener('click', function(ev){
       sheet = $('incoming-sheet'), incImg = $('inc-avatar-img'),
       incPh = $('inc-avatar-ph'), incName = $('inc-name'),
       incKind = $('inc-kind'), incAnswer = $('inc-answer'),
-      incDecline = $('inc-decline'),
+      incDecline = $('inc-decline'), incReply = $('inc-reply'),
+      incPanel = $('inc-reply-panel'), incReplyText = $('inc-reply-text'),
+      incReplySend = $('inc-reply-send'),
       reqSheet = $('request-sheet'), reqImg = $('req-avatar-img'),
       reqPh = $('req-avatar-ph'), reqName = $('req-name'),
       reqKind = $('req-kind'), reqAccept = $('req-accept'),
@@ -980,6 +1006,10 @@ document.addEventListener('click', function(ev){
         var msg = d.status === 'declined' ? 'Call declined'
           : d.status === 'missed' ? (S.role === 'caller' ? 'No answer' : 'Missed call')
           : 'Call ended';
+        /* Decline-with-a-message: show the callee's words, iPhone-style. */
+        if (d.status === 'declined' && d.decline_note){
+          msg = 'Declined · “' + d.decline_note + '”';
+        }
         endUi(msg);
       }
     }).catch(function(){});
@@ -1123,12 +1153,41 @@ document.addEventListener('click', function(ev){
     incoming = null;
     shownRingId = 0;
     ringStop();
+    /* Next ring starts from the plain sheet, reply panel tucked away. */
+    incPanel.hidden = true;
+    incReplyText.value = '';
   }
   incDecline.addEventListener('click', function(){
     if (!incoming) return;
     var id = incoming.id;
     hideSheet();
     jpost('/calls/' + id + '/decline').catch(function(){});
+  });
+  /* Reply & decline: the message lands in the thread as a normal text
+     from the callee and rides on the call, so the caller sees it in
+     their overlay as the call drops. */
+  function declineWithMessage(msg){
+    if (!incoming) return;
+    var id = incoming.id;
+    hideSheet();
+    jpost('/calls/' + id + '/decline',
+          msg ? {message: msg} : undefined).catch(function(){});
+  }
+  incReply.addEventListener('click', function(){
+    incPanel.hidden = !incPanel.hidden;
+    if (!incPanel.hidden) incReplyText.focus();
+  });
+  Array.prototype.forEach.call(
+    sheet.querySelectorAll('[data-reply-msg]'), function(chip){
+      chip.addEventListener('click', function(){
+        declineWithMessage(chip.getAttribute('data-reply-msg'));
+      });
+    });
+  incReplySend.addEventListener('click', function(){
+    declineWithMessage(incReplyText.value.trim());
+  });
+  incReplyText.addEventListener('keydown', function(ev){
+    if (ev.key === 'Enter'){ ev.preventDefault(); incReplySend.click(); }
   });
   incAnswer.addEventListener('click', function(){
     if (!incoming) return;
