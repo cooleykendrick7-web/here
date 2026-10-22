@@ -370,6 +370,24 @@ def init_db():
         created_at TEXT NOT NULL, UNIQUE(post_id, user_id))""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_cblocks_post "
               "ON post_comment_blocks(post_id)")
+    # --- privacy + notification hygiene (safe on existing DBs) ---
+    # mutes: one-way silence. The muter gets no notifications/push from
+    # the muted user and the muted user's posts leave the muter's home
+    # feed; friendship and messaging are untouched, and the muted user
+    # is never told.
+    c.execute("""CREATE TABLE IF NOT EXISTS mutes (
+        muter_id INTEGER NOT NULL, muted_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, PRIMARY KEY(muter_id, muted_id))""")
+    # blocks: one row (blocker -> blocked) severs the pair completely
+    # and is enforced BOTH ways (see blocked_either_way()).
+    c.execute("""CREATE TABLE IF NOT EXISTS blocks (
+        blocker_id INTEGER NOT NULL, blocked_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, PRIMARY KEY(blocker_id, blocked_id))""")
+    _user_cols_now = [r["name"] for r in
+                      c.execute("PRAGMA table_info(users)").fetchall()]
+    if "private_profile" not in _user_cols_now:
+        c.execute("ALTER TABLE users ADD COLUMN private_profile "
+                  "INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -620,8 +638,70 @@ def new_owner_session():
 
 
 # ---------------- small helpers ----------------
-def notify(user_id, kind, text, link=""):
+# ---------------- silence (mute) + block helpers ----------------
+def muted_id_set(uid):
+    """User ids uid has silenced (one direction: uid's own mutes)."""
+    conn = db()
+    rows = conn.execute("SELECT muted_id FROM mutes WHERE muter_id=?",
+                        (uid,)).fetchall()
+    conn.close()
+    return {r["muted_id"] for r in rows}
+
+
+def blocked_id_set(uid):
+    """User ids in a block relationship with uid in EITHER direction."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT blocker_id, blocked_id FROM blocks "
+        "WHERE blocker_id=? OR blocked_id=?", (uid, uid)).fetchall()
+    conn.close()
+    out = set()
+    for r in rows:
+        out.add(r["blocked_id"] if r["blocker_id"] == uid
+                else r["blocker_id"])
+    return out
+
+
+def blocked_either_way(a, b):
+    """True when a block exists between the pair in either direction.
+    Blocking is mutual in effect (Facebook-style): whoever pressed the
+    button, BOTH users lose access to each other."""
+    if not a or not b or a == b:
+        return False
+    conn = db()
+    r = conn.execute(
+        "SELECT 1 FROM blocks WHERE (blocker_id=? AND blocked_id=?) OR "
+        "(blocker_id=? AND blocked_id=?)", (a, b, b, a)).fetchone()
+    conn.close()
+    return bool(r)
+
+
+def notifications_allowed(recipient_id, actor_id):
+    """The shared bell + push gate. An actor's actions stay silent for a
+    recipient who silenced (muted) the actor, and for any pair with a
+    block in either direction. No actor (system notices) always passes,
+    as does the recipient acting on themselves."""
+    if not actor_id or actor_id == recipient_id:
+        return True
+    conn = db()
+    m = conn.execute(
+        "SELECT 1 FROM mutes WHERE muter_id=? AND muted_id=?",
+        (recipient_id, actor_id)).fetchone()
+    if m:
+        conn.close()
+        return False
+    b = conn.execute(
+        "SELECT 1 FROM blocks WHERE (blocker_id=? AND blocked_id=?) OR "
+        "(blocker_id=? AND blocked_id=?)",
+        (recipient_id, actor_id, actor_id, recipient_id)).fetchone()
+    conn.close()
+    return not b
+
+
+def notify(user_id, kind, text, link="", actor_id=None):
     if not user_id:
+        return
+    if not notifications_allowed(user_id, actor_id):
         return
     conn = db()
     conn.execute(
@@ -1028,9 +1108,11 @@ def first_embed_in_text(body):
 def discover_people(uid, limit=10):
     """People you may know: non-friends ranked by profile views received in
     the last 7 days. Falls back to newest signups when there is no view data
-    yet, so the list is never empty. Excludes self, friends, and anyone with
-    a pending request in either direction."""
-    excluded = friend_id_set(uid) | pending_id_set(uid) | {uid}
+    yet, so the list is never empty. Excludes self, friends, anyone with
+    a pending request in either direction, and anyone in a block
+    relationship with the viewer (either direction)."""
+    excluded = friend_id_set(uid) | pending_id_set(uid) \
+        | blocked_id_set(uid) | {uid}
     conn = db()
     rows = conn.execute(
         "SELECT u.id, u.name, u.avatar, u.last_seen_at, u.status_mode, "
@@ -1062,13 +1144,28 @@ TREND_STOPWORDS = frozenset(
     "youre gonna gotta wanna".split())
 
 
-def trending_topics(limit=10):
+def trending_topics(limit=10, viewer_id=None):
     """Top #hashtags from posts in the last 7 days. When nobody has used
-    hashtags yet, falls back to the most frequent meaningful words."""
+    hashtags yet, falls back to the most frequent meaningful words.
+    With a viewer, posts the viewer may not see never feed the trends:
+    authors in a block relationship with the viewer, and private-profile
+    authors the viewer isn't friends with (same rules as can_view_post)."""
     conn = db()
     rows = conn.execute(
-        "SELECT body FROM posts WHERE created_at > datetime('now','-7 days')").fetchall()
+        "SELECT body, user_id FROM posts WHERE created_at > "
+        "datetime('now','-7 days')").fetchall()
     conn.close()
+    if viewer_id:
+        excluded = blocked_id_set(viewer_id)
+        conn = db()
+        priv_ids = {r["id"] for r in conn.execute(
+            "SELECT id FROM users WHERE private_profile=1").fetchall()}
+        conn.close()
+        if priv_ids:
+            fids = friend_id_set(viewer_id)
+            excluded |= {pid for pid in priv_ids
+                         if pid not in fids and pid != viewer_id}
+        rows = [r for r in rows if r["user_id"] not in excluded]
     tags = {}
     for r in rows:
         for m in re.findall(r"#(\w+)", r["body"] or ""):
@@ -1095,15 +1192,25 @@ def can_view_post(viewer, p, owner_on=False):
     Page posts follow page visibility (unchanged behavior); personal posts
     respect their privacy setting. On top of all of that, a viewer on the
     post's hide-from list never sees it (the author always does, and the
-    site owner does in the owner context). Tagging never grants access."""
+    site owner does in the owner context). Tagging never grants access.
+    Two more pair rules sit on top: a block in either direction between
+    viewer and author hides the post completely, and a private-profile
+    author's personal posts are friends-only no matter the post's own
+    privacy setting. The owner context bypasses both pair rules."""
     if not viewer:
         return False
     if viewer["id"] == p["user_id"]:
         return True
+    if not owner_on and blocked_either_way(viewer["id"], p["user_id"]):
+        return False
     if not owner_on and viewer["id"] in hidden_from_ids(p["id"]):
         return False
     if p.get("page_id"):
         return True
+    if not owner_on:
+        author = get_user(p["user_id"])
+        if author and author.get("private_profile"):
+            return viewer["id"] in friend_id_set(p["user_id"])
     priv = (p.get("privacy") or "public")
     if priv == "public":
         return True
@@ -1537,8 +1644,11 @@ async def logout(request: Request):
 # ---------------- home / posts ----------------
 def _home_posts(user, owner_on):
     """Own posts + friends' posts + posts on joined pages, newest first.
-    Respects per-post privacy and the viewer's hidden-posts list."""
+    Respects per-post privacy and the viewer's hidden-posts list. Posts
+    by people the viewer silenced (muted) never appear — silencing is
+    about your own space, so it applies here and only here."""
     fids = friend_id_set(user["id"])
+    muted = muted_id_set(user["id"])
     conn = db()
     page_ids = [r["page_id"] for r in conn.execute(
         "SELECT page_id FROM page_members WHERE user_id=?", (user["id"],)).fetchall()]
@@ -1559,12 +1669,27 @@ def _home_posts(user, owner_on):
         "SELECT p.* FROM posts p WHERE " + " OR ".join(clauses) +
         " ORDER BY p.created_at DESC LIMIT 200", params).fetchall()
     conn.close()
+    # For share rows the visible content is the ORIGINAL post, so a
+    # muted author hides shares of their posts too.
+    orig_authors = {}
+    share_ids = [r["shared_post_id"] for r in rows if r["shared_post_id"]]
+    if share_ids:
+        conn = db()
+        for orow in conn.execute(
+                "SELECT id, user_id FROM posts WHERE id IN (%s)"
+                % ",".join("?" * len(share_ids)), share_ids).fetchall():
+            orig_authors[orow["id"]] = orow["user_id"]
+        conn.close()
     cards = []
     for r in rows:
         d = dict(r)
         # hidden_posts stores root post ids: hiding hides the original and
         # all of its shares for you.
         if (d.get("shared_post_id") or d["id"]) in hidden:
+            continue
+        if muted and d["user_id"] != user["id"] and (
+                d["user_id"] in muted
+                or orig_authors.get(d.get("shared_post_id")) in muted):
             continue
         card = post_card(d, user, owner_on)
         if card:
@@ -1638,7 +1763,7 @@ async def home(request: Request):
                   {"posts": posts, "contacts": contacts,
                    "stories_tray": stories_tray(user["id"]),
                    "discover_people": discover_people(user["id"], 3),
-                   "trends": trending_topics(5),
+                   "trends": trending_topics(5, user["id"]),
                    "composer_friends": cfriends, "composer_pages": cpages})
 
 
@@ -1725,7 +1850,7 @@ def create_post_from_form(user, form, page_id=None):
         conn.close()
     for tuid in sorted(tag_uids):
         notify(tuid, "tag", f"{user['name']} tagged you in a post.",
-               f"/post/{pid}")
+               f"/post/{pid}", actor_id=user["id"])
     flag_item("post", pid, user["id"], user["name"],
               " ".join(x for x in (body, feeling, link_url, video_url) if x))
     return pid, None
@@ -1765,6 +1890,14 @@ async def view_post(request: Request, pid: int):
     crows = conn.execute(
         "SELECT c.* FROM comments c WHERE c.post_id=? ORDER BY c.created_at ASC",
         (pid,)).fetchall()
+    if not owner_on:
+        # Comments from anyone in a block relationship with the viewer
+        # (either direction) don't render for that viewer; everyone
+        # else's view of the same thread is untouched.
+        _blocked_view = blocked_id_set(user["id"])
+        if _blocked_view:
+            crows = [c for c in crows
+                     if c["user_id"] not in _blocked_view]
     _authors = {}
 
     def _author(uid):
@@ -1893,10 +2026,11 @@ async def add_comment(request: Request, pid: int):
         if reply_target["user_id"] != user["id"]:
             notify(reply_target["user_id"], "reply",
                    f"{user['name']} replied to your comment.",
-                   f"/post/{pid}")
+                   f"/post/{pid}", actor_id=user["id"])
     elif p["user_id"] != user["id"]:
         notify(p["user_id"], "comment",
-               f"{user['name']} commented on your post.", f"/post/{pid}")
+               f"{user['name']} commented on your post.", f"/post/{pid}",
+               actor_id=user["id"])
     return redir(f"/post/{pid}")
 
 
@@ -2321,7 +2455,8 @@ async def share_post(request: Request, pid: int):
     conn.close()
     if not exists and root["user_id"] != user["id"]:
         notify(root["user_id"], "share",
-               f"{user['name']} shared your post.", f"/post/{root['id']}")
+               f"{user['name']} shared your post.", f"/post/{root['id']}",
+               actor_id=user["id"])
     return back(request)
 
 
@@ -2589,6 +2724,11 @@ async def profile(request: Request, uid: int):
     prof = get_user(uid)
     if not prof:
         return redir("/home", "User not found.")
+    # A block in either direction makes the profile unavailable to the
+    # viewer (the owner context always sees through it).
+    if user["id"] != uid and not owner_on \
+            and blocked_either_way(user["id"], uid):
+        return render(request, "profile_unavailable.html", {})
     conn = db()
     # --- profile view tracking: count one view per viewer/viewed pair per hour,
     # never count self-views ---
@@ -2599,6 +2739,12 @@ async def profile(request: Request, uid: int):
             "SELECT 1 FROM profile_views WHERE viewer_id=? AND viewed_id=? "
             "AND viewed_at > datetime('now','-1 hour'))",
             (user["id"], uid, now_iso(), user["id"], uid))
+        # --- tap hygiene: visiting someone's profile clears the tap
+        # notifications they sent me (their tap note points at THIS
+        # profile), so a seen tap doesn't sit in the bell forever ---
+        conn.execute(
+            "DELETE FROM notifications WHERE user_id=? AND kind='tap' "
+            "AND link=?", (user["id"], f"/user/{uid}"))
         conn.commit()
     fcount = conn.execute(
         "SELECT COUNT(*) c FROM friendships WHERE status='accepted' AND "
@@ -2612,18 +2758,27 @@ async def profile(request: Request, uid: int):
         "SELECT post_id FROM hidden_posts WHERE user_id=?", (user["id"],)).fetchall()}
     conn.close()
     _, spot_classes = spot_style_for(prof)
+    status = req_status(user["id"], uid)
+    # Private profile: non-friends see a locked profile (public face
+    # only) — the owner, their friends, and the owner context see all.
+    locked = bool(prof.get("private_profile")) and user["id"] != uid \
+        and not owner_on and status != "friends"
     profile_ctx = {
         "id": prof["id"], "name": prof["name"], "bio": prof.get("bio", ""),
         "avatar": avatar_url(prof.get("avatar", "")),
         "created_at": fancy_time(prof["created_at"]),
         "friend_count": fcount,
         "is_self": user["id"] == uid,
-        "req_status": req_status(user["id"], uid),
+        "req_status": status,
         "tap_count": tcount,
         "is_verified": bool(prof.get("is_verified")),
         "verification_status": prof.get("verification_status") or "none",
         "background": avatar_url(prof.get("background", "")),
         "presence": presence_of(prof),
+        "is_private": bool(prof.get("private_profile")),
+        "is_private_locked": locked,
+        "muted_by_viewer": bool(user["id"] != uid
+                                and uid in muted_id_set(user["id"])),
         "spot_name": (prof.get("spot_name") or "").strip(),
         # The scope ALWAYS carries all three vars (owner's values or the
         # theme defaults) so a viewer's body-level spot can never cascade
@@ -2632,13 +2787,14 @@ async def profile(request: Request, uid: int):
         "spot_classes": spot_classes,
     }
     posts = []
-    for r in prows:
-        d = dict(r)
-        if (d.get("shared_post_id") or d["id"]) in hidden:
-            continue
-        card = post_card(d, user, owner_on)
-        if card:
-            posts.append(card)
+    if not locked:
+        for r in prows:
+            d = dict(r)
+            if (d.get("shared_post_id") or d["id"]) in hidden:
+                continue
+            card = post_card(d, user, owner_on)
+            if card:
+                posts.append(card)
     # On a profile page the PROFILE OWNER's background wins over the
     # viewer's own (render() only defaults page_bg when unset). Same for
     # the viewer's spot colors: blanked here, the owner's .spot-scope
@@ -2660,7 +2816,19 @@ async def profile_edit_page(request: Request):
     else:
         pres = presence_of(user)
         status_label = pres["label"] if pres else "Offline"
+    conn = db()
+    muted_people = [{"id": r["id"], "name": r["name"]} for r in conn.execute(
+        "SELECT u.id, u.name FROM mutes m JOIN users u ON u.id=m.muted_id "
+        "WHERE m.muter_id=? ORDER BY u.name", (user["id"],)).fetchall()]
+    blocked_people = [{"id": r["id"], "name": r["name"]} for r in
+                      conn.execute(
+        "SELECT u.id, u.name FROM blocks b JOIN users u "
+        "ON u.id=b.blocked_id WHERE b.blocker_id=? ORDER BY u.name",
+        (user["id"],)).fetchall()]
+    conn.close()
     return render(request, "profile_edit.html", {
+        "muted_people": muted_people,
+        "blocked_people": blocked_people,
         "profile": {"id": user["id"], "name": user["name"],
                     "bio": user.get("bio", ""),
                     "avatar": avatar_url(user.get("avatar", "")),
@@ -2668,6 +2836,8 @@ async def profile_edit_page(request: Request):
                     "is_verified": bool(user.get("is_verified")),
                     "verification_status": user.get("verification_status") or "none",
                     "status_mode": mode,
+                    "private_profile": 1 if user.get("private_profile")
+                    else 0,
                     "inbox_status": 1 if user.get("inbox_status") is None
                     else (1 if user.get("inbox_status") else 0),
                     "status_label": status_label,
@@ -2693,6 +2863,26 @@ async def settings_status(request: Request):
     conn.commit()
     conn.close()
     return redir("/settings/profile", "Your status settings were saved.")
+
+
+@app.post("/settings/privacy")
+async def settings_privacy(request: Request):
+    """Private profile toggle: when on, only the user's friends can see
+    their profile and their posts (owner context always can)."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    on = 1 if (form.get("private_profile") or "") == "1" else 0
+    conn = db()
+    conn.execute("UPDATE users SET private_profile=? WHERE id=?",
+                 (on, user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile",
+                 "Your profile is now private — only your friends can "
+                 "see it." if on else
+                 "Your profile is now public.")
 
 
 @app.post("/settings/spot")
@@ -2843,6 +3033,9 @@ async def friend_request(request: Request, uid: int):
     target = get_user(uid)
     if not target:
         return back(request, "/friends")
+    if blocked_either_way(user["id"], uid):
+        return redir("/friends",
+                     "You can't send a friend request to this person.")
     conn = db()
     exists = conn.execute(
         "SELECT 1 FROM friendships WHERE (user_id=? AND friend_id=?) OR "
@@ -2855,10 +3048,12 @@ async def friend_request(request: Request, uid: int):
     conn.close()
     if not exists:
         notify(uid, "friend_request",
-               f"{user['name']} sent you a friend request.", "/friends")
-        send_push(uid, f"👋 {user['name']} sent you a friend request",
-                  "Open HERE to see it and accept.",
-                  "/friends", tag=f"friend-{user['id']}")
+               f"{user['name']} sent you a friend request.", "/friends",
+               actor_id=user["id"])
+        if notifications_allowed(uid, user["id"]):
+            send_push(uid, f"👋 {user['name']} sent you a friend request",
+                      "Open HERE to see it and accept.",
+                      "/friends", tag=f"friend-{user['id']}")
     return back(request, "/friends")
 
 
@@ -2936,8 +3131,98 @@ async def tap(request: Request, uid: int):
                  (user["id"], uid, now_iso()))
     conn.commit()
     conn.close()
-    notify(uid, "tap", f"{user['name']} tapped you. 👆", f"/user/{user['id']}")
+    notify(uid, "tap", f"{user['name']} tapped you. 👆", f"/user/{user['id']}",
+           actor_id=user["id"])
+    # Answering a tap clears the tap notifications THAT person sent me:
+    # their tap note points at their profile, and once I've tapped back
+    # it has done its job.
+    conn = db()
+    conn.execute(
+        "DELETE FROM notifications WHERE user_id=? AND kind='tap' "
+        "AND link=?", (user["id"], f"/user/{uid}"))
+    conn.commit()
+    conn.close()
     return back(request)
+
+
+# ---------------- silence (mute) + block ----------------
+@app.post("/mute/{uid}")
+async def mute_user(request: Request, uid: int):
+    """Silence a user: their actions stop notifying/pushing me and
+    their posts leave my home feed. They are never told, we stay
+    friends, and they can still message me (silently)."""
+    user, err = require_login(request)
+    if err:
+        return err
+    if uid == user["id"] or not get_user(uid):
+        return back(request, "/home")
+    conn = db()
+    conn.execute(
+        "INSERT OR IGNORE INTO mutes(muter_id, muted_id, created_at) "
+        "VALUES(?,?,?)", (user["id"], uid, now_iso()))
+    conn.commit()
+    conn.close()
+    return back(request, f"/user/{uid}")
+
+
+@app.post("/unmute/{uid}")
+async def unmute_user(request: Request, uid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("DELETE FROM mutes WHERE muter_id=? AND muted_id=?",
+                 (user["id"], uid))
+    conn.commit()
+    conn.close()
+    return back(request, f"/user/{uid}")
+
+
+@app.post("/block/{uid}")
+async def block_user(request: Request, uid: int):
+    """Block a user: one row severs the pair — friendship (either
+    direction, any status) and any mutes between them are deleted in
+    the same pass — and blocked_either_way() enforcement hides each
+    from the other everywhere. Unblocking does NOT restore friendship."""
+    user, err = require_login(request)
+    if err:
+        return err
+    if uid == user["id"]:
+        return redir("/home", "You can't block yourself.")
+    target = get_user(uid)
+    if not target:
+        return redir("/home", "User not found.")
+    conn = db()
+    conn.execute(
+        "INSERT OR IGNORE INTO blocks(blocker_id, blocked_id, "
+        "created_at) VALUES(?,?,?)", (user["id"], uid, now_iso()))
+    conn.execute(
+        "DELETE FROM friendships WHERE (user_id=? AND friend_id=?) OR "
+        "(user_id=? AND friend_id=?)",
+        (user["id"], uid, uid, user["id"]))
+    conn.execute(
+        "DELETE FROM mutes WHERE (muter_id=? AND muted_id=?) OR "
+        "(muter_id=? AND muted_id=?)",
+        (user["id"], uid, uid, user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/home", f"You blocked {target['name']}. You won't see "
+                          f"each other on HERE.")
+
+
+@app.post("/unblock/{uid}")
+async def unblock_user(request: Request, uid: int):
+    """Remove MY block on a user. Their block on me (if any) stays, and
+    the friendship a block removed is NOT restored."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("DELETE FROM blocks WHERE blocker_id=? AND blocked_id=?",
+                 (user["id"], uid))
+    conn.commit()
+    conn.close()
+    return back(request, "/settings/profile")
 
 
 # ---------------- messages ----------------
@@ -2971,6 +3256,7 @@ async def inbox(request: Request):
     if err:
         return err
     box = (request.query_params.get("box") or "inbox").strip()
+    blocked = blocked_id_set(user["id"])
     conn = db()
     if box == "sent":
         rows = conn.execute(
@@ -2989,7 +3275,7 @@ async def inbox(request: Request):
                      {"last_seen_at": r["rlast"], "status_mode": r["rmode"],
                       "inbox_status": r["rinbox"]}, inbox=True),
                  "body": r["body"], "created_at": fancy_time(r["created_at"])}
-                for r in rows]
+                for r in rows if r["receiver_id"] not in blocked]
         return render(request, "inbox.html",
                       {"box": "sent", "threads": [], "sent": sent})
     rows = conn.execute(
@@ -3001,6 +3287,10 @@ async def inbox(request: Request):
     threads = []
     for r in rows:
         fid = r["fid"]
+        if fid in blocked:
+            # Conversations with blocked-either-way users leave the
+            # inbox for BOTH parties (the rows themselves stay put).
+            continue
         f = conn.execute(
             "SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
             "FROM users WHERE id=?", (fid,)).fetchone()
@@ -3038,6 +3328,8 @@ async def thread(request: Request, fid: int):
     friend = get_user(fid)
     if not friend:
         return redir("/messages", "User not found.")
+    if blocked_either_way(user["id"], fid):
+        return redir("/messages", "You can't message this person.")
     conn = db()
     conn.execute(
         "UPDATE messages SET is_read=1 WHERE sender_id=? AND receiver_id=?",
@@ -3080,6 +3372,8 @@ async def send_message(request: Request, fid: int):
     friend = get_user(fid)
     if not friend:
         return redir("/messages", "User not found.")
+    if blocked_either_way(user["id"], fid):
+        return redir("/messages", "You can't message this person.")
     form = await request.form()
     body = (form.get("body") or "").strip()
     if not body:
@@ -3093,10 +3387,11 @@ async def send_message(request: Request, fid: int):
     conn.close()
     flag_item("message", mid, user["id"], user["name"], body)
     notify(fid, "message", f"New message from {user['name']}.",
-           f"/messages/{user['id']}")
+           f"/messages/{user['id']}", actor_id=user["id"])
     preview = body if len(body) <= 80 else body[:79] + "…"
-    send_push(fid, f"💬 {user['name']}", preview,
-              f"/messages/{user['id']}", tag=f"msg-{user['id']}")
+    if notifications_allowed(fid, user["id"]):
+        send_push(fid, f"💬 {user['name']}", preview,
+                  f"/messages/{user['id']}", tag=f"msg-{user['id']}")
     return redir(f"/messages/{fid}")
 
 
@@ -3257,7 +3552,8 @@ def _sweep_calls(conn):
             notify(call["callee_id"], "call",
                    f"Missed {_call_label(call['kind']).lower()} call "
                    f"from {caller['name']}.",
-                   f"/messages/{call['caller_id']}")
+                   f"/messages/{call['caller_id']}",
+                   actor_id=call["caller_id"])
 
 
 def _live_call_for(conn, uid):
@@ -3325,6 +3621,10 @@ async def call_start(request: Request):
     if not target or target_id == user["id"]:
         return JSONResponse({"ok": False, "error": "User not found."},
                             status_code=404)
+    if blocked_either_way(user["id"], target_id):
+        return JSONResponse(
+            {"ok": False, "error": "You can't call this person."},
+            status_code=403)
     # Ken's rule: direct calls are friends-only. Anyone else must send a
     # call request and be approved first (see /call-requests).
     if target_id not in friend_id_set(user["id"]):
@@ -3363,12 +3663,14 @@ async def call_start(request: Request):
     conn.close()
     # Buzz the callee's phone too — a ringing call shouldn't have to
     # wait for them to wander past an open HERE tab. Short TTL: a call
-    # push that arrives after the ring is worse than none.
-    send_push(target_id,
-              f"{_call_icon(kind)} {user['name']} is calling you…",
-              f"Incoming {_call_label(kind).lower()} call — tap to "
-              f"answer.", f"/messages/{user['id']}",
-              tag=f"call-{cid}", ttl=60)
+    # push that arrives after the ring is worse than none. A callee who
+    # silenced the caller gets no buzz (the in-app ring still shows).
+    if notifications_allowed(target_id, user["id"]):
+        send_push(target_id,
+                  f"{_call_icon(kind)} {user['name']} is calling you…",
+                  f"Incoming {_call_label(kind).lower()} call — tap to "
+                  f"answer.", f"/messages/{user['id']}",
+                  tag=f"call-{cid}", ttl=60)
     return JSONResponse({"ok": True, "call": out})
 
 
@@ -3459,7 +3761,7 @@ async def call_decline(request: Request, cid: int):
         flag_item("message", mid, user["id"], user["name"], note)
         notify(call["caller_id"], "message",
                f"New message from {user['name']}.",
-               f"/messages/{user['id']}")
+               f"/messages/{user['id']}", actor_id=user["id"])
     return JSONResponse({"ok": True})
 
 
@@ -3619,6 +3921,10 @@ async def call_request_create(request: Request):
     if not target or target_id == user["id"]:
         return JSONResponse({"ok": False, "error": "User not found."},
                             status_code=404)
+    if blocked_either_way(user["id"], target_id):
+        return JSONResponse(
+            {"ok": False, "error": "You can't call this person."},
+            status_code=403)
     if target_id in friend_id_set(user["id"]):
         return JSONResponse({
             "ok": False, "friends": True,
@@ -3672,12 +3978,13 @@ async def call_request_create(request: Request):
     notify(target_id, "call_request",
            f"{user['name']} wants to {_call_label(kind).lower()} call "
            f"you. Approve their call request to start the call.",
-           f"/messages/{user['id']}")
-    send_push(target_id,
-              f"📞 {user['name']} wants to call you — tap to review",
-              f"{_call_label(kind)} call request — open HERE to "
-              f"approve or decline it.",
-              f"/messages/{user['id']}", tag=f"callreq-{rid}")
+           f"/messages/{user['id']}", actor_id=user["id"])
+    if notifications_allowed(target_id, user["id"]):
+        send_push(target_id,
+                  f"📞 {user['name']} wants to call you — tap to review",
+                  f"{_call_label(kind)} call request — open HERE to "
+                  f"approve or decline it.",
+                  f"/messages/{user['id']}", tag=f"callreq-{rid}")
     return JSONResponse({"ok": True, "request": out})
 
 
@@ -3802,6 +4109,21 @@ async def notifications_page(request: Request):
     return render(request, "notifications.html", {"notes": notes})
 
 
+@app.post("/notifications/clear")
+async def notifications_clear(request: Request):
+    """Clear ALL of the caller's notifications — the bell starts over
+    from empty. Only the caller's own rows are touched."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("DELETE FROM notifications WHERE user_id=?",
+                 (user["id"],))
+    conn.commit()
+    conn.close()
+    return redir("/notifications", "All notifications cleared.")
+
+
 # ---------------- discover ----------------
 @app.get("/discover", response_class=HTMLResponse)
 async def discover(request: Request):
@@ -3810,7 +4132,7 @@ async def discover(request: Request):
         return err
     return render(request, "discover.html",
                   {"people": discover_people(user["id"], 20),
-                   "trends": trending_topics(15)})
+                   "trends": trending_topics(15, user["id"])})
 
 
 # ---------------- search ----------------
@@ -3831,18 +4153,25 @@ async def search(request: Request):
         ors = " OR ".join(["name LIKE ?"] * len(tokens))
         params = [f"%{t}%" for t in tokens]
         urows = conn.execute(
-            f"SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
+            f"SELECT id,name,avatar,last_seen_at,status_mode,inbox_status,"
+            f"private_profile "
             f"FROM users WHERE ({ors}) OR email LIKE ? "
             f"ORDER BY CASE WHEN name LIKE ? THEN 0 ELSE 1 END, name LIMIT 50",
             params + [f"%{q}%", f"%{q}%"]).fetchall()
         prows = conn.execute(
             "SELECT id,name,ptype FROM pages WHERE name LIKE ? ORDER BY name LIMIT 50",
             (f"%{q}%",)).fetchall()
+        # People search still FINDS private users (with a 🔒 marker, so
+        # they can be friended) — but anyone in a block relationship
+        # with the viewer (either direction) is excluded entirely.
+        _blocked_search = blocked_id_set(user["id"])
         users = [{"id": r["id"], "name": r["name"],
                   "avatar": avatar_url(r["avatar"]),
                   "presence": presence_of(r),
                   "is_self": r["id"] == user["id"],
-                  "req": req_status(user["id"], r["id"])} for r in urows]
+                  "is_private": bool(r["private_profile"]),
+                  "req": req_status(user["id"], r["id"])}
+                 for r in urows if r["id"] not in _blocked_search]
         pages = []
         for r in prows:
             joined = bool(conn.execute(
