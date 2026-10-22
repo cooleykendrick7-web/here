@@ -30,11 +30,14 @@ rebuild it fresh for HERE.
 - story_views(story_id, user_id, viewed_at) — UNIQUE(story_id, user_id)
 - friendships(id, user_id, friend_id, status TEXT 'pending'|'accepted', created_at) — one row per direction is NOT needed; single row: user_id=requester, friend_id=target. accepted => mutual.
 - messages(id, sender_id, receiver_id, body, is_read INTEGER DEFAULT 0, created_at)
+- calls(id, caller_id, callee_id, kind TEXT ('voice'|'video'), status TEXT ('ringing'|'active'|'ended'|'declined'|'missed'|'busy'), created_at, answered_at NULL, ended_at NULL) — voice/video calls (WebRTC; media is phone-to-phone, never stored/relayed). 45s ring -> 'missed' (lazy sweep on any call read). Every finished call drops ONE system note into the pair's messages thread (e.g. "📞 Voice call · 2:35", "📹 Missed video call", "📞 Call declined", "📞 Call busy")
+- call_signals(id, call_id, sender_id, type TEXT ('offer'|'answer'|'ice'|'hangup'), payload TEXT (JSON), created_at) — WebRTC signaling, polled by the other participant with a ?since=<id> cursor; payload capped at 64KB
+- call_requests(id, requester_id, target_id, kind TEXT ('voice'|'video'), status TEXT ('pending'|'approved'|'declined'|'expired'), created_at, responded_at NULL) — Ken's rule: only friends can be called directly; non-friends need an approved call request. One pending request per pair/direction, pending expires after 24h (lazy), a decline blocks re-requesting that target for 24h
 - pages(id, owner_id, name, ptype TEXT ('community'|'market'|'fan_club'|'seller'), description DEFAULT '', cover DEFAULT '', is_verified INTEGER DEFAULT 0, verification_status TEXT DEFAULT 'none' ('none'|'pending'|'approved'|'declined'), created_at)
 - verification_requests(id, kind TEXT ('user'|'page'), target_id, requester_id, status TEXT 'pending'|'approved'|'declined' DEFAULT 'pending', created_at, reviewed_at TEXT NULL, note TEXT DEFAULT '')
 - page_members(page_id, user_id, created_at) — UNIQUE(page_id, user_id); owner auto-member
 - taps(id, tapper_id, tapped_id, created_at)
-- notifications(id, user_id, kind TEXT ('friend_request'|'tap'|'message'|'share'|'tag'), text, link, is_read INTEGER DEFAULT 0, created_at)
+- notifications(id, user_id, kind TEXT ('friend_request'|'tap'|'message'|'share'|'tag'|'call'|'call_request'), text, link, is_read INTEGER DEFAULT 0, created_at)
 - moderation_flags(id, item_type TEXT ('post'|'comment'|'message'|'story'), item_id INTEGER, author_id, reasons TEXT (comma-joined), excerpt TEXT, status TEXT 'pending'|'dismissed'|'removed' DEFAULT 'pending', created_at)
 - owner_sessions(token PRIMARY KEY, created_at)
 
@@ -143,6 +146,18 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | GET | /messages | inbox.html | box ('inbox'|'sent'); threads [{friend_id,friend_name,friend_avatar,last_body,last_at,unread}]; sent [{friend_id,friend_name,friend_avatar,body,created_at}] |
 | GET | /messages/{fid} | thread.html | friend {id,name,avatar}, msgs [{id,sender_id,body,created_at,mine}] |
 | POST | /messages/{fid} | field: body | -> redirect /messages/{fid} |
+| POST | /calls/start | JSON {user_id, kind ('voice'\|'video')} | JSON. Friends only (Ken's rule): non-friend -> {ok:false, needs_request:true}. Busy (either side already ringing/active) -> {ok:false, busy:true} + a 'busy' call row + thread note; caller already in a call -> 409. Success -> {ok:true, call} in 'ringing' |
+| GET | /calls/incoming | | JSON {incoming (ringing call for me), current (my live call either direction)} — feeds the global poller in base.html (incoming-call sheet + call re-attach) |
+| GET | /calls/{id} | | JSON call state; participants only (others 404) |
+| POST | /calls/{id}/answer | | callee only, ringing only -> 'active' + answered_at |
+| POST | /calls/{id}/decline | | callee only, ringing only -> 'declined' + thread note |
+| POST | /calls/{id}/end | (no body; sendBeacon-safe) | either participant; ringing+caller -> 'missed', ringing+callee -> 'declined', active -> 'ended'; idempotent; thread note + hangup signal |
+| POST | /calls/{id}/signal | JSON {type ('offer'\|'answer'\|'ice'\|'hangup'), payload} | participants only, live calls only; stores one signaling row |
+| GET | /calls/{id}/signals?since=N | | JSON {status, signals[]} — the OTHER side's signals after id N, in order |
+| POST | /call-requests | JSON {user_id, kind} | non-friends only (friends -> {ok:false, friends:true}); one pending per pair/direction (dup -> 409); declined within 24h -> 409 cooldown; notifies target; thread note if a conversation already exists |
+| GET | /call-requests/incoming | | JSON {requests[]} pending for me (feeds the poller's request sheet) |
+| POST | /call-requests/{id}/approve | | target only (others 404); creates the real call in 'ringing' (requester=caller) unless either side is mid-call (409, request stays pending); expired -> 409 |
+| POST | /call-requests/{id}/decline | | target only; -> 'declined' + thread note to the requester + 24h re-request cooldown |
 | GET | /notifications | notifications.html | notes [{id,kind,text,link,created_at,is_read}] (marks read on view) |
 | GET | /discover | discover.html | people [{id,name,avatar,req,views}] = non-friends ranked by profile views received in last 7 days (fallback: newest signups; excludes self/friends/pending), trends [{label,q,count}] = top #hashtags of last 7 days (fallback: most frequent meaningful words) |
 | GET | /search | search.html | q (token-split; ANY token matches first/last/display name, case-insensitive partial; exact-phrase ranks first), users [{id,name,avatar,is_self,req}], pages [{id,name,ptype,joined}], posts [post_cards, privacy-respecting] |

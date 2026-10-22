@@ -247,6 +247,39 @@ def init_db():
               "ON post_tags(post_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_hidden_from_post "
               "ON post_hidden_from(post_id)")
+    # --- voice/video calls (safe on existing DBs) ---
+    # Media flows phone-to-phone via WebRTC; these tables only carry the
+    # call state machine and the small signaling messages (SDP/ICE) the
+    # two browsers exchange while setting a call up.
+    c.execute("""CREATE TABLE IF NOT EXISTS calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        caller_id INTEGER NOT NULL, callee_id INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'voice',
+        status TEXT NOT NULL DEFAULT 'ringing',
+        created_at TEXT NOT NULL, answered_at TEXT, ended_at TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS call_signals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        call_id INTEGER NOT NULL, sender_id INTEGER NOT NULL,
+        type TEXT NOT NULL, payload TEXT DEFAULT '',
+        created_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_calls_callee "
+              "ON calls(callee_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_calls_caller "
+              "ON calls(caller_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_call_signals_call "
+              "ON call_signals(call_id, id)")
+    # --- call requests (Ken's rule: only friends can be called directly;
+    # anyone else must send a request the other person approves first) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS call_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        requester_id INTEGER NOT NULL, target_id INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'voice',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL, responded_at TEXT)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_callreq_target "
+              "ON call_requests(target_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_callreq_pair "
+              "ON call_requests(requester_id, target_id, status)")
     conn.commit()
     conn.close()
 
@@ -2143,14 +2176,25 @@ async def thread(request: Request, fid: int):
         "((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) "
         "ORDER BY created_at ASC",
         (user["id"], fid, fid, user["id"])).fetchall()
+    # Calling permissions for the header buttons: friends call directly;
+    # anyone else goes through a call request (pending one shown inline).
+    _sweep_call_requests(conn)
+    pending_req = _pending_request_between(conn, user["id"], fid)
     conn.close()
+    call_req = None
+    if pending_req:
+        call_req = {"id": pending_req["id"], "kind": pending_req["kind"],
+                    "direction": ("out" if pending_req["requester_id"] == user["id"]
+                                  else "in")}
     msgs = [{"id": r["id"], "sender_id": r["sender_id"], "body": r["body"],
              "created_at": fancy_time(r["created_at"]),
              "mine": r["sender_id"] == user["id"]} for r in rows]
     return render(request, "thread.html", {
         "friend": {"id": friend["id"], "name": friend["name"],
                    "avatar": avatar_url(friend.get("avatar", ""))},
-        "msgs": msgs})
+        "msgs": msgs,
+        "is_friend": fid in friend_id_set(user["id"]),
+        "call_req": call_req})
 
 
 @app.post("/messages/{fid}")
@@ -2176,6 +2220,589 @@ async def send_message(request: Request, fid: int):
     notify(fid, "message", f"New message from {user['name']}.",
            f"/messages/{user['id']}")
     return redir(f"/messages/{fid}")
+
+
+# ---------------- voice / video calls (WebRTC, DB-signaled) ----------------
+# Voice/video calls run on WebRTC: the media flows directly phone-to-phone
+# and never touches or gets stored on this server. The server only runs
+# the call state machine (calls table) and passes the small setup messages
+# (SDP offer/answer + ICE candidates, call_signals table) between the two
+# browsers, which poll for them — the same polling style as the rest of
+# HERE, no websockets. A finished call leaves ONE plain system note in the
+# pair's message thread, exactly like a phone's call log.
+CALL_RING_SECONDS = 45
+CALL_SIGNAL_TYPES = ("offer", "answer", "ice", "hangup")
+CALL_MAX_PAYLOAD = 65536  # an SDP blob is a few KB; 64KB is generous
+CALL_TERMINAL = ("ended", "declined", "missed", "busy")
+
+
+def _call_label(kind):
+    return "Video" if kind == "video" else "Voice"
+
+
+def _call_icon(kind):
+    return "📹" if kind == "video" else "📞"
+
+
+def _call_duration_text(call):
+    """'2:35' from answered_at -> ended_at (or now, while a call is live)."""
+    if not call.get("answered_at"):
+        return None
+    try:
+        start = datetime.fromisoformat(str(call["answered_at"]))
+        end = (datetime.fromisoformat(str(call["ended_at"]))
+               if call.get("ended_at") else datetime.now(timezone.utc))
+        secs = max(0, int((end - start).total_seconds()))
+    except Exception:
+        return None
+    return f"{secs // 60}:{secs % 60:02d}"
+
+
+def _call_note(conn, caller_id, callee_id, text):
+    """Drop ONE plain system note into the pair's thread (same messages
+    table normal chat uses, so it shows in the inbox like any message)."""
+    conn.execute(
+        "INSERT INTO messages(sender_id, receiver_id, body, is_read, "
+        "created_at) VALUES(?,?,?,0,?)",
+        (caller_id, callee_id, text, now_iso()))
+
+
+def _finish_call(conn, call, status, actor_id=None):
+    """Move a live call to a terminal state: stamp ended_at, drop the
+    thread note, and leave a hangup signal so the other side's call UI
+    stops right away instead of waiting for its next status poll."""
+    if call["status"] in CALL_TERMINAL:
+        return
+    ended = now_iso()
+    conn.execute("UPDATE calls SET status=?, ended_at=? WHERE id=?",
+                 (status, ended, call["id"]))
+    call = dict(call)
+    call["status"] = status
+    call["ended_at"] = ended
+    icon = _call_icon(call["kind"])
+    label = _call_label(call["kind"])
+    if status == "ended":
+        dur = _call_duration_text(call)
+        text = f"{icon} {label} call · {dur}" if dur else f"{icon} {label} call"
+    elif status == "declined":
+        text = f"{icon} Call declined"
+    elif status == "missed":
+        text = f"{icon} Missed {label.lower()} call"
+    else:  # busy
+        text = f"{icon} Call busy"
+    _call_note(conn, call["caller_id"], call["callee_id"], text)
+    conn.execute(
+        "INSERT INTO call_signals(call_id, sender_id, type, payload, "
+        "created_at) VALUES(?,?,'hangup','',?)",
+        (call["id"], actor_id or call["caller_id"], now_iso()))
+
+
+def _sweep_calls(conn):
+    """Lazy ring timeout, run on every call read/start: a call still
+    ringing after CALL_RING_SECONDS becomes a missed call (thread note
+    plus a bell note for the person who was rung)."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=CALL_RING_SECONDS)).isoformat()
+    stale = conn.execute(
+        "SELECT * FROM calls WHERE status='ringing' AND created_at<?",
+        (cutoff,)).fetchall()
+    if not stale:
+        return
+    missed = []
+    for row in stale:
+        call = dict(row)
+        _finish_call(conn, call, "missed", actor_id=call["caller_id"])
+        missed.append(call)
+    # Commit BEFORE notify(): it writes through its own connection, and
+    # SQLite would refuse it ("database is locked") while this connection
+    # still holds the sweep's uncommitted writes.
+    conn.commit()
+    for call in missed:
+        caller = get_user(call["caller_id"])
+        if caller:
+            notify(call["callee_id"], "call",
+                   f"Missed {_call_label(call['kind']).lower()} call "
+                   f"from {caller['name']}.",
+                   f"/messages/{call['caller_id']}")
+
+
+def _live_call_for(conn, uid):
+    """The user's current ringing/active call row (dict), or None."""
+    r = conn.execute(
+        "SELECT * FROM calls WHERE status IN ('ringing','active') AND "
+        "(caller_id=? OR callee_id=?) ORDER BY id DESC LIMIT 1",
+        (uid, uid)).fetchone()
+    return dict(r) if r else None
+
+
+def _call_json(call, viewer_id):
+    other_id = (call["callee_id"] if call["caller_id"] == viewer_id
+                else call["caller_id"])
+    other = get_user(other_id) or {}
+    return {
+        "id": call["id"], "kind": call["kind"], "status": call["status"],
+        "i_am_caller": call["caller_id"] == viewer_id,
+        "created_at": call["created_at"],
+        "answered_at": call["answered_at"], "ended_at": call["ended_at"],
+        "other": {"id": other_id,
+                  "name": other.get("name", "Deleted user"),
+                  "avatar": avatar_url(other.get("avatar", ""))},
+    }
+
+
+def _participant_call(request, cid):
+    """(user, call, err) for the /calls/{cid} endpoints. Only the two
+    people on the call may touch it; everyone else gets a 404 so call
+    ids can't be probed."""
+    user = current_user(request)
+    if not user:
+        return None, None, JSONResponse({"ok": False, "error": "login"},
+                                        status_code=401)
+    conn = db()
+    _sweep_calls(conn)
+    row = conn.execute("SELECT * FROM calls WHERE id=?", (cid,)).fetchone()
+    conn.close()
+    if not row:
+        return None, None, JSONResponse({"ok": False, "error": "not found"},
+                                        status_code=404)
+    call = dict(row)
+    if user["id"] not in (call["caller_id"], call["callee_id"]):
+        return None, None, JSONResponse({"ok": False, "error": "not found"},
+                                        status_code=404)
+    return user, call, None
+
+
+@app.post("/calls/start")
+async def call_start(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        target_id = int(data.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target_id = 0
+    kind = data.get("kind") if data.get("kind") in ("voice", "video") else "voice"
+    target = get_user(target_id)
+    if not target or target_id == user["id"]:
+        return JSONResponse({"ok": False, "error": "User not found."},
+                            status_code=404)
+    # Ken's rule: direct calls are friends-only. Anyone else must send a
+    # call request and be approved first (see /call-requests).
+    if target_id not in friend_id_set(user["id"]):
+        return JSONResponse({
+            "ok": False, "needs_request": True,
+            "error": f"You can only call friends directly. Send "
+                     f"{target['name']} a call request — they have to "
+                     f"approve it before the call can start."})
+    conn = db()
+    _sweep_calls(conn)
+    if _live_call_for(conn, user["id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You are already in a call."},
+            status_code=409)
+    if _live_call_for(conn, target_id):
+        # Busy: record the attempt as a busy call + thread note, the way
+        # a phone logs it, and tell the caller straight away.
+        stamp = now_iso()
+        conn.execute(
+            "INSERT INTO calls(caller_id, callee_id, kind, status, "
+            "created_at, ended_at) VALUES(?,?,?,'busy',?,?)",
+            (user["id"], target_id, kind, stamp, stamp))
+        _call_note(conn, user["id"], target_id, f"{_call_icon(kind)} Call busy")
+        conn.commit()
+        conn.close()
+        return JSONResponse({"ok": False, "busy": True,
+                             "error": f"{target['name']} is on another call."})
+    cur = conn.execute(
+        "INSERT INTO calls(caller_id, callee_id, kind, status, created_at) "
+        "VALUES(?,?,?,'ringing',?)", (user["id"], target_id, kind, now_iso()))
+    cid = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM calls WHERE id=?", (cid,)).fetchone()
+    out = _call_json(dict(row), user["id"])
+    conn.close()
+    return JSONResponse({"ok": True, "call": out})
+
+
+@app.get("/calls/incoming")
+async def call_incoming(request: Request):
+    """Global poller feed: the ringing call waiting for ME (if any), plus
+    MY current live call in either direction, so any page can show the
+    incoming sheet or re-attach the call overlay after a navigation."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    _sweep_calls(conn)
+    inc = conn.execute(
+        "SELECT * FROM calls WHERE callee_id=? AND status='ringing' "
+        "ORDER BY id DESC LIMIT 1", (user["id"],)).fetchone()
+    current = _live_call_for(conn, user["id"])
+    conn.close()
+    return JSONResponse({
+        "ok": True,
+        "incoming": _call_json(dict(inc), user["id"]) if inc else None,
+        "current": _call_json(current, user["id"]) if current else None})
+
+
+@app.get("/calls/{cid}")
+async def call_state(request: Request, cid: int):
+    user, call, err = _participant_call(request, cid)
+    if err:
+        return err
+    return JSONResponse({"ok": True, "call": _call_json(call, user["id"])})
+
+
+@app.post("/calls/{cid}/answer")
+async def call_answer(request: Request, cid: int):
+    user, call, err = _participant_call(request, cid)
+    if err:
+        return err
+    if call["callee_id"] != user["id"] or call["status"] != "ringing":
+        return JSONResponse(
+            {"ok": False, "error": "This call can't be answered."},
+            status_code=409)
+    conn = db()
+    conn.execute(
+        "UPDATE calls SET status='active', answered_at=? WHERE id=?",
+        (now_iso(), cid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/calls/{cid}/decline")
+async def call_decline(request: Request, cid: int):
+    user, call, err = _participant_call(request, cid)
+    if err:
+        return err
+    if call["callee_id"] != user["id"] or call["status"] != "ringing":
+        return JSONResponse(
+            {"ok": False, "error": "This call can't be declined."},
+            status_code=409)
+    conn = db()
+    _finish_call(conn, call, "declined", actor_id=user["id"])
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/calls/{cid}/end")
+async def call_end(request: Request, cid: int):
+    """Hang up. Works for either side and takes no body, so the call UI
+    can fire it from beforeunload with sendBeacon. Idempotent: ending an
+    already-finished call is a no-op."""
+    user, call, err = _participant_call(request, cid)
+    if err:
+        return err
+    if call["status"] in CALL_TERMINAL:
+        return JSONResponse({"ok": True})
+    conn = db()
+    if call["status"] == "ringing":
+        # Caller hanging up before an answer = a missed call for the
+        # person being rung; the callee hanging up a ring = a decline.
+        if call["caller_id"] == user["id"]:
+            _finish_call(conn, call, "missed", actor_id=user["id"])
+        else:
+            _finish_call(conn, call, "declined", actor_id=user["id"])
+    else:  # active
+        _finish_call(conn, call, "ended", actor_id=user["id"])
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/calls/{cid}/signal")
+async def call_signal_send(request: Request, cid: int):
+    user, call, err = _participant_call(request, cid)
+    if err:
+        return err
+    if call["status"] not in ("ringing", "active"):
+        return JSONResponse({"ok": False, "error": "Call is over."},
+                            status_code=409)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    stype = data.get("type")
+    if stype not in CALL_SIGNAL_TYPES:
+        return JSONResponse({"ok": False, "error": "Bad signal type."},
+                            status_code=400)
+    payload = data.get("payload")
+    if not isinstance(payload, str):
+        payload = json.dumps(payload or {})
+    if len(payload) > CALL_MAX_PAYLOAD:
+        return JSONResponse({"ok": False, "error": "Signal too big."},
+                            status_code=400)
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO call_signals(call_id, sender_id, type, payload, "
+        "created_at) VALUES(?,?,?,?,?)",
+        (cid, user["id"], stype, payload, now_iso()))
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "id": sid})
+
+
+@app.get("/calls/{cid}/signals")
+async def call_signals_poll(request: Request, cid: int):
+    """Deliver the OTHER side's signals after ?since=<last id seen>, in
+    order, plus the call's current status so one poll drives the whole
+    call UI (ring timeouts and remote hangups included)."""
+    user, call, err = _participant_call(request, cid)
+    if err:
+        return err
+    try:
+        since = int(request.query_params.get("since") or 0)
+    except (TypeError, ValueError):
+        since = 0
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM call_signals WHERE call_id=? AND id>? AND "
+        "sender_id!=? ORDER BY id ASC LIMIT 200",
+        (cid, since, user["id"])).fetchall()
+    fresh = conn.execute("SELECT status FROM calls WHERE id=?",
+                         (cid,)).fetchone()
+    conn.close()
+    sigs = []
+    for r in rows:
+        payload = r["payload"]
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            pass
+        sigs.append({"id": r["id"], "type": r["type"], "payload": payload,
+                     "created_at": r["created_at"]})
+    return JSONResponse({
+        "ok": True,
+        "status": fresh["status"] if fresh else call["status"],
+        "signals": sigs})
+
+
+# ---------------- call requests (non-friends must be approved) ----------------
+# Ken's rule, stated plainly: you can only call people you are friends
+# with. Calling anyone else starts here — a request the other person
+# must approve; approving creates the real (ringing) call above, and
+# from there the normal call flow takes over. A decline locks the
+# requester out for 24 hours so requests can't be spammed.
+CALL_REQUEST_TTL_HOURS = 24
+CALL_REQUEST_COOLDOWN_HOURS = 24
+
+
+def _sweep_call_requests(conn):
+    """Lazy expiry: a pending call request dies after 24 hours."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=CALL_REQUEST_TTL_HOURS)).isoformat()
+    conn.execute(
+        "UPDATE call_requests SET status='expired' "
+        "WHERE status='pending' AND created_at<?", (cutoff,))
+    conn.commit()
+
+
+def _pending_request_between(conn, a, b):
+    """The pending call request between a pair (either direction)."""
+    r = conn.execute(
+        "SELECT * FROM call_requests WHERE status='pending' AND "
+        "((requester_id=? AND target_id=?) OR (requester_id=? AND "
+        "target_id=?)) ORDER BY id DESC LIMIT 1", (a, b, b, a)).fetchone()
+    return dict(r) if r else None
+
+
+def _call_request_json(req):
+    requester = get_user(req["requester_id"]) or {}
+    target = get_user(req["target_id"]) or {}
+    return {
+        "id": req["id"], "kind": req["kind"], "status": req["status"],
+        "created_at": req["created_at"],
+        "requester": {"id": req["requester_id"],
+                      "name": requester.get("name", "Deleted user"),
+                      "avatar": avatar_url(requester.get("avatar", ""))},
+        "target": {"id": req["target_id"],
+                   "name": target.get("name", "Deleted user"),
+                   "avatar": avatar_url(target.get("avatar", ""))}}
+
+
+@app.post("/call-requests")
+async def call_request_create(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        target_id = int(data.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target_id = 0
+    kind = data.get("kind") if data.get("kind") in ("voice", "video") else "voice"
+    target = get_user(target_id)
+    if not target or target_id == user["id"]:
+        return JSONResponse({"ok": False, "error": "User not found."},
+                            status_code=404)
+    if target_id in friend_id_set(user["id"]):
+        return JSONResponse({
+            "ok": False, "friends": True,
+            "error": f"You're friends with {target['name']} — just call "
+                     f"them directly."})
+    conn = db()
+    _sweep_call_requests(conn)
+    cooldown_cutoff = (datetime.now(timezone.utc)
+                       - timedelta(hours=CALL_REQUEST_COOLDOWN_HOURS)).isoformat()
+    declined = conn.execute(
+        "SELECT id FROM call_requests WHERE requester_id=? AND "
+        "target_id=? AND status='declined' AND responded_at>? LIMIT 1",
+        (user["id"], target_id, cooldown_cutoff)).fetchone()
+    if declined:
+        conn.close()
+        return JSONResponse({
+            "ok": False, "cooldown": True,
+            "error": f"{target['name']} declined your call request — you "
+                     f"can send another one tomorrow."}, status_code=409)
+    dup = conn.execute(
+        "SELECT id FROM call_requests WHERE requester_id=? AND "
+        "target_id=? AND status='pending' LIMIT 1",
+        (user["id"], target_id)).fetchone()
+    if dup:
+        conn.close()
+        return JSONResponse({
+            "ok": False,
+            "error": f"You already have a call request waiting for "
+                     f"{target['name']}."}, status_code=409)
+    cur = conn.execute(
+        "INSERT INTO call_requests(requester_id, target_id, kind, status, "
+        "created_at) VALUES(?,?,?,'pending',?)",
+        (user["id"], target_id, kind, now_iso()))
+    rid = cur.lastrowid
+    # Note in the pair's thread — but only if they already have one, so a
+    # request never invents a conversation out of thin air.
+    has_thread = conn.execute(
+        "SELECT 1 FROM messages WHERE (sender_id=? AND receiver_id=?) OR "
+        "(sender_id=? AND receiver_id=?) LIMIT 1",
+        (user["id"], target_id, target_id, user["id"])).fetchone()
+    if has_thread:
+        _call_note(conn, user["id"], target_id,
+                   f"{_call_icon(kind)} Call request: {user['name']} wants "
+                   f"to {_call_label(kind).lower()} call — waiting for "
+                   f"approval")
+    conn.commit()
+    row = conn.execute("SELECT * FROM call_requests WHERE id=?",
+                       (rid,)).fetchone()
+    out = _call_request_json(dict(row))
+    conn.close()
+    notify(target_id, "call_request",
+           f"{user['name']} wants to {_call_label(kind).lower()} call "
+           f"you. Approve their call request to start the call.",
+           f"/messages/{user['id']}")
+    return JSONResponse({"ok": True, "request": out})
+
+
+@app.get("/call-requests/incoming")
+async def call_requests_incoming(request: Request):
+    """Pending call requests waiting for ME — feeds the global poller's
+    request sheet."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    _sweep_call_requests(conn)
+    rows = conn.execute(
+        "SELECT * FROM call_requests WHERE target_id=? AND "
+        "status='pending' ORDER BY id DESC LIMIT 20",
+        (user["id"],)).fetchall()
+    conn.close()
+    return JSONResponse({"ok": True,
+                         "requests": [_call_request_json(dict(r))
+                                      for r in rows]})
+
+
+def _target_request(request, rid):
+    """(user, req, err) — only the person the request was sent TO may
+    act on it; everyone else gets a 404."""
+    user = current_user(request)
+    if not user:
+        return None, None, JSONResponse({"ok": False, "error": "login"},
+                                        status_code=401)
+    conn = db()
+    _sweep_call_requests(conn)
+    row = conn.execute("SELECT * FROM call_requests WHERE id=?",
+                       (rid,)).fetchone()
+    conn.close()
+    if not row or row["target_id"] != user["id"]:
+        return None, None, JSONResponse({"ok": False, "error": "not found"},
+                                        status_code=404)
+    return user, dict(row), None
+
+
+@app.post("/call-requests/{rid}/approve")
+async def call_request_approve(request: Request, rid: int):
+    """Approving creates the real call in 'ringing' state (requester =
+    caller, approver = callee) and both clients are pulled into the
+    normal call UI by their pollers. The request stays usable if one
+    side is mid-call — approval just can't start a second call."""
+    user, req, err = _target_request(request, rid)
+    if err:
+        return err
+    if req["status"] != "pending":
+        msg = ("This call request has expired."
+               if req["status"] == "expired"
+               else "This call request was already answered.")
+        return JSONResponse({"ok": False, "error": msg}, status_code=409)
+    conn = db()
+    _sweep_calls(conn)
+    if _live_call_for(conn, user["id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You're on another call right now."},
+            status_code=409)
+    requester = get_user(req["requester_id"])
+    if _live_call_for(conn, req["requester_id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": f"{requester['name'] if requester else 'They'} is on "
+                      f"another call right now."}, status_code=409)
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO calls(caller_id, callee_id, kind, status, created_at) "
+        "VALUES(?,?,?,'ringing',?)",
+        (req["requester_id"], user["id"], req["kind"], stamp))
+    cid = cur.lastrowid
+    conn.execute(
+        "UPDATE call_requests SET status='approved', responded_at=? "
+        "WHERE id=?", (stamp, rid))
+    conn.commit()
+    row = conn.execute("SELECT * FROM calls WHERE id=?", (cid,)).fetchone()
+    out = _call_json(dict(row), user["id"])
+    conn.close()
+    return JSONResponse({"ok": True, "call": out})
+
+
+@app.post("/call-requests/{rid}/decline")
+async def call_request_decline(request: Request, rid: int):
+    user, req, err = _target_request(request, rid)
+    if err:
+        return err
+    if req["status"] != "pending":
+        msg = ("This call request has expired."
+               if req["status"] == "expired"
+               else "This call request was already answered.")
+        return JSONResponse({"ok": False, "error": msg}, status_code=409)
+    conn = db()
+    conn.execute(
+        "UPDATE call_requests SET status='declined', responded_at=? "
+        "WHERE id=?", (now_iso(), rid))
+    _call_note(conn, user["id"], req["requester_id"],
+               f"{_call_icon(req['kind'])} Call request declined")
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
 
 
 # ---------------- notifications ----------------
