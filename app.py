@@ -559,12 +559,21 @@ def render(request: Request, name, ctx=None):
         # logged-in site. Routes may override page_bg (profile pages show the
         # profile owner's background instead).
         ctx.setdefault("page_bg", avatar_url(u.get("background", "")))
+        # Same for the viewer's "Your Spot" colors: their text/bubble theme
+        # follows them site-wide via <body> vars (see base.html). Profile
+        # routes override these with "" — a profile page is ruled entirely
+        # by its owner's spot (its .spot-scope vars), never the viewer's.
+        v_style, v_classes = viewer_spot_for(u)
+        ctx.setdefault("viewer_spot_style", v_style)
+        ctx.setdefault("viewer_spot_classes", v_classes)
     else:
         ctx["user"] = None
         ctx["pending_count"] = 0
         ctx["unread_count"] = 0
         ctx["unread_msgs"] = 0
         ctx.setdefault("page_bg", "")
+        ctx.setdefault("viewer_spot_style", "")
+        ctx.setdefault("viewer_spot_classes", "")
     ctx.setdefault("flash", request.query_params.get("flash", ""))
     return templates.TemplateResponse(request, name, ctx)
 
@@ -2481,6 +2490,10 @@ async def audience_save(request: Request, pid: int):
 SPOT_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 SPOT_NAME_MAX = 60
 SPOT_OPACITY_MIN, SPOT_OPACITY_MAX = 30, 100
+# Theme defaults a spot falls back to (matches the glass look in base.html).
+SPOT_DEFAULT_TEXT = "#1c1e21"
+SPOT_DEFAULT_CARD_RGB = (232, 232, 238)
+SPOT_DEFAULT_ALPHA = "0.55"
 
 
 def _spot_hex_ok(v):
@@ -2492,37 +2505,78 @@ def _hex_to_rgb(h):
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def spot_style_for(u):
-    """CSS vars + scope classes for the profile owner's "Your Spot" look.
-
-    Returns (style_attr, classes). Only SET values are emitted; with
-    nothing set both are empty and the profile renders exactly as the
-    default theme. The vars are consumed by the .spot-scope rules in
-    base.html, which exist only on /user/{id} pages — a user's spot
-    never leaks into the home feed or anyone else's pages.
-    """
-    parts, classes = [], []
+def _spot_values(u):
+    """(text, rgb, alpha) chosen by user u — each None when unset/invalid."""
     text = (u.get("spot_text_color") or "").strip()
-    if _spot_hex_ok(text):
-        parts.append(f"--spot-text:{text.lower()}")
-        classes.append("spot-has-text")
+    text = text.lower() if _spot_hex_ok(text) else None
     card = (u.get("spot_card_color") or "").strip()
-    card_ok = _spot_hex_ok(card)
-    if card_ok:
-        r, g, b = _hex_to_rgb(card)
-        parts.append(f"--spot-card-rgb:{r},{g},{b}")
+    rgb = _hex_to_rgb(card) if _spot_hex_ok(card) else None
+    alpha = None
     op = u.get("spot_card_opacity")
     if op is not None:
         try:
             op = max(SPOT_OPACITY_MIN, min(SPOT_OPACITY_MAX, int(op)))
         except (TypeError, ValueError):
             op = None
-    if op is not None:
-        alpha = f"{op / 100:.2f}".rstrip("0").rstrip(".")
+        if op is not None:
+            alpha = f"{op / 100:.2f}".rstrip("0").rstrip(".")
+    return text, rgb, alpha
+
+
+def spot_style_for(u):
+    """CSS vars + scope classes for the profile owner's "Your Spot" look.
+
+    Returns (style_attr, classes). Only SET values are emitted; with
+    nothing set both are empty and the profile renders exactly as the
+    default theme. The vars are consumed by the .spot-scope rules in
+    base.html (profile pages) and, via viewer_spot_for(), by the
+    body-level rules that let a viewer's own spot follow them around
+    the rest of the site.
+    """
+    text, rgb, alpha = _spot_values(u)
+    parts, classes = [], []
+    if text:
+        parts.append(f"--spot-text:{text}")
+        classes.append("spot-has-text")
+    if rgb:
+        parts.append(f"--spot-card-rgb:{rgb[0]},{rgb[1]},{rgb[2]}")
+    if alpha is not None:
         parts.append(f"--spot-card-alpha:{alpha}")
-    if card_ok or op is not None:
+    if rgb or alpha is not None:
         classes.append("spot-has-card")
     return ";".join(parts), " ".join(classes)
+
+
+def spot_scope_style_for(u):
+    """All three spot vars for the /user/{id} .spot-scope, ALWAYS emitted.
+
+    The owner's chosen values where set, the theme defaults everywhere
+    else. Because every var is defined inline on the scope, a viewer's
+    body-level spot vars can never cascade into somebody else's profile:
+    an unset profile renders with exactly the default values.
+    """
+    text, rgb, alpha = _spot_values(u)
+    if not text:
+        text = SPOT_DEFAULT_TEXT
+    if not rgb:
+        rgb = SPOT_DEFAULT_CARD_RGB
+    if alpha is None:
+        alpha = SPOT_DEFAULT_ALPHA
+    return (f"--spot-text:{text};--spot-card-rgb:{rgb[0]},{rgb[1]},{rgb[2]}"
+            f";--spot-card-alpha:{alpha}")
+
+
+def viewer_spot_for(u):
+    """A logged-in viewer's own spot as (style_attr, body classes).
+
+    Same vars as spot_style_for(), but the marker classes are the
+    body-level viewer-spot-text / viewer-spot-card pair that base.html
+    roots its site-wide rules at. Empty strings when nothing is set.
+    """
+    style, classes = spot_style_for(u)
+    classes = (classes.replace("spot-has-text", "viewer-spot-text")
+                      .replace("spot-has-card", "viewer-spot-card"))
+    return style, classes
 
 
 # ---------------- profile / settings ----------------
@@ -2557,7 +2611,7 @@ async def profile(request: Request, uid: int):
     hidden = {r["post_id"] for r in conn.execute(
         "SELECT post_id FROM hidden_posts WHERE user_id=?", (user["id"],)).fetchall()}
     conn.close()
-    spot_style, spot_classes = spot_style_for(prof)
+    _, spot_classes = spot_style_for(prof)
     profile_ctx = {
         "id": prof["id"], "name": prof["name"], "bio": prof.get("bio", ""),
         "avatar": avatar_url(prof.get("avatar", "")),
@@ -2571,7 +2625,10 @@ async def profile(request: Request, uid: int):
         "background": avatar_url(prof.get("background", "")),
         "presence": presence_of(prof),
         "spot_name": (prof.get("spot_name") or "").strip(),
-        "spot_style": spot_style,
+        # The scope ALWAYS carries all three vars (owner's values or the
+        # theme defaults) so a viewer's body-level spot can never cascade
+        # into this profile — see spot_scope_style_for().
+        "spot_style": spot_scope_style_for(prof),
         "spot_classes": spot_classes,
     }
     posts = []
@@ -2583,10 +2640,13 @@ async def profile(request: Request, uid: int):
         if card:
             posts.append(card)
     # On a profile page the PROFILE OWNER's background wins over the
-    # viewer's own (render() only defaults page_bg when unset).
+    # viewer's own (render() only defaults page_bg when unset). Same for
+    # the viewer's spot colors: blanked here, the owner's .spot-scope
+    # vars rule the whole page.
     return render(request, "profile.html",
                   {"profile": profile_ctx, "posts": posts,
-                   "page_bg": profile_ctx["background"]})
+                   "page_bg": profile_ctx["background"],
+                   "viewer_spot_style": "", "viewer_spot_classes": ""})
 
 
 @app.get("/settings/profile", response_class=HTMLResponse)
