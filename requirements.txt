@@ -9,6 +9,7 @@ MarkupSafe==3.0.4
 pydantic==2.14.1
 pydantic_core==2.50.1
 python-multipart==0.0.32
+pywebpush==2.5.0
 starlette==1.7.0
 uvicorn==0.54.0
 uvloop==0.23.0

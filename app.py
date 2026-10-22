@@ -11,12 +11,14 @@ owner_sessions; the owner password hash is baked in as OWNER_PW_HASH.
 
 Implements the binding contract in ROUTE_CONTRACT.md exactly.
 """
+import base64
 import html
 import json
 import os
 import re
 import secrets
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -28,6 +30,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import moderation
+
+# Web Push (phone notifications). Imported defensively: if the library
+# is ever missing, the site runs exactly as before with push disabled —
+# notifications must never be able to take HERE down.
+try:
+    from pywebpush import WebPushException, webpush as _webpush_send
+    from py_vapid import Vapid as _Vapid
+    _PUSH_OK = True
+except Exception:
+    _PUSH_OK = False
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("HERE_DB", os.path.join(BASE, "here.db"))
@@ -301,6 +313,22 @@ def init_db():
               "ON call_requests(target_id, status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_callreq_pair "
               "ON call_requests(requester_id, target_id, status)")
+    # --- phone push notifications (Web Push) ---
+    # app_settings is a tiny key/value store; it holds the VAPID private
+    # key (PEM) so the server's push identity survives restarts on the
+    # persistent disk. push_subscriptions holds one row per subscribed
+    # browser/device; endpoint is the push-service URL (unique).
+    c.execute("""CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL, auth TEXT NOT NULL,
+        user_agent TEXT DEFAULT '',
+        created_at TEXT NOT NULL, last_seen TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pushsubs_user "
+              "ON push_subscriptions(user_id)")
     conn.commit()
     conn.close()
 
@@ -550,6 +578,125 @@ def notify(user_id, kind, text, link=""):
         "VALUES(?,?,?,?,?)", (user_id, kind, text, link, now_iso()))
     conn.commit()
     conn.close()
+
+
+# ---------------- phone push notifications (Web Push) ----------------
+# Real OS-level notifications through the Web Push protocol: the phone's
+# push service (Apple/Google/Mozilla) delivers to the device and wakes
+# the service worker just long enough to show the notification — it
+# works even when HERE is completely closed, and nothing "runs in the
+# background". Platform rules that shape this feature:
+#   * iPhone: push exists ONLY inside the home-screen-installed web app
+#     (iOS 16.4+); a plain Safari tab has no PushManager at all.
+#   * Android Chrome: works in the installed PWA and in the browser.
+#   * Our native WebView wrappers (APK/IPA) do NOT support Web Push —
+#     the Settings / Get-the-app UI says so honestly.
+VAPID_SUBJECT = "mailto:cooleykendrick7@gmail.com"
+
+_vapid_cache = {}
+_vapid_lock = threading.Lock()
+
+
+def _vapid():
+    """(Vapid signer, public key as unpadded base64url) for this server.
+
+    The keypair is generated ONCE and the private key (PEM) is stored in
+    the app_settings table on the persistent disk. Regenerating it later
+    would orphan every existing subscription, so it is never rotated.
+    """
+    if "pair" in _vapid_cache:
+        return _vapid_cache["pair"]
+    with _vapid_lock:
+        if "pair" in _vapid_cache:
+            return _vapid_cache["pair"]
+        conn = db()
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key='vapid_private_pem'"
+        ).fetchone()
+        pem = row["value"] if row else None
+        if not pem:
+            fresh = _Vapid()
+            fresh.generate_keys()
+            pem = fresh.private_pem().decode()
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings(key, value) "
+                "VALUES('vapid_private_pem', ?)", (pem,))
+            conn.commit()
+        conn.close()
+        signer = _Vapid.from_pem(pem.encode())
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding, PublicFormat)
+        raw = signer.public_key.public_bytes(
+            Encoding.X962, PublicFormat.UncompressedPoint)
+        pub = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+        _vapid_cache["pair"] = (signer, pub)
+        return _vapid_cache["pair"]
+
+
+def _push_sub_count(user_id):
+    conn = db()
+    n = conn.execute(
+        "SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id=?",
+        (user_id,)).fetchone()["n"]
+    conn.close()
+    return n
+
+
+def send_push(user_id, title, body, url="/", tag="", ttl=86400):
+    """Fire-and-forget Web Push to every device the user subscribed.
+
+    Runs in a daemon thread and swallows ALL failures (dead endpoint,
+    push service down, library trouble): a notification must never be
+    able to break sending a message or starting a call. A 404/410 from
+    the push service means the subscription is gone for good (app
+    uninstalled / permission revoked) — the row is deleted.
+    """
+    if not user_id or not _PUSH_OK:
+        return
+
+    def _work():
+        try:
+            conn = db()
+            rows = conn.execute(
+                "SELECT * FROM push_subscriptions WHERE user_id=?",
+                (user_id,)).fetchall()
+            conn.close()
+            if not rows:
+                return
+            signer, _pub = _vapid()
+            payload = json.dumps(
+                {"title": title, "body": body, "url": url, "tag": tag})
+            for row in rows:
+                sub_info = {"endpoint": row["endpoint"],
+                            "keys": {"p256dh": row["p256dh"],
+                                     "auth": row["auth"]}}
+                try:
+                    _webpush_send(
+                        sub_info, data=payload, vapid_private_key=signer,
+                        vapid_claims={"sub": VAPID_SUBJECT},
+                        ttl=ttl, timeout=10)
+                    conn = db()
+                    conn.execute(
+                        "UPDATE push_subscriptions SET last_seen=? "
+                        "WHERE id=?", (now_iso(), row["id"]))
+                    conn.commit()
+                    conn.close()
+                except WebPushException as e:
+                    code = getattr(getattr(e, "response", None),
+                                   "status_code", None)
+                    if code in (404, 410):
+                        conn = db()
+                        conn.execute(
+                            "DELETE FROM push_subscriptions WHERE id=?",
+                            (row["id"],))
+                        conn.commit()
+                        conn.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    threading.Thread(target=_work, daemon=True).start()
 
 
 def save_upload(up, subdir, allowed, max_mb=0):
@@ -1124,6 +1271,113 @@ async def app_page(request: Request):
     if err:
         return err
     return render(request, "app.html")
+
+
+# ---------------- push subscription endpoints ----------------
+@app.get("/push/vapid-public-key")
+async def push_vapid_public_key():
+    # Public by design: browsers need the key to subscribe. It identifies
+    # this server to the push services (the private half never leaves).
+    if not _PUSH_OK:
+        return JSONResponse(
+            {"ok": False, "error": "Push is unavailable on this server."},
+            status_code=503)
+    try:
+        _signer, pub = _vapid()
+    except Exception:
+        return JSONResponse(
+            {"ok": False, "error": "Push is unavailable on this server."},
+            status_code=503)
+    return JSONResponse({"ok": True, "public_key": pub})
+
+
+@app.post("/push/subscribe")
+async def push_subscribe(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    endpoint = str(data.get("endpoint") or "").strip()
+    keys = data.get("keys") or {}
+    if not isinstance(keys, dict):
+        keys = {}
+    p256dh = str(keys.get("p256dh") or "").strip()
+    auth = str(keys.get("auth") or "").strip()
+    if not endpoint.startswith(("https://", "http://")) \
+            or not p256dh or not auth:
+        return JSONResponse(
+            {"ok": False, "error": "That subscription doesn't look "
+                                   "right."}, status_code=400)
+    # One row per endpoint: re-subscribing (or a different account on
+    # the same browser) replaces the row's owner + keys.
+    stamp = now_iso()
+    conn = db()
+    conn.execute(
+        "INSERT INTO push_subscriptions(user_id, endpoint, p256dh, auth, "
+        "user_agent, created_at, last_seen) VALUES(?,?,?,?,?,?,?) "
+        "ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id, "
+        "p256dh=excluded.p256dh, auth=excluded.auth, "
+        "user_agent=excluded.user_agent, last_seen=excluded.last_seen",
+        (user["id"], endpoint, p256dh, auth,
+         (request.headers.get("user-agent") or "")[:300], stamp, stamp))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/push/unsubscribe")
+async def push_unsubscribe(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    endpoint = str(data.get("endpoint") or "").strip()
+    if endpoint:
+        # Scoped to the caller's own subscriptions: naming somebody
+        # else's endpoint can't remove their row.
+        conn = db()
+        conn.execute(
+            "DELETE FROM push_subscriptions WHERE endpoint=? AND "
+            "user_id=?", (endpoint, user["id"]))
+        conn.commit()
+        conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/push/status")
+async def push_status(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    return JSONResponse({"ok": True, "devices": _push_sub_count(user["id"])})
+
+
+@app.post("/push/test")
+async def push_test(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    n = _push_sub_count(user["id"])
+    if n:
+        send_push(user["id"], "🔔 HERE",
+                  "Test notification — if this buzzed your phone, "
+                  "HERE notifications work.",
+                  "/app", tag="test")
+    return JSONResponse({"ok": True, "devices": n})
 
 
 # ---------------- root / auth ----------------
@@ -2176,6 +2430,9 @@ async def friend_request(request: Request, uid: int):
     if not exists:
         notify(uid, "friend_request",
                f"{user['name']} sent you a friend request.", "/friends")
+        send_push(uid, f"👋 {user['name']} sent you a friend request",
+                  "Open HERE to see it and accept.",
+                  "/friends", tag=f"friend-{user['id']}")
     return back(request, "/friends")
 
 
@@ -2379,6 +2636,9 @@ async def send_message(request: Request, fid: int):
     flag_item("message", mid, user["id"], user["name"], body)
     notify(fid, "message", f"New message from {user['name']}.",
            f"/messages/{user['id']}")
+    preview = body if len(body) <= 80 else body[:79] + "…"
+    send_push(fid, f"💬 {user['name']}", preview,
+              f"/messages/{user['id']}", tag=f"msg-{user['id']}")
     return redir(f"/messages/{fid}")
 
 
@@ -2587,6 +2847,14 @@ async def call_start(request: Request):
     row = conn.execute("SELECT * FROM calls WHERE id=?", (cid,)).fetchone()
     out = _call_json(dict(row), user["id"])
     conn.close()
+    # Buzz the callee's phone too — a ringing call shouldn't have to
+    # wait for them to wander past an open HERE tab. Short TTL: a call
+    # push that arrives after the ring is worse than none.
+    send_push(target_id,
+              f"{_call_icon(kind)} {user['name']} is calling you…",
+              f"Incoming {_call_label(kind).lower()} call — tap to "
+              f"answer.", f"/messages/{user['id']}",
+              tag=f"call-{cid}", ttl=60)
     return JSONResponse({"ok": True, "call": out})
 
 
@@ -2891,6 +3159,11 @@ async def call_request_create(request: Request):
            f"{user['name']} wants to {_call_label(kind).lower()} call "
            f"you. Approve their call request to start the call.",
            f"/messages/{user['id']}")
+    send_push(target_id,
+              f"📞 {user['name']} wants to call you — tap to review",
+              f"{_call_label(kind)} call request — open HERE to "
+              f"approve or decline it.",
+              f"/messages/{user['id']}", tag=f"callreq-{rid}")
     return JSONResponse({"ok": True, "request": out})
 
 
