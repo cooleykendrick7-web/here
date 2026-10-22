@@ -329,6 +329,29 @@ def init_db():
         created_at TEXT NOT NULL, last_seen TEXT NOT NULL)""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_pushsubs_user "
               "ON push_subscriptions(user_id)")
+    # --- comment controls: replies + per-post comment blocks ---
+    # comments.parent_id ties a reply to its TOP-LEVEL comment (replies
+    # never nest deeper than one level). comments.reply_to_id remembers
+    # the exact comment the author tapped Reply on, so the UI can prefix
+    # a linked "@Name" when that target was itself a reply
+    # (Facebook-style flattening).
+    _comment_cols = [r["name"] for r in
+                     c.execute("PRAGMA table_info(comments)").fetchall()]
+    if "parent_id" not in _comment_cols:
+        c.execute("ALTER TABLE comments ADD COLUMN parent_id INTEGER")
+    if "reply_to_id" not in _comment_cols:
+        c.execute("ALTER TABLE comments ADD COLUMN reply_to_id INTEGER")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_comments_parent "
+              "ON comments(parent_id)")
+    # Per-post comment blocks: a post's author can stop ONE person from
+    # adding new comments/replies on THAT post only. Their existing
+    # comments stay put (the author deletes those separately if wanted)
+    # and the block applies nowhere else on the site.
+    c.execute("""CREATE TABLE IF NOT EXISTS post_comment_blocks (
+        post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, UNIQUE(post_id, user_id))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cblocks_post "
+              "ON post_comment_blocks(post_id)")
     conn.commit()
     conn.close()
 
@@ -814,6 +837,16 @@ def hidden_from_ids(post_id):
     return {r["user_id"] for r in rows}
 
 
+def comment_blocked_ids(post_id):
+    """User ids the author has blocked from commenting on this post."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT user_id FROM post_comment_blocks WHERE post_id=?",
+        (post_id,)).fetchall()
+    conn.close()
+    return {r["user_id"] for r in rows}
+
+
 def _form_ids(form, field):
     """Parse a repeated checkbox form field into a set of ints."""
     out = set()
@@ -1117,6 +1150,20 @@ def post_card(p, viewer, owner_on=False):
     hidden_from_count = conn.execute(
         "SELECT COUNT(*) c FROM post_hidden_from WHERE post_id=?",
         (p["id"],)).fetchone()["c"]
+    # Per-post comment blocks: every viewer gets a flag (the post page
+    # swaps the comment box for the blocked note); the author also gets
+    # the blocked list itself, for the "Blocked from this post" sheet.
+    _blocked_ids = comment_blocked_ids(p["id"])
+    viewer_comment_blocked = bool(viewer and not share
+                                  and viewer["id"] in _blocked_ids
+                                  and viewer["id"] != p["user_id"])
+    blocked_commenters = []
+    if viewer and viewer["id"] == p["user_id"] and not share:
+        for bid in sorted(_blocked_ids):
+            bu = conn.execute("SELECT id,name FROM users WHERE id=?",
+                              (bid,)).fetchone()
+            blocked_commenters.append(
+                {"id": bid, "name": bu["name"] if bu else "Deleted user"})
     # Eyeball popup data (author's own posts only): the author's friends
     # with their current hidden-from state pre-checked.
     audience_friends = []
@@ -1184,6 +1231,8 @@ def post_card(p, viewer, owner_on=False):
         "is_page_post": is_page, "page_name": page_name, "page_id": page_id,
         "tagged_users": tagged_users, "tagged_pages": tagged_pages,
         "hidden_from_count": hidden_from_count,
+        "viewer_comment_blocked": viewer_comment_blocked,
+        "blocked_commenters": blocked_commenters,
         "audience_friends": audience_friends,
         "is_mine": bool(viewer and viewer["id"] == p["user_id"] and not share),
         "can_edit_audience": bool(viewer and viewer["id"] == p["user_id"]
@@ -1688,19 +1737,64 @@ async def view_post(request: Request, pid: int):
     crows = conn.execute(
         "SELECT c.* FROM comments c WHERE c.post_id=? ORDER BY c.created_at ASC",
         (pid,)).fetchall()
-    comments = []
-    for c in crows:
-        a = conn.execute("SELECT id,name,avatar FROM users WHERE id=?",
-                         (c["user_id"],)).fetchone()
-        comments.append({
+    _authors = {}
+
+    def _author(uid):
+        if uid not in _authors:
+            _authors[uid] = conn.execute(
+                "SELECT id,name,avatar FROM users WHERE id=?",
+                (uid,)).fetchone()
+        return _authors[uid]
+
+    _by_id = {c["id"]: c for c in crows}
+
+    def _comment_dict(c):
+        a = _author(c["user_id"])
+        # Facebook-style flattening: when a reply was aimed at another
+        # reply (not at the top-level comment), it renders under the
+        # top-level comment with a linked "@Name" prefix naming the
+        # person it was aimed at.
+        prefix = None
+        if c["parent_id"] and c["reply_to_id"] \
+                and c["reply_to_id"] != c["parent_id"] \
+                and c["reply_to_id"] in _by_id:
+            tgt = _by_id[c["reply_to_id"]]
+            ta = _author(tgt["user_id"])
+            prefix = {"id": tgt["user_id"],
+                      "name": ta["name"] if ta else "Deleted user"}
+        return {
             "id": c["id"], "user_id": c["user_id"],
             "author_name": a["name"] if a else "Deleted user",
             "author_avatar": avatar_url(a["avatar"]) if a and a["avatar"] else "",
             "body": c["body"], "body_html": linkify_body(c["body"]),
             "created_at": fancy_time(c["created_at"]),
+            # The ⋯ menu shows Delete to the comment's author and to
+            # the post's author (and in the owner context); Block only
+            # to the post's author, and never against their own comment.
             "can_delete": bool(user["id"] == c["user_id"] or
                                user["id"] == p["user_id"] or owner_on),
-        })
+            "can_block": bool(user["id"] == p["user_id"] and
+                              c["user_id"] != user["id"]),
+            "reply_prefix": prefix,
+            "replies": [],
+        }
+
+    comments = []
+    _tops = {}
+    for c in crows:
+        if not c["parent_id"]:
+            d = _comment_dict(c)
+            _tops[c["id"]] = d
+            comments.append(d)
+    for c in crows:
+        if c["parent_id"]:
+            d = _comment_dict(c)
+            if c["parent_id"] in _tops:
+                _tops[c["parent_id"]]["replies"].append(d)
+            else:
+                # Orphaned reply (its top-level comment is gone): show
+                # it as a top-level comment rather than dropping it.
+                comments.append(d)
     conn.close()
     pc = post_card(dict(p), user, owner_on)
     pc["comments"] = comments
@@ -1723,18 +1817,158 @@ async def add_comment(request: Request, pid: int):
         return redir(f"/post/{p['shared_post_id']}")
     if not can_view_post(user, p, is_owner(request)):
         return render(request, "post_gone.html", {})
+    if user["id"] in comment_blocked_ids(pid):
+        # The post's author blocked this user from THIS post only.
+        return redir(f"/post/{pid}",
+                     "🚫 The author of this post has blocked you from "
+                     "commenting here.")
     form = await request.form()
     body = (form.get("body") or "").strip()
     if not body:
         return redir(f"/post/{pid}", "Comment can't be empty.")
+    # Optional reply: the form's parent_id names the comment being
+    # replied to. Replies flatten to ONE level — the stored parent_id
+    # is always the TOP-LEVEL comment; reply_to_id keeps the exact tap
+    # target so the post page can prefix a linked "@Name" when someone
+    # replies to a reply. A stale/forged parent_id (missing comment, or
+    # a comment on another post) just falls back to a top-level comment.
+    parent_id = None
+    reply_to_id = None
+    reply_target = None
+    raw_parent = form.get("parent_id")
+    if raw_parent:
+        try:
+            want = int(raw_parent)
+        except (TypeError, ValueError):
+            want = None
+        if want:
+            conn = db()
+            trow = conn.execute(
+                "SELECT * FROM comments WHERE id=? AND post_id=?",
+                (want, pid)).fetchone()
+            conn.close()
+            if trow:
+                reply_target = dict(trow)
+                reply_to_id = trow["id"]
+                parent_id = trow["parent_id"] or trow["id"]
     conn = db()
     cur = conn.execute(
-        "INSERT INTO comments(post_id, user_id, body, created_at) VALUES(?,?,?,?)",
-        (pid, user["id"], body, now_iso()))
+        "INSERT INTO comments(post_id, user_id, body, parent_id, reply_to_id, "
+        "created_at) VALUES(?,?,?,?,?,?)",
+        (pid, user["id"], body, parent_id, reply_to_id, now_iso()))
     cid = cur.lastrowid
     conn.commit()
     conn.close()
     flag_item("comment", cid, user["id"], user["name"], body)
+    if reply_target is not None:
+        # A reply notifies the author of the comment replied to.
+        if reply_target["user_id"] != user["id"]:
+            notify(reply_target["user_id"], "reply",
+                   f"{user['name']} replied to your comment.",
+                   f"/post/{pid}")
+    elif p["user_id"] != user["id"]:
+        notify(p["user_id"], "comment",
+               f"{user['name']} commented on your post.", f"/post/{pid}")
+    return redir(f"/post/{pid}")
+
+
+@app.post("/comment/{cid}/delete")
+async def delete_comment(request: Request, cid: int):
+    """Delete a comment. Allowed: the comment's author, the post's
+    author, or the owner context — anyone else gets a 403. Deleting a
+    top-level comment takes all its replies with it; deleting a reply
+    removes only that reply (replies have no children by construction)."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    c = conn.execute("SELECT * FROM comments WHERE id=?", (cid,)).fetchone()
+    if not c:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    p = conn.execute("SELECT user_id FROM posts WHERE id=?",
+                     (c["post_id"],)).fetchone()
+    allowed = bool(c["user_id"] == user["id"] or is_owner(request) or
+                   (p and p["user_id"] == user["id"]))
+    if not allowed:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "forbidden"},
+                            status_code=403)
+    pid = c["post_id"]
+    conn.execute("DELETE FROM comments WHERE id=? OR parent_id=?", (cid, cid))
+    conn.commit()
+    conn.close()
+    return redir(f"/post/{pid}", "Comment deleted.")
+
+
+@app.post("/post/{pid}/comment-block")
+async def block_commenter(request: Request, pid: int):
+    """Post author only: stop one user from adding NEW comments or
+    replies on this post. Their existing comments are NOT deleted, and
+    the block applies to this post only."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    if not p:
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if p["user_id"] != user["id"]:
+        return JSONResponse({"ok": False, "error": "forbidden"},
+                            status_code=403)
+    form = await request.form()
+    try:
+        target = int(form.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target = 0
+    if target and target != user["id"]:
+        conn = db()
+        conn.execute(
+            "INSERT OR IGNORE INTO post_comment_blocks(post_id, user_id, "
+            "created_at) VALUES(?,?,?)", (pid, target, now_iso()))
+        conn.commit()
+        conn.close()
+        t = get_user(target)
+        return redir(f"/post/{pid}",
+                     f"🚫 {t['name'] if t else 'That person'} is blocked "
+                     "from commenting on this post.")
+    return redir(f"/post/{pid}")
+
+
+@app.post("/post/{pid}/comment-unblock")
+async def unblock_commenter(request: Request, pid: int):
+    """Post author only: lift a per-post comment block."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    if not p:
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if p["user_id"] != user["id"]:
+        return JSONResponse({"ok": False, "error": "forbidden"},
+                            status_code=403)
+    form = await request.form()
+    try:
+        target = int(form.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target = 0
+    if target:
+        conn = db()
+        conn.execute(
+            "DELETE FROM post_comment_blocks WHERE post_id=? AND user_id=?",
+            (pid, target))
+        conn.commit()
+        conn.close()
+        t = get_user(target)
+        return redir(f"/post/{pid}",
+                     f"{t['name'] if t else 'That person'} can comment on "
+                     "this post again.")
     return redir(f"/post/{pid}")
 
 
@@ -1984,6 +2218,7 @@ def _delete_post(pid):
     conn = db()
     conn.execute("DELETE FROM likes WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM comments WHERE post_id=?", (pid,))
+    conn.execute("DELETE FROM post_comment_blocks WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM post_hidden_from WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM post_tags WHERE post_id=?", (pid,))
     conn.execute("DELETE FROM moderation_flags WHERE item_type='post' AND item_id=?",
@@ -1994,6 +2229,7 @@ def _delete_post(pid):
     for sid in share_ids:
         conn.execute("DELETE FROM likes WHERE post_id=?", (sid,))
         conn.execute("DELETE FROM comments WHERE post_id=?", (sid,))
+        conn.execute("DELETE FROM post_comment_blocks WHERE post_id=?", (sid,))
         conn.execute("DELETE FROM hidden_posts WHERE post_id=?", (sid,))
         conn.execute("DELETE FROM post_hidden_from WHERE post_id=?", (sid,))
         conn.execute("DELETE FROM post_tags WHERE post_id=?", (sid,))
