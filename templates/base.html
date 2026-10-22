@@ -169,6 +169,50 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 /* ===== composer eyeball (hide-from picker behind a 👁 button, before posting) ===== */
 .composer-aud{position:relative;display:inline-block;margin-top:10px}
 
+/* ===== voice / video calls =====
+   The incoming sheet sits over the page (below the call overlay); the
+   call overlay is a fixed full-screen layer above everything, like the
+   aud sheet but full-bleed: remote video fills it, local preview floats
+   in the corner, controls ride along the bottom. */
+#incoming-sheet,#request-sheet{position:fixed;top:70px;left:50%;transform:translateX(-50%);
+  width:min(94vw,420px);background:var(--black);color:#fff;border:2px solid var(--red);
+  border-radius:14px;padding:14px 16px;z-index:3000;box-shadow:0 12px 34px rgba(0,0,0,.55)}
+#incoming-sheet[hidden],#request-sheet[hidden]{display:none}
+.inc-row{display:flex;align-items:center;gap:12px}
+.inc-row .nm{font-weight:800;font-size:17px}
+.inc-row .sub{font-size:13px;color:#c9c9c9}
+.inc-actions{display:flex;gap:10px;margin-top:12px}
+.inc-btn{flex:1;border:none;border-radius:24px;padding:12px;font-size:16px;font-weight:800;cursor:pointer}
+.inc-answer{background:var(--green);color:#fff}
+.inc-decline{background:var(--red);color:#fff}
+#call-overlay{position:fixed;inset:0;background:#000;z-index:3100;color:#fff;
+  display:flex;flex-direction:column}
+#call-overlay[hidden]{display:none}
+#call-remote-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+#call-local-video{position:absolute;right:12px;bottom:108px;width:104px;height:140px;
+  object-fit:cover;border-radius:10px;border:2px solid rgba(255,255,255,.45);background:#222;z-index:3}
+#call-local-video[hidden]{display:none}
+#call-voice-view{position:absolute;inset:0;display:flex;flex-direction:column;gap:14px;
+  align-items:center;justify-content:center;z-index:1}
+#call-voice-view[hidden]{display:none}
+#call-voice-view .avatar,#call-voice-view .av-ph{width:120px;height:120px;font-size:48px}
+.call-top{position:relative;z-index:2;text-align:center;padding:22px 16px 0}
+#call-peer-name{font-size:22px;font-weight:800;text-shadow:0 1px 6px rgba(0,0,0,.8)}
+#call-state{font-size:15px;color:#e8e8e8;margin-top:4px;text-shadow:0 1px 6px rgba(0,0,0,.8)}
+.call-controls{position:relative;z-index:2;margin-top:auto;display:flex;gap:16px;
+  justify-content:center;padding:0 16px 30px}
+.call-ctl{width:58px;height:58px;border-radius:50%;border:none;background:rgba(255,255,255,.18);
+  color:#fff;font-size:24px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.call-ctl.off{background:#fff;color:#111}
+.call-ctl[hidden]{display:none}
+#call-end-btn{background:var(--red)}
+#call-error{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);z-index:4;
+  width:min(90vw,360px);background:#1c1c1e;border:1px solid var(--red);border-radius:12px;
+  padding:16px;text-align:center;font-size:15px}
+#call-error[hidden]{display:none}
+#call-error button{margin-top:12px}
+.call-start-btns{display:inline-flex;gap:6px;flex-shrink:0}
+
 /* ===== post card ===== */
 .post-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
 .post-who{min-width:0}
@@ -425,6 +469,62 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   </aside>
 </div>
 
+{% if user %}
+<!-- ===== voice / video calls: incoming sheet + call overlay ===== -->
+<div id="incoming-sheet" hidden>
+  <div class="inc-row">
+    <img class="avatar av-40" id="inc-avatar-img" src="" alt="" hidden>
+    <span class="av-ph av-40" id="inc-avatar-ph"></span>
+    <div class="grow" style="flex:1;min-width:0">
+      <div class="nm" id="inc-name"></div>
+      <div class="sub" id="inc-kind"></div>
+    </div>
+  </div>
+  <div class="inc-actions">
+    <button type="button" class="inc-btn inc-answer" id="inc-answer">📞 Answer</button>
+    <button type="button" class="inc-btn inc-decline" id="inc-decline">✖ Decline</button>
+  </div>
+</div>
+
+<div id="request-sheet" hidden>
+  <div class="inc-row">
+    <img class="avatar av-40" id="req-avatar-img" src="" alt="" hidden>
+    <span class="av-ph av-40" id="req-avatar-ph"></span>
+    <div class="grow" style="flex:1;min-width:0">
+      <div class="nm" id="req-name"></div>
+      <div class="sub" id="req-kind"></div>
+    </div>
+  </div>
+  <div class="inc-actions">
+    <button type="button" class="inc-btn inc-answer" id="req-accept">✓ Accept</button>
+    <button type="button" class="inc-btn inc-decline" id="req-decline-btn">✖ Decline</button>
+  </div>
+</div>
+
+<div id="call-overlay" hidden>
+  <video id="call-remote-video" autoplay playsinline></video>
+  <div id="call-voice-view" hidden>
+    <img class="avatar" id="call-peer-img" src="" alt="" hidden>
+    <span class="av-ph" id="call-peer-ph"></span>
+  </div>
+  <video id="call-local-video" autoplay playsinline muted hidden></video>
+  <div class="call-top">
+    <div id="call-peer-name"></div>
+    <div id="call-state">Calling…</div>
+  </div>
+  <div id="call-error" hidden>
+    <div id="call-error-text"></div>
+    <button type="button" class="btn" id="call-error-close">Close</button>
+  </div>
+  <div class="call-controls" id="call-controls">
+    <button type="button" class="call-ctl" id="call-mute-btn" title="Mute">🎤</button>
+    <button type="button" class="call-ctl" id="call-cam-btn" title="Camera on/off" hidden>📷</button>
+    <button type="button" class="call-ctl" id="call-flip-btn" title="Switch camera" hidden>🔄</button>
+    <button type="button" class="call-ctl" id="call-end-btn" title="End call">📞</button>
+  </div>
+</div>
+{% endif %}
+
 <script>
 /* ===== Hide-from popups: fixed sheet on top of everything =====
    The popups live inside glass cards (backdrop-filter), which trap
@@ -628,6 +728,549 @@ document.addEventListener('click', function(ev){
   paint();
 })();
 </script>
+{% if user %}
+<script>
+/* ===== Voice & video calls (WebRTC, REST-signaled) =====
+   Media flows phone-to-phone over WebRTC — nothing is relayed or stored
+   on the server. The server only passes the small setup messages (SDP
+   offer/answer + ICE candidates) through /calls/.../signal(s), which
+   both sides poll about once a second while a call is being set up.
+   One poller (4s) watches /calls/incoming on every logged-in page and
+   pops the incoming-call sheet; answering jumps to the thread, where
+   this same engine attaches and runs the call. */
+(function(){
+  var overlay = document.getElementById('call-overlay');
+  if (!overlay) return; /* guests get no call UI */
+  function $(id){ return document.getElementById(id); }
+  var remoteVideo = $('call-remote-video'), localVideo = $('call-local-video'),
+      voiceView = $('call-voice-view'), peerImg = $('call-peer-img'),
+      peerPh = $('call-peer-ph'), peerName = $('call-peer-name'),
+      stateEl = $('call-state'), errBox = $('call-error'),
+      errText = $('call-error-text'), controlsRow = $('call-controls'),
+      muteBtn = $('call-mute-btn'), camBtn = $('call-cam-btn'),
+      flipBtn = $('call-flip-btn'), endBtn = $('call-end-btn'),
+      sheet = $('incoming-sheet'), incImg = $('inc-avatar-img'),
+      incPh = $('inc-avatar-ph'), incName = $('inc-name'),
+      incKind = $('inc-kind'), incAnswer = $('inc-answer'),
+      incDecline = $('inc-decline'),
+      reqSheet = $('request-sheet'), reqImg = $('req-avatar-img'),
+      reqPh = $('req-avatar-ph'), reqName = $('req-name'),
+      reqKind = $('req-kind'), reqAccept = $('req-accept'),
+      reqDeclineBtn = $('req-decline-btn');
+
+  /* STUN finds a direct path; the TURN entries are the Open Relay
+     project's free community relay (best-effort) for strict networks
+     where no direct path opens — swap in private TURN credentials here
+     if call reliability ever needs a guaranteed relay. */
+  var ICE_CONFIG = {iceServers: [
+    {urls: 'stun:stun.l.google.com:19302'},
+    {urls: 'stun:stun1.l.google.com:19302'},
+    {urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject'},
+    {urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject'},
+    {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'}
+  ]};
+  var TERMINAL = {ended: 1, declined: 1, missed: 1, busy: 1};
+
+  var S = null;        /* live call state, or null when idle */
+  var incoming = null; /* ringing call shown on the sheet */
+  var shownRingId = 0;
+  var pendingReq = null; /* call request shown on the request sheet */
+  var shownReqId = 0;
+  var gen = 0;         /* overlay generation; stale timers can't hide a new call */
+
+  function jget(url){
+    return fetch(url, {credentials: 'same-origin'})
+      .then(function(r){ return r.json(); });
+  }
+  function jpost(url, body){
+    return fetch(url, {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: body ? JSON.stringify(body) : '{}'})
+      .then(function(r){ return r.json().catch(function(){ return {}; }); });
+  }
+  function setState(t){ stateEl.textContent = t; }
+  function fmtDur(ms){
+    var s = Math.floor(ms / 1000);
+    return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+  }
+
+  /* Tiny WebAudio ring — no audio files. If the browser won't start
+     audio before a tap it just stays silent; the sheet still shows. */
+  var actx = null, ringTimer = null;
+  function beep(){
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      var o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine'; o.frequency.value = 880; g.gain.value = 0.035;
+      o.connect(g); g.connect(actx.destination);
+      o.start();
+      setTimeout(function(){ try { o.stop(); } catch (e) {} }, 320);
+    } catch (e) {}
+  }
+  function ringStart(){ ringStop(); beep(); ringTimer = setInterval(beep, 2100); }
+  function ringStop(){ if (ringTimer){ clearInterval(ringTimer); ringTimer = null; } }
+
+  /* ---------------- media ---------------- */
+  function getMedia(kind, facing){
+    var c = {audio: true};
+    if (kind === 'video') c.video = {facingMode: facing || 'user'};
+    return navigator.mediaDevices.getUserMedia(c);
+  }
+  function mediaErrorText(kind){
+    return kind === 'video'
+      ? 'HERE needs your camera and mic for a video call. Allow them in the browser prompt, then try again.'
+      : 'HERE needs your mic for a voice call. Allow it in the browser prompt, then try again.';
+  }
+
+  /* ---------------- overlay plumbing ---------------- */
+  function showOverlay(other, kind){
+    gen++;
+    peerName.textContent = other.name;
+    if (other.avatar){
+      peerImg.src = other.avatar; peerImg.hidden = false; peerPh.hidden = true;
+    } else {
+      peerImg.hidden = true; peerPh.hidden = false;
+      peerPh.textContent = (other.name || '?').charAt(0).toUpperCase();
+    }
+    var isVideo = kind === 'video';
+    voiceView.hidden = isVideo;
+    remoteVideo.hidden = false; /* it also carries the sound on voice calls */
+    remoteVideo.style.visibility = isVideo ? 'visible' : 'hidden';
+    camBtn.hidden = !isVideo;
+    flipBtn.hidden = !isVideo;
+    localVideo.hidden = true;
+    errBox.hidden = true;
+    controlsRow.style.display = '';
+    muteBtn.classList.remove('off');
+    muteBtn.textContent = '🎤';
+    camBtn.classList.remove('off');
+    overlay.hidden = false;
+  }
+  function showError(msg){
+    errText.textContent = msg;
+    errBox.hidden = false;
+  }
+  function cleanupCall(){
+    if (!S) return;
+    if (S.pollTimer){ clearInterval(S.pollTimer); S.pollTimer = null; }
+    if (S.durTimer){ clearInterval(S.durTimer); S.durTimer = null; }
+    ringStop();
+    if (S.pc){ try { S.pc.close(); } catch (e) {} S.pc = null; }
+    if (S.localStream){
+      S.localStream.getTracks().forEach(function(t){ t.stop(); });
+      S.localStream = null;
+    }
+    try { remoteVideo.srcObject = null; } catch (e) {}
+    try { localVideo.srcObject = null; } catch (e) {}
+    S = null;
+  }
+  function endUi(finalMsg){
+    cleanupCall();
+    var g = gen;
+    if (finalMsg){
+      setState(finalMsg);
+      setTimeout(function(){ if (gen === g) overlay.hidden = true; }, 1600);
+    } else {
+      overlay.hidden = true;
+    }
+  }
+
+  /* ---------------- peer connection ---------------- */
+  function makePc(){
+    var pc = new RTCPeerConnection(ICE_CONFIG);
+    S.pc = pc;
+    pc.onicecandidate = function(ev){
+      if (ev.candidate && S){
+        jpost('/calls/' + S.id + '/signal',
+              {type: 'ice', payload: ev.candidate.toJSON()}).catch(function(){});
+      }
+    };
+    pc.ontrack = function(ev){
+      if (ev.streams && ev.streams[0]) remoteVideo.srcObject = ev.streams[0];
+    };
+    pc.onconnectionstatechange = function(){
+      if (!S || S.pc !== pc) return;
+      if (pc.connectionState === 'connected' && !S.connected){
+        S.connected = true;
+        ringStop();
+        S.startedAt = Date.now();
+        setState(fmtDur(0));
+        S.durTimer = setInterval(function(){
+          setState(fmtDur(Date.now() - S.startedAt));
+        }, 500);
+      } else if (pc.connectionState === 'failed'){
+        if (S.connected) setState('Connection failed');
+      } else if (pc.connectionState === 'disconnected'){
+        if (S.connected) setState('Reconnecting…');
+      }
+    };
+    if (S.localStream){
+      S.localStream.getTracks().forEach(function(t){
+        pc.addTrack(t, S.localStream);
+      });
+    }
+    return pc;
+  }
+  function sendOffer(){
+    if (!S || S.offerSent || !S.pc) return;
+    S.offerSent = true;
+    var pc = S.pc;
+    pc.createOffer()
+      .then(function(offer){ return pc.setLocalDescription(offer); })
+      .then(function(){
+        if (S) jpost('/calls/' + S.id + '/signal',
+          {type: 'offer', payload: pc.localDescription.toJSON()}).catch(function(){});
+      })
+      .catch(function(){});
+  }
+  function flushIce(){
+    if (!S || !S.pc) return;
+    var q = S.iceQueue;
+    S.iceQueue = [];
+    q.forEach(function(c){ S.pc.addIceCandidate(c).catch(function(){}); });
+  }
+  function handleSignal(sig){
+    if (!S || !S.pc) return;
+    var pc = S.pc, p = sig.payload || {};
+    if (sig.type === 'offer'){
+      pc.setRemoteDescription(new RTCSessionDescription(p))
+        .then(function(){ flushIce(); return pc.createAnswer(); })
+        .then(function(ans){ return pc.setLocalDescription(ans); })
+        .then(function(){
+          if (S) jpost('/calls/' + S.id + '/signal',
+            {type: 'answer', payload: pc.localDescription.toJSON()}).catch(function(){});
+        })
+        .catch(function(){});
+    } else if (sig.type === 'answer'){
+      pc.setRemoteDescription(new RTCSessionDescription(p))
+        .then(flushIce)
+        .catch(function(){});
+    } else if (sig.type === 'ice'){
+      var cand = null;
+      try { cand = new RTCIceCandidate(p); } catch (e) {}
+      if (!cand) return;
+      if (pc.remoteDescription && pc.remoteDescription.type){
+        pc.addIceCandidate(cand).catch(function(){});
+      } else {
+        S.iceQueue.push(cand);
+      }
+    } else if (sig.type === 'hangup'){
+      endUi('Call ended');
+    }
+  }
+
+  /* One poll drives everything: the other side's signals plus the
+     call's server status (answers, declines, ring timeouts, hangups). */
+  function pollOnce(){
+    if (!S) return;
+    var id = S.id;
+    jget('/calls/' + id + '/signals?since=' + S.lastSignal).then(function(d){
+      if (!S || S.id !== id || !d || !d.ok) return;
+      (d.signals || []).forEach(function(sig){
+        if (sig.id > S.lastSignal) S.lastSignal = sig.id;
+        handleSignal(sig);
+      });
+      if (!S) return; /* a hangup signal just tore the call down */
+      if (d.status === 'active' && S.status !== 'active'){
+        S.status = 'active';
+        if (S.role === 'caller'){ setState('Connecting…'); sendOffer(); }
+      }
+      if (TERMINAL[d.status]){
+        var msg = d.status === 'declined' ? 'Call declined'
+          : d.status === 'missed' ? (S.role === 'caller' ? 'No answer' : 'Missed call')
+          : 'Call ended';
+        endUi(msg);
+      }
+    }).catch(function(){});
+  }
+
+  /* ---------------- running a call ---------------- */
+  function attach(call){
+    cleanupCall();
+    S = {id: call.id, kind: call.kind,
+         role: call.i_am_caller ? 'caller' : 'callee',
+         status: call.status, other: call.other,
+         lastSignal: 0, iceQueue: [], pc: null, localStream: null,
+         connected: false, offerSent: false, facing: 'user',
+         pollTimer: null, durTimer: null, startedAt: 0};
+    showOverlay(call.other, call.kind);
+    setState(S.role === 'caller' ? 'Ringing…' : 'Connecting…');
+    if (S.role === 'caller') ringStart();
+    getMedia(S.kind, S.facing).then(function(stream){
+      if (!S){ /* call was torn down while the prompt was up */
+        stream.getTracks().forEach(function(t){ t.stop(); });
+        return;
+      }
+      S.localStream = stream;
+      if (S.kind === 'video'){
+        localVideo.srcObject = stream;
+        localVideo.hidden = false;
+      }
+      makePc();
+      S.pollTimer = setInterval(pollOnce, 800);
+      pollOnce();
+      if (S.role === 'callee' && S.status === 'ringing'){
+        /* Mic/cam first, THEN answer — a denied prompt must not leave
+           the caller connected to nobody. */
+        jpost('/calls/' + S.id + '/answer').then(function(d){
+          if (d && d.ok && S) S.status = 'active';
+        }).catch(function(){});
+      } else if (S.role === 'caller' && S.status === 'active'){
+        sendOffer(); /* re-attaching to a live call after a page load */
+      }
+    }).catch(function(){
+      if (!S) return;
+      /* No camera/mic: end it cleanly so nobody is left ringing. */
+      var id = S.id, role = S.role, kind = S.kind;
+      if (role === 'caller') jpost('/calls/' + id + '/end').catch(function(){});
+      else jpost('/calls/' + id + '/decline').catch(function(){});
+      cleanupCall();
+      showError(mediaErrorText(kind));
+    });
+  }
+
+  function startCall(btn){
+    if (S) return;
+    var uid = parseInt(btn.getAttribute('data-call-user'), 10);
+    var kind = btn.getAttribute('data-call-kind') || 'voice';
+    hideSheet();
+    jpost('/calls/start', {user_id: uid, kind: kind}).then(function(d){
+      if (d && d.ok && d.call){ attach(d.call); return; }
+      /* Busy / already in a call: say it plainly in the overlay shell. */
+      showOverlay({name: btn.getAttribute('data-call-name') || 'Call',
+                   avatar: btn.getAttribute('data-call-avatar') || ''}, kind);
+      controlsRow.style.display = 'none';
+      setState('');
+      showError((d && d.error) || 'Could not start the call.');
+    }).catch(function(){});
+  }
+  document.addEventListener('click', function(ev){
+    var b = ev.target.closest ? ev.target.closest('[data-call-user]') : null;
+    if (b){ ev.preventDefault(); startCall(b); }
+  });
+
+  /* ---------------- controls ---------------- */
+  muteBtn.addEventListener('click', function(){
+    if (!S || !S.localStream) return;
+    var tracks = S.localStream.getAudioTracks();
+    if (!tracks.length) return;
+    var on = !tracks[0].enabled;
+    tracks.forEach(function(t){ t.enabled = on; });
+    muteBtn.classList.toggle('off', !on);
+    muteBtn.textContent = on ? '🎤' : '🔇';
+  });
+  camBtn.addEventListener('click', function(){
+    if (!S || !S.localStream) return;
+    var tracks = S.localStream.getVideoTracks();
+    if (!tracks.length) return;
+    var on = !tracks[0].enabled;
+    tracks.forEach(function(t){ t.enabled = on; });
+    camBtn.classList.toggle('off', !on);
+  });
+  flipBtn.addEventListener('click', function(){
+    if (!S || !S.pc || !S.localStream) return;
+    S.facing = S.facing === 'user' ? 'environment' : 'user';
+    navigator.mediaDevices.getUserMedia({video: {facingMode: S.facing}, audio: false})
+      .then(function(stream){
+        if (!S || !S.pc){
+          stream.getTracks().forEach(function(t){ t.stop(); });
+          return;
+        }
+        var newTrack = stream.getVideoTracks()[0];
+        var sender = S.pc.getSenders().filter(function(s){
+          return s.track && s.track.kind === 'video';
+        })[0];
+        var old = S.localStream.getVideoTracks()[0];
+        if (sender && newTrack) sender.replaceTrack(newTrack).catch(function(){});
+        if (old){ S.localStream.removeTrack(old); old.stop(); }
+        if (newTrack) S.localStream.addTrack(newTrack);
+        localVideo.srcObject = S.localStream;
+      })
+      .catch(function(){});
+  });
+  endBtn.addEventListener('click', function(){
+    if (S && S.id) jpost('/calls/' + S.id + '/end').catch(function(){});
+    endUi('Call ended');
+  });
+  $('call-error-close').addEventListener('click', function(){
+    errBox.hidden = true;
+    overlay.hidden = true;
+  });
+  window.addEventListener('beforeunload', function(){
+    if (S && S.id && !TERMINAL[S.status]){
+      try { navigator.sendBeacon('/calls/' + S.id + '/end'); } catch (e) {}
+    }
+  });
+
+  /* ---------------- incoming-call sheet + poller ---------------- */
+  function showSheet(call){
+    incoming = call;
+    shownRingId = call.id;
+    incName.textContent = call.other.name;
+    incKind.textContent = (call.kind === 'video' ? '📹 Video call' : '📞 Voice call') + ' · ringing…';
+    if (call.other.avatar){
+      incImg.src = call.other.avatar; incImg.hidden = false; incPh.hidden = true;
+    } else {
+      incImg.hidden = true; incPh.hidden = false;
+      incPh.textContent = (call.other.name || '?').charAt(0).toUpperCase();
+    }
+    sheet.hidden = false;
+    ringStart();
+  }
+  function hideSheet(){
+    sheet.hidden = true;
+    incoming = null;
+    shownRingId = 0;
+    ringStop();
+  }
+  incDecline.addEventListener('click', function(){
+    if (!incoming) return;
+    var id = incoming.id;
+    hideSheet();
+    jpost('/calls/' + id + '/decline').catch(function(){});
+  });
+  incAnswer.addEventListener('click', function(){
+    if (!incoming) return;
+    var call = incoming;
+    hideSheet();
+    try { sessionStorage.setItem('hereAnswerCall', String(call.id)); } catch (e) {}
+    if (window.location.pathname === '/messages/' + call.other.id){
+      attach(call);
+    } else {
+      window.location.href = '/messages/' + call.other.id;
+    }
+  });
+
+  /* ---------------- call requests (non-friends) ----------------
+     Ken's rule: only friends can be called directly. Anyone else sends
+     a call request; the other person approves (which creates a real
+     ringing call and pulls both sides into the call UI above) or
+     declines (24h before the requester can ask again). */
+  function showReqSheet(req){
+    pendingReq = req;
+    shownReqId = req.id;
+    reqName.textContent = req.requester.name;
+    reqKind.textContent = 'wants to ' + (req.kind === 'video' ? '📹 video' : '📞 voice')
+      + ' call you — approve to start the call';
+    if (req.requester.avatar){
+      reqImg.src = req.requester.avatar; reqImg.hidden = false; reqPh.hidden = true;
+    } else {
+      reqImg.hidden = true; reqPh.hidden = false;
+      reqPh.textContent = (req.requester.name || '?').charAt(0).toUpperCase();
+    }
+    reqSheet.hidden = false;
+  }
+  function hideReqSheet(){
+    reqSheet.hidden = true;
+    pendingReq = null;
+    shownReqId = 0;
+  }
+  function approveRequest(rid){
+    jpost('/call-requests/' + rid + '/approve').then(function(d){
+      hideReqSheet();
+      if (d && d.ok && d.call){
+        try { sessionStorage.setItem('hereAnswerCall', String(d.call.id)); } catch (e) {}
+        if (window.location.pathname === '/messages/' + d.call.other.id){
+          attach(d.call);
+        } else {
+          window.location.href = '/messages/' + d.call.other.id;
+        }
+      } else {
+        showOverlay({name: 'Call request', avatar: ''}, 'voice');
+        controlsRow.style.display = 'none';
+        setState('');
+        showError((d && d.error) || 'Could not approve that request.');
+      }
+    }).catch(function(){});
+  }
+  function declineRequest(rid, reload){
+    jpost('/call-requests/' + rid + '/decline').then(function(){
+      hideReqSheet();
+      if (reload) window.location.reload();
+    }).catch(function(){});
+  }
+  reqAccept.addEventListener('click', function(){
+    if (pendingReq) approveRequest(pendingReq.id);
+  });
+  reqDeclineBtn.addEventListener('click', function(){
+    if (pendingReq) declineRequest(pendingReq.id, false);
+  });
+
+  function sendCallRequest(btn){
+    var uid = parseInt(btn.getAttribute('data-call-request-user'), 10);
+    var kind = btn.getAttribute('data-call-kind') || 'voice';
+    var hint = document.getElementById('call-req-hint');
+    jpost('/call-requests', {user_id: uid, kind: kind}).then(function(d){
+      if (d && d.ok){
+        var wrap = btn.closest('.call-start-btns');
+        if (wrap) wrap.innerHTML = '<span class="kind-tag">📞 Call request sent — waiting for approval</span>';
+        if (hint) hint.textContent = 'Call request sent — '
+          + 'waiting for them to approve it before the call can start.';
+      } else if (hint){
+        hint.textContent = (d && d.error) || 'Could not send the call request.';
+      }
+    }).catch(function(){});
+  }
+  document.addEventListener('click', function(ev){
+    if (!ev.target.closest) return;
+    var rq = ev.target.closest('[data-call-request-user]');
+    if (rq){ ev.preventDefault(); sendCallRequest(rq); return; }
+    var ac = ev.target.closest('[data-req-accept]');
+    if (ac){ ev.preventDefault(); approveRequest(ac.getAttribute('data-req-accept')); return; }
+    var dc = ev.target.closest('[data-req-decline]');
+    if (dc){ ev.preventDefault(); declineRequest(dc.getAttribute('data-req-decline'), true); }
+  });
+
+  function checkIncoming(){
+    if (S) return; /* in a call already; new callers hear "busy" */
+    jget('/calls/incoming').then(function(d){
+      if (!d || !d.ok || S) return;
+      if (d.incoming){
+        if (shownRingId !== d.incoming.id) showSheet(d.incoming);
+      } else if (incoming){
+        hideSheet(); /* caller hung up or the ring timed out */
+      }
+      /* Re-attach a live call: just answered on another page, or I am
+         the caller and a page (re)loaded mid-ring. */
+      var want = 0;
+      try { want = parseInt(sessionStorage.getItem('hereAnswerCall') || '0', 10); } catch (e) {}
+      if (d.current && (d.current.status === 'active'
+                         || d.current.id === want
+                         || d.current.i_am_caller)){
+        try { sessionStorage.removeItem('hereAnswerCall'); } catch (e) {}
+        if (d.incoming && d.current.id === d.incoming.id) hideSheet();
+        attach(d.current);
+      } else if (want && !d.current){
+        try { sessionStorage.removeItem('hereAnswerCall'); } catch (e) {}
+      }
+    }).catch(function(){});
+    /* Pending call requests get their own sheet (a ringing call, if one
+       shows up, outranks it — the sheets never stack). */
+    jget('/call-requests/incoming').then(function(d){
+      if (!d || !d.ok || S) return;
+      var first = (d.requests || [])[0];
+      if (first){
+        if (!incoming && shownReqId !== first.id) showReqSheet(first);
+      } else if (pendingReq){
+        hideReqSheet();
+      }
+    }).catch(function(){});
+  }
+  setInterval(checkIncoming, 4000);
+  checkIncoming();
+
+  /* Debug/testing handle: lets an automated check read the live state. */
+  window.__hereCall = function(){
+    if (!S) return null;
+    return {id: S.id, kind: S.kind, role: S.role, status: S.status,
+            connected: !!S.connected,
+            ice: S.pc ? S.pc.iceConnectionState : null,
+            conn: S.pc ? S.pc.connectionState : null};
+  };
+})();
+</script>
+{% endif %}
 {% block scripts %}{% endblock %}
 <script>
 if ("serviceWorker" in navigator) {

@@ -9,8 +9,44 @@
     <div class="grow">
       <div class="nm"><a href="/user/{{ friend.id }}">{{ friend.name|e }}</a></div>
     </div>
+    {% if is_friend %}
+    <span class="call-start-btns">
+      <button type="button" class="btn-ghost btn-sm" title="Voice call with {{ friend.name|e }}"
+              data-call-user="{{ friend.id }}" data-call-kind="voice"
+              data-call-name="{{ friend.name|e }}" data-call-avatar="{{ friend.avatar|e }}">📞 Call</button>
+      <button type="button" class="btn-ghost btn-sm" title="Video call with {{ friend.name|e }}"
+              data-call-user="{{ friend.id }}" data-call-kind="video"
+              data-call-name="{{ friend.name|e }}" data-call-avatar="{{ friend.avatar|e }}">📹 Video</button>
+    </span>
+    {% elif call_req and call_req.direction == 'out' %}
+    <span class="kind-tag">📞 Call request sent — waiting for approval</span>
+    {% elif not call_req %}
+    <span class="call-start-btns">
+      <button type="button" class="btn-ghost btn-sm" title="Request a voice call with {{ friend.name|e }}"
+              data-call-request-user="{{ friend.id }}" data-call-kind="voice"
+              data-call-name="{{ friend.name|e }}">📞 Call</button>
+      <button type="button" class="btn-ghost btn-sm" title="Request a video call with {{ friend.name|e }}"
+              data-call-request-user="{{ friend.id }}" data-call-kind="video"
+              data-call-name="{{ friend.name|e }}">📹 Video</button>
+    </span>
+    {% endif %}
     <a class="btn-ghost btn-sm" href="/messages">← All messages</a>
   </div>
+
+  {% if not is_friend %}
+    {% if call_req and call_req.direction == 'in' %}
+    <div class="share-banner" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="grow" style="flex:1">{{ friend.name|e }} wants to {{ call_req.kind }} call you — approve to start the call.</span>
+      <button type="button" class="btn btn-sm" data-req-accept="{{ call_req.id }}">✓ Accept</button>
+      <button type="button" class="btn-danger btn-sm" data-req-decline="{{ call_req.id }}">✖ Decline</button>
+    </div>
+    {% else %}
+    <p id="call-req-hint" style="font-size:13px;color:var(--muted);margin-bottom:8px">
+      {% if call_req %}Waiting for {{ friend.name|e }} to approve your {{ call_req.kind }} call request.
+      {% else %}You're not friends with {{ friend.name|e }}. To call them, send a call request — they have to approve it before the call can start.{% endif %}
+    </p>
+    {% endif %}
+  {% endif %}
 
   <div class="thread-box" id="thread-box">
     {% for m in msgs %}
