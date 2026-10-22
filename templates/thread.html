@@ -7,7 +7,7 @@
     {% if friend.avatar %}<img class="avatar av-40" src="{{ friend.avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ friend.name[:1]|upper|e }}</span>{% endif %}
     <div class="grow">
-      <div class="nm"><a href="/user/{{ friend.id }}">{{ friend.name|e }}</a></div>
+      <div class="nm"><a href="/user/{{ friend.id }}">{{ friend.name|e }}</a> {% set pres = friend.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
     </div>
     {% if is_friend %}
     <span class="call-start-btns">

@@ -9,7 +9,7 @@
     {% if r.avatar %}<img class="avatar av-40" src="{{ r.avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ r.name[:1]|upper|e }}</span>{% endif %}
     <div class="grow">
-      <div class="nm"><a href="/user/{{ r.id }}">{{ r.name|e }}</a></div>
+      <div class="nm"><a href="/user/{{ r.id }}">{{ r.name|e }}</a> {% set pres = r.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
       <div class="sub">requested {{ r.created_at|e }}</div>
     </div>
     <div class="row-actions">
@@ -33,7 +33,7 @@
     {% if r.avatar %}<img class="avatar av-40" src="{{ r.avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ r.name[:1]|upper|e }}</span>{% endif %}
     <div class="grow">
-      <div class="nm"><a href="/user/{{ r.id }}">{{ r.name|e }}</a></div>
+      <div class="nm"><a href="/user/{{ r.id }}">{{ r.name|e }}</a> {% set pres = r.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
       <div class="sub">waiting for a response</div>
     </div>
     <div class="row-actions">
@@ -54,8 +54,7 @@
     {% if f.avatar %}<img class="avatar av-40" src="{{ f.avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ f.name[:1]|upper|e }}</span>{% endif %}
     <div class="grow">
-      <div class="nm"><a href="/user/{{ f.id }}">{{ f.name|e }}</a> {% if f.online %}<span class="online-dot" style="position:static;display:inline-block;margin:0"></span>{% endif %}</div>
-      <div class="sub">{% if f.online %}online now{% else %}offline{% endif %}</div>
+      <div class="nm"><a href="/user/{{ f.id }}">{{ f.name|e }}</a> {% set pres = f.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
     </div>
     <div class="row-actions">
       <a class="btn-ghost btn-sm" href="/messages/{{ f.id }}">💬</a>

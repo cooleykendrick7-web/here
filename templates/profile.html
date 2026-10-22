@@ -17,6 +17,7 @@
         {% endif %}
       </h2>
       <div class="post-meta" style="margin-top:4px">{{ profile.friend_count }} friends · joined {{ profile.created_at|e }}</div>
+      {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
       {% if profile.bio %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
         {% if profile.is_self %}

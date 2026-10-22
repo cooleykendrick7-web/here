@@ -41,6 +41,28 @@
 </div>
 
 <div class="card">
+  <div class="section-title">⚡ Status</div>
+  <p style="margin-top:8px;color:var(--muted)">Your lightning bolt tells people if you're around: <span style="color:#22c55e">⚡ green</span> = active, <span style="color:#eab308">⚡ yellow</span> = away, <span style="color:#ef4444">⚡ red</span> = offline.</p>
+  <p style="margin-top:8px">Right now you show as: <strong>{{ profile.status_label|e }}</strong></p>
+  <form action="/settings/status" method="post" style="margin-top:12px">
+    <div class="field">
+      <label for="ps-mode">My status</label>
+      <select id="ps-mode" name="status_mode">
+        <option value="auto" {% if profile.status_mode == 'auto' %}selected{% endif %}>Automatic — follow my activity</option>
+        <option value="online" {% if profile.status_mode == 'online' %}selected{% endif %}>Online — always show green</option>
+        <option value="away" {% if profile.status_mode == 'away' %}selected{% endif %}>Away — always show yellow</option>
+        <option value="offline" {% if profile.status_mode == 'offline' %}selected{% endif %}>Offline — always show red</option>
+        <option value="hidden" {% if profile.status_mode == 'hidden' %}selected{% endif %}>Hide my status — show nothing</option>
+      </select>
+    </div>
+    <div class="field">
+      <label style="font-weight:500"><input type="checkbox" name="inbox_status" value="1" {% if profile.inbox_status %}checked{% endif %}> Show my status in Messages</label>
+    </div>
+    <button type="submit" class="btn">Save Status</button>
+  </form>
+</div>
+
+<div class="card">
   <div class="section-title">⭐ Verification</div>
   {% if profile.is_verified %}
   <p style="margin-top:8px"><span class="verified-star" title="Verified">★</span> Your profile is verified — the golden star shows beside your name everywhere.</p>

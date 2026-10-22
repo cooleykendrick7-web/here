@@ -67,6 +67,11 @@ img{max-width:100%}
 .contact-item .av-wrap{position:relative;flex-shrink:0}
 .online-dot{position:absolute;right:-1px;bottom:-1px;width:12px;height:12px;background:var(--green);
   border-radius:50%;border:2px solid #fff}
+.bolt{display:inline-block;font-size:.95em;line-height:1;vertical-align:-1px}
+.bolt-online{color:#22c55e}
+.bolt-away{color:#eab308}
+.bolt-offline{color:#ef4444}
+.bolt-label{font-size:13px;color:var(--muted);margin-left:3px;font-weight:500}
 
 /* ===== cards, avatars, buttons ===== */
 .card{background:var(--card);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.1);
@@ -438,6 +443,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
         {% if p.avatar %}<img class="avatar av-32" src="{{ p.avatar|e }}" alt="">
         {% else %}<span class="av-ph av-32">{{ p.name[:1]|upper|e }}</span>{% endif %}
         <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.name|e }}</span>
+        {% set pres = p.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}
       </a>
       {% if p.req == 'none' %}
       <form class="inline-form" action="/friends/request/{{ p.id }}" method="post" style="margin-left:auto">
@@ -470,9 +476,9 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
       <span class="av-wrap">
         {% if c.avatar %}<img class="avatar av-32" src="{{ c.avatar|e }}" alt="">
         {% else %}<span class="av-ph av-32">{{ c.name[:1]|upper|e }}</span>{% endif %}
-        {% if c.online %}<span class="online-dot"></span>{% endif %}
       </span>
       <span>{{ c.name|e }}</span>
+      {% set pres = c.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}
     </a>
     {% endfor %}
     {% endif %}

@@ -14,7 +14,7 @@
     {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ p.name[:1]|upper|e }}</span>{% endif %}
     <div class="grow">
-      <div class="nm"><a href="/user/{{ p.id }}">{{ p.name|e }}</a></div>
+      <div class="nm"><a href="/user/{{ p.id }}">{{ p.name|e }}</a> {% set pres = p.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
       {% if p.views %}<div class="sub">{{ p.views }} profile {{ 'view' if p.views == 1 else 'views' }} this week</div>{% endif %}
     </div>
     <div class="row-actions">

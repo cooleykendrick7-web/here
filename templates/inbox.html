@@ -15,7 +15,7 @@
     {% if m.friend_avatar %}<img class="avatar av-40" src="{{ m.friend_avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ m.friend_name[:1]|upper|e }}</span>{% endif %}
     <div class="grow">
-      <div class="nm">To: {{ m.friend_name|e }}</div>
+      <div class="nm">To: {{ m.friend_name|e }} {% set pres = m.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
       <div class="sub">{{ m.body|e }}</div>
     </div>
     <div class="sub">{{ m.created_at|e }}</div>
@@ -30,7 +30,7 @@
     {% if t.friend_avatar %}<img class="avatar av-40" src="{{ t.friend_avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ t.friend_name[:1]|upper|e }}</span>{% endif %}
     <div class="grow">
-      <div class="nm">{{ t.friend_name|e }}{% if t.unread %} <span class="badge" style="position:static;border:none">{{ t.unread }}</span>{% endif %}</div>
+      <div class="nm">{{ t.friend_name|e }} {% set pres = t.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}{% if t.unread %} <span class="badge" style="position:static;border:none">{{ t.unread }}</span>{% endif %}</div>
       <div class="sub">{{ t.last_body|e }}</div>
     </div>
     <div class="sub">{{ t.last_at|e }}</div>
