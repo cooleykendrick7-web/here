@@ -1,0 +1,5 @@
+{# Presence lightning bolt. Expects: pres = {'status','label'} or None
+   (from presence_of()), optional show_label = true to add the text label.
+   &#9889; is ⚡; &#65038; (variation selector) keeps it a plain text glyph
+   so the span color decides green/yellow/red instead of the emoji color. #}
+{% if pres %}<span class="bolt bolt-{{ pres.status }}" title="{{ pres.label }}">&#9889;&#65038;</span>{% if show_label %}<span class="bolt-label">{{ pres.label }}</span>{% endif %}{% endif %}
