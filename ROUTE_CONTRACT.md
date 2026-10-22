@@ -99,6 +99,8 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 | Method | Path | Template | Context / fields |
 |---|---|---|---|
 | GET | / | redirect /home if logged in else /login | |
+| GET | /sw.js | static/sw.js (FileResponse, Service-Worker-Allowed: /) | PWA service worker — caches ONLY manifest + icons; pages/API always network |
+| GET | /download/android | static/here.apk (FileResponse) | Real signed Android APK (package com.hereapp.here); 404 if the APK file is absent. Login page "Get the HERE app" card links here; iPhone instead gets Add-to-Home-Screen steps (PWA: /static/manifest.json + /static/icons/*) |
 | GET | /signup | auth/signup.html | error? |
 | POST | /signup | fields: name, email, password | -> redirect /home |
 | GET | /login | auth/login.html | error? — tiny yellow "H" link bottom -> /owner/login |

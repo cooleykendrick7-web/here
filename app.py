@@ -22,8 +22,8 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import bcrypt
-from fastapi import FastAPI, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -925,6 +925,30 @@ def avatar_url(path):
     except Exception:
         return ""
     return "/uploads/" + path
+
+
+# ---------------- app install (PWA + Android APK) ----------------
+@app.get("/sw.js")
+async def service_worker():
+    # Served from the root so the worker's scope is the whole site.
+    # The worker itself never caches pages — see static/sw.js.
+    return FileResponse(
+        os.path.join(BASE, "static", "sw.js"),
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/download/android")
+async def download_android():
+    apk = os.path.join(BASE, "static", "here.apk")
+    if not os.path.exists(apk):
+        raise HTTPException(status_code=404, detail="Android app not available yet")
+    return FileResponse(
+        apk,
+        media_type="application/vnd.android.package-archive",
+        filename="here.apk",
+    )
 
 
 # ---------------- root / auth ----------------
