@@ -1,0 +1,93 @@
+name: Build iOS IPA
+
+# Builds the HERE iPhone app (ios/) into an UNSIGNED HERE.ipa and commits
+# it to static/here.ipa, where the website serves it at /download/ios.
+#
+# Unsigned is deliberate: there is no Apple Developer account, so the IPA
+# is installed with a free sideloading tool (AltStore / SideStore), which
+# re-signs it with the installer's own Apple ID. It cannot be installed
+# by tapping a link in Safari — Apple blocks that for everyone.
+#
+# Loop safety: this workflow only runs on pushes that touch ios/** (or
+# this file), and the commit it makes back touches ONLY static/here.ipa,
+# so it can never retrigger itself. The commit message also carries
+# [skip ci] as a second guard.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/build-ipa.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-ipa
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Select the latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show the toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos || true
+
+      - name: Build HERE.app (unsigned)
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project ios/HERE.xcodeproj \
+            -scheme HERE \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/here-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package HERE.ipa
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/here-derived/Build/Products/Release-iphoneos/HERE.app"
+          test -d "$APP"
+          rm -rf Payload HERE.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry HERE.ipa Payload
+          unzip -l HERE.ipa | head -30
+          mkdir -p static
+          cp HERE.ipa static/here.ipa
+          ls -la static/here.ipa
+
+      - name: Upload HERE.ipa as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HERE-ipa
+          path: HERE.ipa
+          if-no-files-found: error
+
+      - name: Commit static/here.ipa back to main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add static/here.ipa
+          if git diff --cached --quiet; then
+            echo "static/here.ipa unchanged — nothing to commit."
+            exit 0
+          fi
+          git commit -m "Built HERE.ipa (iOS) [skip ci]"
+          git push
