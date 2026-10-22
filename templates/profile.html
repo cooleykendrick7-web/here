@@ -31,13 +31,16 @@
         {% endif %}
       </h2>
       {% endif %}
+      {% if not profile.is_private_locked %}
       <div class="post-meta" style="margin-top:4px">{{ profile.friend_count }} friends · joined {{ profile.created_at|e }}</div>
+      {% endif %}
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
-      {% if profile.bio %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
+      {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
         {% if profile.is_self %}
         <a class="btn-ghost" href="/settings/profile">✏️ Edit Profile</a>
         <a class="btn-ghost" href="/settings/profile#spot">🏠 Customize my spot</a>
+        {% if profile.is_private %}<span class="kind-tag">🔒 Private</span>{% endif %}
         {% if profile.is_verified %}
         <span class="kind-tag"><span class="verified-star">★</span> Verified</span>
         {% elif profile.verification_status == 'pending' %}
@@ -68,17 +71,40 @@
         {% endif %}
         {% if not profile.is_self %}
         <a class="btn-ghost btn-sm" href="/messages/{{ profile.id }}">💬 Message</a>
+        {% if profile.muted_by_viewer %}
+        <form class="inline-form" action="/unmute/{{ profile.id }}" method="post">
+          <button type="submit" class="btn-ghost btn-sm" title="Unsilence {{ profile.name|e }}">🔊 Unsilence</button>
+        </form>
+        {% else %}
+        <form class="inline-form" action="/mute/{{ profile.id }}" method="post">
+          <button type="submit" class="btn-ghost btn-sm" title="Silence {{ profile.name|e }} — their notifications, pushes and posts stop reaching you; they won't know">🔇 Silence</button>
+        </form>
+        {% endif %}
+        <button type="button" class="btn-ghost btn-sm dmenu-btn" title="Block {{ profile.name|e }}"
+          data-dtitle="Block {{ profile.name|e }}?"
+          data-dlabel="🚫 Block"
+          data-dsubmit="🚫 Block"
+          data-dconfirm="Block {{ profile.name|e }}? You won't be able to see each other's profiles, posts, or messages. Any friendship between you will be removed."
+          data-daction="/block/{{ profile.id }}">🚫 Block</button>
         {% endif %}
       </div>
     </div>
   </div>
 </div>
 
+{% if profile.is_private_locked %}
+<div class="card" style="text-align:center;padding:36px 20px">
+  <div style="font-size:44px">🔒</div>
+  <h3 style="margin:10px 0 6px">This profile is private</h3>
+  <p style="color:var(--muted);font-size:15px">🔒 This profile is private — only friends can see what's here.</p>
+</div>
+{% else %}
 {% for post in posts %}
   {% include "partials/post_card.html" %}
 {% else %}
 <div class="card"><p style="color:var(--muted)">No posts yet.</p></div>
 {% endfor %}
+{% endif %}
 </div>
 
 {% endblock %}

@@ -118,6 +118,55 @@
   </form>
 </div>
 
+<div class="card">
+  <div class="section-title">🔒 Privacy</div>
+  <p style="margin-top:8px;color:var(--muted)">When your profile is private, only your friends can see your profile and your posts. People can still find you in search (with a 🔒) and send you a friend request.</p>
+  <form action="/settings/privacy" method="post" style="margin-top:12px">
+    <div class="field">
+      <label style="font-weight:500"><input type="checkbox" name="private_profile" value="1" {% if profile.private_profile %}checked{% endif %}> Private profile — only my friends can see my profile and my posts</label>
+    </div>
+    <button type="submit" class="btn">Save Privacy</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="section-title">🔇 Silenced people</div>
+  <p style="margin-top:8px;color:var(--muted)">Silencing is quiet and one-way: they never know. Their taps, comments, messages and calls stop notifying and buzzing you, and their posts stay out of your home feed. You stay friends and they can still message you — it just lands silently.</p>
+  <div style="margin-top:10px">
+  {% for mp in muted_people %}
+  <div class="row-item">
+    <div class="grow"><div class="nm"><a href="/user/{{ mp.id }}">{{ mp.name|e }}</a></div></div>
+    <div class="row-actions">
+      <form class="inline-form" action="/unmute/{{ mp.id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">🔊 Unsilence</button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">You haven't silenced anyone. Use the 🔇 Silence button on a profile to add someone here.</p>
+  {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">🚫 Blocked people</div>
+  <p style="margin-top:8px;color:var(--muted)">Blocked people can't see your profile, posts or messages — and you can't see theirs. Blocking removed any friendship between you; unblocking does not add it back.</p>
+  <div style="margin-top:10px">
+  {% for bp in blocked_people %}
+  <div class="row-item">
+    <div class="grow"><div class="nm">{{ bp.name|e }}</div></div>
+    <div class="row-actions">
+      <form class="inline-form" action="/unblock/{{ bp.id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">Unblock</button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">You haven't blocked anyone. Use the 🚫 Block button on a profile to add someone here.</p>
+  {% endfor %}
+  </div>
+</div>
+
 {% include "partials/push_panel.html" %}
 
 <div class="card">

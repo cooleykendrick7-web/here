@@ -749,7 +749,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   <div id="dmenu-confirm" hidden>
     <p id="dmenu-confirm-text" style="font-size:15px;margin:4px 0 10px"></p>
     <form id="dmenu-form" method="post" action="">
-      <button type="submit" class="cmenu-item danger">🗑 Delete</button>
+      <button type="submit" class="cmenu-item danger" id="dmenu-submit-btn">🗑 Delete</button>
     </form>
     <button type="button" class="cmenu-item" id="dmenu-confirm-cancel">Cancel</button>
   </div>
@@ -913,7 +913,9 @@ document.addEventListener('click', function(ev){
    data-daction (POST URL), data-dtitle / data-dlabel (sheet text) and
    data-dconfirm (the for-me wording shown on the confirm step). The
    sheet itself is the shared #dmenu-sheet in base.html. Deleting is
-   always for the tapper only — the server hides, never removes. */
+   always for the tapper only — the server hides, never removes.
+   Labelled buttons (Clear all notifications, Block on profiles) join
+   in via .dmenu-btn and may set data-dsubmit for the confirm button. */
 (function(){
   var sheet = document.getElementById('dmenu-sheet');
   if (!sheet) return; /* guests get no message UI */
@@ -923,6 +925,7 @@ document.addEventListener('click', function(ev){
       title = document.getElementById('dmenu-title'),
       actBtn = document.getElementById('dmenu-act-btn'),
       form = document.getElementById('dmenu-form'),
+      submitBtn = document.getElementById('dmenu-submit-btn'),
       ctext = document.getElementById('dmenu-confirm-text');
   function closeSheet(){ sheet.hidden = true; bd.hidden = true; }
   function openSheet(){
@@ -936,10 +939,11 @@ document.addEventListener('click', function(ev){
     main.hidden = true; confirmBox.hidden = false;
   });
   document.addEventListener('click', function(ev){
-    var t = ev.target.closest ? ev.target.closest('.mmenu-btn') : null;
+    var t = ev.target.closest ? ev.target.closest('.mmenu-btn, .dmenu-btn') : null;
     if (!t) return;
     title.textContent = t.getAttribute('data-dtitle') || 'Options';
     actBtn.textContent = t.getAttribute('data-dlabel') || '🗑 Delete';
+    submitBtn.textContent = t.getAttribute('data-dsubmit') || '🗑 Delete';
     ctext.textContent = t.getAttribute('data-dconfirm') ||
       'Delete? This only changes what YOU see.';
     form.action = t.getAttribute('data-daction');

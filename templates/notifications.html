@@ -4,6 +4,16 @@
 
 <div class="card">
   <div class="section-title">🔔 Notifications</div>
+  {% if notes %}
+  <div style="margin-top:8px">
+    <button type="button" class="btn-ghost btn-sm dmenu-btn"
+      data-dtitle="Clear all notifications?"
+      data-dlabel="🧹 Clear all"
+      data-dsubmit="🧹 Clear all"
+      data-dconfirm="This clears ALL your notifications. It can't be undone."
+      data-daction="/notifications/clear">🧹 Clear all</button>
+  </div>
+  {% endif %}
   {% for n in notes %}
   <a class="row-item{% if not n.is_read %} unread-hl{% endif %}" href="{{ n.link|e }}" style="border-radius:8px;padding-left:8px;padding-right:8px">
     <div class="grow">
