@@ -1,35 +1,399 @@
 {% extends "base.html" %}
 {% block title %}Story — HERE{% endblock %}
 {% block content %}
-<div class="card story-viewer" style="padding:16px">
-  <div class="post-header">
-    {% if author and author.avatar %}<img class="avatar av-40" src="{{ author.avatar|e }}" alt="">
-    {% elif author %}<span class="av-ph av-40">{{ author.name[:1]|upper|e }}</span>{% endif %}
-    <div class="post-who">
-      <div class="nm">{% if author %}<a href="/user/{{ author.id }}">{{ author.name|e }}</a>{% else %}Deleted user{% endif %}</div>
-      <div class="post-meta">{{ story.created_at|e }} · {{ story.pos }} of {{ story.total }} · disappears in 24h</div>
+<div id="story-viewer" data-start-id="{{ start_id }}">
+  <div class="sv-top">
+    <div class="sv-bars" id="sv-bars"></div>
+    <div class="sv-head">
+      <span id="sv-avatar"></span>
+      <div>
+        <div class="sv-who" id="sv-name"></div>
+        <div class="sv-when" id="sv-when"></div>
+      </div>
+      <button id="sv-close" type="button" aria-label="Close stories">✕</button>
     </div>
-    <a class="action-link" href="/home" style="margin-left:auto">✕ Close</a>
   </div>
 
-  {% if story.is_video %}
-  <video class="story-media" src="{{ story.media|e }}" controls autoplay playsinline></video>
-  {% else %}
-  <img class="story-media" src="{{ story.media|e }}" alt="story">
-  {% endif %}
+  <div class="sv-stage" id="sv-stage">
+    <img id="sv-img" alt="story" hidden>
+    <video id="sv-vid" playsinline hidden></video>
+    <div class="sv-overlay" id="sv-overlay" hidden></div>
+    <div class="sv-music" id="sv-music" hidden></div>
+    <div class="sv-caption" id="sv-caption" hidden></div>
+  </div>
 
-  {% if story.caption %}
-  <div class="post-body" style="margin-top:10px">{{ story.caption|e }}</div>
-  {% endif %}
-
-  <div class="story-nav">
-    {% if prev_id %}<a class="btn-ghost btn-sm" href="/story/{{ prev_id }}">← Prev</a>{% else %}<span></span>{% endif %}
-    {% if is_own %}
-    <form class="inline-form" action="/story/{{ story.id }}/delete" method="post" onsubmit="return confirm('Delete this story?');">
-      <button class="btn-danger btn-sm" type="submit">🗑 Delete story</button>
+  <div class="sv-bottom" id="sv-ownbar" hidden>
+    <button class="sv-chipbtn" id="sv-viewers-btn" type="button">👀 <span id="sv-viewers-count">0</span> viewers</button>
+    <form id="sv-del-form" method="post" style="margin-left:auto" onsubmit="return confirm('Delete this story?');">
+      <button class="sv-chipbtn" type="submit" style="background:rgba(220,38,38,.75)">🗑 Delete this story</button>
     </form>
-    {% endif %}
-    {% if next_id %}<a class="btn-ghost btn-sm" href="/story/{{ next_id }}">Next →</a>{% else %}<span></span>{% endif %}
   </div>
+
+  <div id="sv-novol" hidden>🔊 Tap for sound</div>
+
+  <div id="sv-viewers-sheet" hidden>
+    <div style="display:flex;align-items:center;margin-bottom:6px">
+      <strong>👀 Viewers</strong>
+      <button class="sv-chipbtn" id="sv-viewers-close" type="button" style="margin-left:auto;padding:4px 12px">✕</button>
+    </div>
+    <div id="sv-viewers-list"></div>
+  </div>
+
+  <div id="sv-end" hidden>
+    <div>You're all caught up 🎉</div>
+    <button class="sv-chipbtn" id="sv-end-close" type="button" style="font-size:16px;padding:10px 22px">Close</button>
+  </div>
+
+  <audio id="sv-audio" preload="auto"></audio>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var root = document.getElementById('story-viewer');
+  if (!root) return;
+  document.body.style.overflow = 'hidden';
+  var startId = parseInt(root.getAttribute('data-start-id'), 10);
+  var barsEl = document.getElementById('sv-bars');
+  var nameEl = document.getElementById('sv-name');
+  var whenEl = document.getElementById('sv-when');
+  var avatarEl = document.getElementById('sv-avatar');
+  var stage = document.getElementById('sv-stage');
+  var img = document.getElementById('sv-img');
+  var vid = document.getElementById('sv-vid');
+  var overlayEl = document.getElementById('sv-overlay');
+  var captionEl = document.getElementById('sv-caption');
+  var musicEl = document.getElementById('sv-music');
+  var ownBar = document.getElementById('sv-ownbar');
+  var viewersBtn = document.getElementById('sv-viewers-btn');
+  var viewersCount = document.getElementById('sv-viewers-count');
+  var viewersSheet = document.getElementById('sv-viewers-sheet');
+  var viewersList = document.getElementById('sv-viewers-list');
+  var delForm = document.getElementById('sv-del-form');
+  var endCard = document.getElementById('sv-end');
+  var novol = document.getElementById('sv-novol');
+  var audio = document.getElementById('sv-audio');
+
+  var flat = [];        // [{g, s, gname...}] flattened queue
+  var idx = -1;
+  var durationMs = 5000;
+  var startedAt = 0, accum = 0, running = false;
+  var ticker = null;
+  var curMusic = null;  // music object of the current story
+  var vidEnded = false;
+
+  function esc(t) {
+    return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+  function avatarHTML(g) {
+    if (g.avatar) return '<img class="avatar av-40" src="' + esc(g.avatar) + '" alt="">';
+    return '<span class="av-ph av-40">' + esc((g.name || '?').charAt(0).toUpperCase()) + '</span>';
+  }
+  function timeLeft(s) {
+    var ms = new Date(s.expires_at).getTime() - Date.now();
+    if (isNaN(ms) || ms <= 0) return 'ending soon';
+    var mins = Math.round(ms / 60000);
+    if (mins < 60) return mins + 'm left';
+    var hrs = Math.floor(mins / 60);
+    return hrs + 'h left';
+  }
+
+  function closeViewer() {
+    stopAll();
+    document.body.style.overflow = '';
+    if (document.referrer && document.referrer.indexOf(location.host) >= 0
+        && history.length > 1) {
+      history.back();
+    } else {
+      location.href = '/home';
+    }
+  }
+  function stopAll() {
+    running = false;
+    if (ticker) { clearInterval(ticker); ticker = null; }
+    try { vid.pause(); } catch (e) {}
+    try { audio.pause(); } catch (e) {}
+  }
+  function elapsed() {
+    return accum + (running ? (performance.now() - startedAt) : 0);
+  }
+  function startClock() {
+    accum = 0; startedAt = performance.now(); running = true;
+  }
+  function pauseClock() {
+    if (running) { accum += performance.now() - startedAt; running = false; }
+    try { vid.pause(); } catch (e) {}
+    try { audio.pause(); } catch (e) {}
+  }
+  function resumeClock() {
+    if (!running) { startedAt = performance.now(); running = true; }
+    var item = flat[idx];
+    if (item && item.s.is_video && !vidEnded) {
+      var p = vid.play(); if (p) p.catch(function () {});
+    }
+    if (curMusic) {
+      var p2 = audio.play(); if (p2) p2.catch(function () {});
+    }
+  }
+
+  function buildBars(item) {
+    barsEl.innerHTML = '';
+    item.g.stories.forEach(function (s, i) {
+      var seg = document.createElement('div');
+      seg.className = 'sv-seg' + (i < item.si ? ' done' : '');
+      var fill = document.createElement('i');
+      if (i < item.si) fill.style.width = '100%';
+      seg.appendChild(fill);
+      barsEl.appendChild(seg);
+    });
+  }
+  function activeFill() {
+    var segs = barsEl.children;
+    if (!segs.length) return null;
+    var item = flat[idx];
+    var seg = segs[item.si];
+    return seg ? seg.firstChild : null;
+  }
+
+  function tick() {
+    var fill = activeFill();
+    var e = elapsed();
+    if (fill) fill.style.width = Math.min(100, (e / durationMs) * 100) + '%';
+    // enforce the music clip window: loop it under long videos, else stop
+    if (curMusic && !audio.paused) {
+      var end = (curMusic.start || 0) + (curMusic.len || 15);
+      if (audio.currentTime >= end) {
+        var item = flat[idx];
+        if (item && item.s.is_video && !vidEnded && e < durationMs - 250) {
+          try { audio.currentTime = curMusic.start || 0; } catch (err) {}
+        } else {
+          audio.pause();
+        }
+      }
+    }
+    if (e >= durationMs) go(1);
+  }
+
+  function setupMusic(s) {
+    curMusic = s.music || null;
+    audio.pause();
+    audio.removeAttribute('src');
+    novol.hidden = true;
+    if (!curMusic) { musicEl.hidden = true; return; }
+    musicEl.hidden = false;
+    musicEl.textContent = '🎵 ' + (curMusic.title || 'Music') +
+      (curMusic.artist ? ' — ' + curMusic.artist : '');
+    audio.src = curMusic.url;
+    audio.volume = Math.max(0, Math.min(1, (curMusic.volume == null ? 80 : curMusic.volume) / 100));
+    var begin = function () {
+      try { audio.currentTime = curMusic.start || 0; } catch (e) {}
+      var p = audio.play();
+      if (p) p.catch(function () { novol.hidden = false; });
+    };
+    if (audio.readyState >= 1) begin();
+    else audio.addEventListener('loadedmetadata', begin, { once: true });
+  }
+
+  function loadViewers(sid) {
+    viewersCount.textContent = '0';
+    fetch('/story/' + sid + '/viewers')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) viewersCount.textContent = d.viewers.length;
+      }).catch(function () {});
+  }
+
+  function show(i) {
+    stopAll();
+    endCard.hidden = true;
+    viewersSheet.hidden = true;
+    idx = i;
+    if (i >= flat.length) { endCard.hidden = false; return; }
+    var item = flat[idx], s = item.s, g = item.g;
+    vidEnded = false;
+    avatarEl.innerHTML = avatarHTML(g);
+    nameEl.textContent = g.name;
+    whenEl.textContent = timeLeft(s) + (s.mine ? ' · Your story' : '');
+    buildBars(item);
+
+    if (s.is_video) {
+      img.hidden = true;
+      vid.hidden = false;
+      vid.removeAttribute('src');
+      vid.src = s.media;
+      vid.muted = !!(s.music && s.music.mute_orig);
+      vid.volume = s.music ? (s.music.mute_orig ? 0 : 0.25) : 1;
+      durationMs = 15000; // provisional until metadata lands
+      vid.addEventListener('loadedmetadata', function () {
+        if (flat[idx] !== item) return;
+        var d = isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 15;
+        var used = Math.min(elapsed(), durationMs);
+        durationMs = Math.min(d, 60) * 1000;
+        accum = Math.min(used, durationMs - 1);
+        startedAt = performance.now();
+      }, { once: true });
+      var p = vid.play();
+      if (p) p.catch(function () {
+        vid.muted = true;
+        vid.play().catch(function () {});
+        novol.hidden = false;
+      });
+    } else {
+      vid.hidden = true;
+      try { vid.pause(); } catch (e) {}
+      img.hidden = false;
+      img.src = s.media;
+      durationMs = s.music
+        ? Math.max(5, Math.min(30, s.music.len || 15)) * 1000
+        : 5000;
+    }
+
+    if (s.overlay) {
+      overlayEl.hidden = false;
+      overlayEl.textContent = s.overlay.text;
+      overlayEl.style.color = s.overlay.color || '#ffffff';
+      overlayEl.className = 'sv-overlay pos-' + (s.overlay.pos || 'bottom');
+    } else {
+      overlayEl.hidden = true;
+    }
+    if (s.caption) {
+      captionEl.hidden = false;
+      captionEl.textContent = s.caption;
+    } else {
+      captionEl.hidden = true;
+    }
+    setupMusic(s);
+
+    ownBar.hidden = !s.mine;
+    if (s.mine) {
+      delForm.action = '/story/' + s.id + '/delete';
+      loadViewers(s.id);
+    }
+    if (!s.seen) {
+      s.seen = true;
+      fetch('/story/' + s.id + '/view', { method: 'POST' }).catch(function () {});
+    }
+    startClock();
+    ticker = setInterval(tick, 50);
+  }
+
+  function go(dir) {
+    var n = idx + dir;
+    if (n < 0) { // restart the first story rather than leaving
+      show(0);
+      return;
+    }
+    show(n);
+  }
+
+  // --- tap / hold on the stage: quick tap navigates, hold pauses ---
+  var pressAt = 0, pressX = 0, holding = false;
+  stage.addEventListener('pointerdown', function (e) {
+    pressAt = performance.now();
+    pressX = e.clientX;
+    holding = true;
+    pauseClock();
+  });
+  function endPress(e) {
+    if (!holding) return;
+    holding = false;
+    var quick = performance.now() - pressAt < 300;
+    if (quick) {
+      var w = stage.clientWidth || window.innerWidth;
+      if (pressX < w / 3) { go(-1); return; }
+      if (pressX > (w * 2) / 3) { go(1); return; }
+    }
+    resumeClock();
+  }
+  stage.addEventListener('pointerup', endPress);
+  stage.addEventListener('pointercancel', function () {
+    if (holding) { holding = false; resumeClock(); }
+  });
+  // clicks after drags on media shouldn't select anything
+  stage.addEventListener('click', function (e) { e.preventDefault(); });
+
+  vid.addEventListener('ended', function () {
+    vidEnded = true;
+    go(1);
+  });
+
+  document.getElementById('sv-close').addEventListener('click', closeViewer);
+  document.getElementById('sv-end-close').addEventListener('click', closeViewer);
+  novol.addEventListener('click', function () {
+    novol.hidden = true;
+    var item = flat[idx];
+    if (item && item.s.is_video && !(item.s.music && item.s.music.mute_orig)) {
+      vid.muted = false;
+      vid.volume = item.s.music ? 0.25 : 1;
+      vid.play().catch(function () {});
+    }
+    if (curMusic) audio.play().catch(function () {});
+  });
+  viewersBtn.addEventListener('click', function () {
+    var item = flat[idx];
+    if (!item) return;
+    pauseClock();
+    viewersList.innerHTML = 'Loading…';
+    viewersSheet.hidden = false;
+    fetch('/story/' + item.s.id + '/viewers')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok || !d.viewers.length) {
+          viewersList.innerHTML = '<p style="color:rgba(255,255,255,.65)">No views yet.</p>';
+          return;
+        }
+        viewersList.innerHTML = d.viewers.map(function (v) {
+          var av = v.avatar
+            ? '<img class="avatar av-40" src="' + esc(v.avatar) + '" alt="">'
+            : '<span class="av-ph av-40">' + esc((v.name || '?').charAt(0).toUpperCase()) + '</span>';
+          return '<div class="sv-viewer-row">' + av + '<span>' + esc(v.name) +
+                 '</span><span class="when">' + esc(v.when) + '</span></div>';
+        }).join('');
+      }).catch(function () {
+        viewersList.innerHTML = '<p>Could not load viewers.</p>';
+      });
+  });
+  document.getElementById('sv-viewers-close').addEventListener('click', function () {
+    viewersSheet.hidden = true;
+    resumeClock();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeViewer();
+    else if (e.key === 'ArrowRight') go(1);
+    else if (e.key === 'ArrowLeft') go(-1);
+  });
+
+  // swipe down to close
+  var touchY = null, touchX = null;
+  root.addEventListener('touchstart', function (e) {
+    if (e.touches.length === 1) {
+      touchY = e.touches[0].clientY; touchX = e.touches[0].clientX;
+    }
+  }, { passive: true });
+  root.addEventListener('touchend', function (e) {
+    if (touchY === null) return;
+    var dy = e.changedTouches[0].clientY - touchY;
+    var dx = e.changedTouches[0].clientX - touchX;
+    touchY = null;
+    if (dy > 90 && Math.abs(dy) > Math.abs(dx)) closeViewer();
+  }, { passive: true });
+
+  fetch('/stories/queue')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      (data.groups || []).forEach(function (g) {
+        g.stories.forEach(function (s, si) {
+          flat.push({ g: g, s: s, si: si });
+        });
+      });
+      if (!flat.length) { endCard.hidden = false; return; }
+      var start = flat.findIndex(function (x) { return x.s.id === startId; });
+      show(start >= 0 ? start : 0);
+    })
+    .catch(function () { endCard.hidden = false; });
+})();
+</script>
 {% endblock %}

@@ -3,19 +3,318 @@
 {% block content %}
 <div class="card" style="padding:18px;max-width:560px;margin:0 auto">
   <h3 style="margin-bottom:6px">📸 New story</h3>
-  <p style="color:var(--muted);font-size:14px;margin-bottom:14px">A photo or short video your friends can see for 24 hours.</p>
+  <p style="color:var(--muted);font-size:14px;margin-bottom:14px">A photo or short video your friends can see — you pick for how long below.</p>
   {% if flash %}<p style="color:var(--red);font-weight:600;margin-bottom:10px">{{ flash|e }}</p>{% endif %}
-  <form action="/stories/new" method="post" enctype="multipart/form-data">
-    <div style="margin-bottom:12px">
+  <form action="/stories/new" method="post" enctype="multipart/form-data" id="story-form">
+    <div style="margin-bottom:6px">
       <label class="fld" for="story-media">Photo or video (jpg, png, gif, webp, mp4, mov, webm · max 25MB)</label>
       <input type="file" name="media" id="story-media" accept="image/*,video/*" required>
     </div>
-    <div style="margin-bottom:14px">
+
+    <div id="cmp-preview" hidden>
+      <img id="cmp-img" alt="" hidden>
+      <video id="cmp-vid" muted loop playsinline hidden></video>
+      <div id="cmp-ov" class="pos-bottom" hidden></div>
+    </div>
+
+    <div style="margin-top:12px">
       <label class="fld" for="story-caption">Caption (optional)</label>
       <input type="text" name="caption" id="story-caption" maxlength="280" placeholder="Say something about it..." style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
     </div>
-    <button class="btn-ghost" type="submit" style="font-weight:700">Share story</button>
-    <a class="action-link" href="/home" style="margin-left:8px">Cancel</a>
+
+    <!-- ✍️ write on the story -->
+    <div class="cmp-sec">
+      <h4>✍️ Write on it</h4>
+      <input type="text" name="overlay_text" id="ov-text" maxlength="80" placeholder="Text on your story (optional)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+      <label class="fld" style="margin-top:10px">Text color</label>
+      <div class="chiprow" id="ov-swatches">
+        {% for c in ['#ffffff','#000000','#ffd60a','#ff3b5c','#34c759','#0a84ff','#bf5af2','#ff9f0a'] %}
+        <button type="button" class="swatch{% if c == '#ffffff' %} on{% endif %}" data-color="{{ c }}" style="background:{{ c }}" aria-label="color {{ c }}"></button>
+        {% endfor %}
+        <input type="color" name="overlay_color" id="ov-color" value="#ffffff" style="width:44px;height:30px;padding:0;border:none;background:none;cursor:pointer">
+      </div>
+      <label class="fld" style="margin-top:10px">Where it sits</label>
+      <div class="chiprow" id="ov-poss">
+        <button type="button" class="chip" data-pos="top">Top</button>
+        <button type="button" class="chip" data-pos="middle">Middle</button>
+        <button type="button" class="chip on" data-pos="bottom">Bottom</button>
+      </div>
+      <input type="hidden" name="overlay_pos" id="ov-pos" value="bottom">
+    </div>
+
+    <!-- 🎵 music -->
+    <div class="cmp-sec">
+      <h4>🎵 Add music</h4>
+      <input type="hidden" name="music_kind" id="mus-kind" value="">
+      <input type="hidden" name="music_ref" id="mus-ref" value="">
+      <div class="mus-tabs">
+        <button type="button" class="mus-tab on" id="tab-catalog">⭐ HERE Music</button>
+        <button type="button" class="mus-tab" id="tab-mine">🎤 My Music</button>
+      </div>
+
+      <div id="pane-catalog">
+        <input type="text" id="mus-q" placeholder="Search title, artist, genre…" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+        <p style="color:var(--muted);font-size:12.5px;margin:2px 0 6px">🔥 Trending first. Every track is licensed for use here (CC0 / public domain / CC-BY) — the artist is credited on your story.</p>
+        <div id="catalog-list">
+          {% for t in catalog %}
+          <div class="mus-row" data-kind="catalog" data-ref="{{ t.id }}" data-search="{{ (t.title ~ ' ' ~ t.artist ~ ' ' ~ t.genre)|lower|e }}">
+            <button type="button" class="mus-play" data-url="{{ t.url|e }}" aria-label="Preview">▶</button>
+            <div><div class="t">{{ t.title|e }}</div><div class="a">{{ t.artist|e }}</div></div>
+            <span class="mus-genre">{{ t.genre|e }}</span>
+          </div>
+          {% else %}
+          <p style="color:var(--muted);font-size:13.5px">The catalog is empty right now — use My Music instead.</p>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div id="pane-mine" hidden>
+        <div id="mine-list">
+          {% for m in my_music %}
+          <div class="mus-row" data-kind="upload" data-ref="{{ m.ref|e }}" data-search="{{ m.title|lower|e }}">
+            <button type="button" class="mus-play" data-url="{{ m.url|e }}" aria-label="Preview">▶</button>
+            <div><div class="t">{{ m.title|e }}</div><div class="a">Your upload</div></div>
+          </div>
+          {% else %}
+          <p style="color:var(--muted);font-size:13.5px">Nothing here yet — upload an MP3 below or post an audio post and it will show up.</p>
+          {% endfor %}
+        </div>
+        <label class="fld" style="margin-top:10px" for="mus-file">Upload an MP3 (max 10MB)</label>
+        <input type="file" name="music_file" id="mus-file" accept="audio/*,.mp3,.wav,.ogg,.m4a">
+        <p style="color:var(--muted);font-size:12.5px;margin-top:4px">Only upload music you own or have the rights to use.</p>
+      </div>
+
+      <div class="mus-ctl" id="mus-ctl" hidden>
+        <p style="font-size:14px;margin:0 0 4px">🎵 <strong id="mus-name">No music selected</strong>
+          <button type="button" class="chip" id="mus-remove" style="margin-left:8px">Remove music</button></p>
+        <label class="fld" for="mus-start">Start the song at <span id="mus-start-label">0s</span></label>
+        <input type="range" name="music_start" id="mus-start" min="0" max="120" step="1" value="0" style="width:100%">
+        <label class="fld">Clip length</label>
+        <div class="chiprow" id="mus-lens">
+          <button type="button" class="chip" data-len="5">5s</button>
+          <button type="button" class="chip" data-len="10">10s</button>
+          <button type="button" class="chip on" data-len="15">15s</button>
+          <button type="button" class="chip" data-len="30">30s</button>
+        </div>
+        <input type="hidden" name="music_len" id="mus-len" value="15">
+        <label class="fld" for="mus-vol">Music volume <span id="mus-vol-label">80%</span></label>
+        <input type="range" name="music_volume" id="mus-vol" min="0" max="100" step="1" value="80" style="width:100%">
+        <label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px">
+          <input type="checkbox" name="music_mute_orig" value="1" id="mus-mute">
+          Mute my video's own sound (video stories)
+        </label>
+      </div>
+      <audio id="mus-preview" preload="metadata"></audio>
+    </div>
+
+    <!-- ⏱ lifetime -->
+    <div class="cmp-sec">
+      <h4>⏱ How long should it stay up?</h4>
+      <div class="chiprow" id="life-chips">
+        <button type="button" class="chip" data-life="5m">5 min</button>
+        <button type="button" class="chip" data-life="10m">10 min</button>
+        <button type="button" class="chip" data-life="15m">15 min</button>
+        <button type="button" class="chip" data-life="1h">1 hour</button>
+        <button type="button" class="chip" data-life="custom">Custom hours</button>
+        <button type="button" class="chip on" data-life="24h">24 hours</button>
+      </div>
+      <input type="hidden" name="lifetime" id="life-val" value="24h">
+      <div id="life-custom" hidden style="margin-top:10px">
+        <label class="fld" for="life-hours">Hours (2–24)</label>
+        <input type="number" name="custom_hours" id="life-hours" min="2" max="24" step="1" value="3" style="width:110px;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+      </div>
+    </div>
+
+    <div style="margin-top:18px">
+      <button class="btn-ghost" type="submit" style="font-weight:700">Share story</button>
+      <a class="action-link" href="/home" style="margin-left:8px">Cancel</a>
+    </div>
   </form>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  function $(id) { return document.getElementById(id); }
+  // ---- media preview + overlay live preview ----
+  var mediaIn = $('story-media'), prev = $('cmp-preview'),
+      pImg = $('cmp-img'), pVid = $('cmp-vid'), ov = $('cmp-ov'),
+      ovText = $('ov-text'), ovColor = $('ov-color'), ovPos = $('ov-pos');
+  var objUrl = null;
+  function drawOverlay() {
+    var t = ovText.value.trim();
+    ov.hidden = !t;
+    ov.textContent = t;
+    ov.style.color = ovColor.value;
+    ov.className = 'pos-' + ovPos.value;
+  }
+  mediaIn.addEventListener('change', function () {
+    var f = mediaIn.files && mediaIn.files[0];
+    if (!f) { prev.hidden = true; return; }
+    if (objUrl) URL.revokeObjectURL(objUrl);
+    objUrl = URL.createObjectURL(f);
+    prev.hidden = false;
+    if (f.type.indexOf('video') === 0) {
+      pImg.hidden = true; pVid.hidden = false;
+      pVid.src = objUrl; pVid.play().catch(function () {});
+    } else {
+      pVid.hidden = true; pImg.hidden = false; pImg.src = objUrl;
+    }
+    drawOverlay();
+  });
+  ovText.addEventListener('input', drawOverlay);
+  ovColor.addEventListener('input', function () {
+    document.querySelectorAll('#ov-swatches .swatch').forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-color') === ovColor.value);
+    });
+    drawOverlay();
+  });
+  document.querySelectorAll('#ov-swatches .swatch').forEach(function (b) {
+    b.addEventListener('click', function () {
+      ovColor.value = b.getAttribute('data-color');
+      document.querySelectorAll('#ov-swatches .swatch').forEach(function (x) {
+        x.classList.toggle('on', x === b);
+      });
+      drawOverlay();
+    });
+  });
+  document.querySelectorAll('#ov-poss .chip').forEach(function (b) {
+    b.addEventListener('click', function () {
+      ovPos.value = b.getAttribute('data-pos');
+      document.querySelectorAll('#ov-poss .chip').forEach(function (x) {
+        x.classList.toggle('on', x === b);
+      });
+      drawOverlay();
+    });
+  });
+
+  // ---- music: tabs, search, select, preview, trim ----
+  var tabC = $('tab-catalog'), tabM = $('tab-mine'),
+      paneC = $('pane-catalog'), paneM = $('pane-mine'),
+      kindIn = $('mus-kind'), refIn = $('mus-ref'), ctl = $('mus-ctl'),
+      nameEl = $('mus-name'), startIn = $('mus-start'),
+      startLbl = $('mus-start-label'), lenIn = $('mus-len'),
+      volIn = $('mus-vol'), volLbl = $('mus-vol-label'),
+      preview = $('mus-preview');
+  var previewUrl = '', previewTitle = '';
+
+  function showTab(which) {
+    tabC.classList.toggle('on', which === 'catalog');
+    tabM.classList.toggle('on', which === 'mine');
+    paneC.hidden = which !== 'catalog';
+    paneM.hidden = which !== 'mine';
+  }
+  tabC.addEventListener('click', function () { showTab('catalog'); });
+  tabM.addEventListener('click', function () { showTab('mine'); });
+
+  $('mus-q').addEventListener('input', function () {
+    var q = this.value.trim().toLowerCase();
+    document.querySelectorAll('#catalog-list .mus-row').forEach(function (row) {
+      row.style.display = !q || row.getAttribute('data-search').indexOf(q) >= 0 ? '' : 'none';
+    });
+  });
+
+  function stopPreview() {
+    preview.pause();
+    document.querySelectorAll('.mus-play').forEach(function (b) { b.textContent = '▶'; });
+  }
+  function selectRow(row) {
+    document.querySelectorAll('.mus-row').forEach(function (x) {
+      x.classList.toggle('on', x === row);
+    });
+    var mf = $('mus-file'); if (mf) mf.value = ''; // a pick beats a stale file
+    kindIn.value = row.getAttribute('data-kind');
+    refIn.value = row.getAttribute('data-ref');
+    var t = row.querySelector('.t') ? row.querySelector('.t').textContent : 'Music';
+    nameEl.textContent = t;
+    ctl.hidden = false;
+  }
+  document.querySelectorAll('.mus-row').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+      if (e.target.classList.contains('mus-play')) return;
+      selectRow(row);
+    });
+  });
+  document.querySelectorAll('.mus-play').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var url = btn.getAttribute('data-url');
+      var row = btn.closest('.mus-row');
+      if (row) selectRow(row);
+      if (previewUrl === url && !preview.paused) { stopPreview(); return; }
+      stopPreview();
+      previewUrl = url;
+      previewTitle = row && row.querySelector('.t') ? row.querySelector('.t').textContent : '';
+      preview.src = url;
+      preview.volume = parseInt(volIn.value, 10) / 100;
+      var begin = function () {
+        var start = parseInt(startIn.value, 10) || 0;
+        var dur = isFinite(preview.duration) ? preview.duration : 0;
+        if (dur > 0) {
+          var maxStart = Math.max(0, Math.floor(dur - parseInt(lenIn.value, 10)));
+          startIn.max = Math.max(0, Math.floor(dur) - 5);
+          if (start > maxStart) { start = maxStart; startIn.value = start; startLbl.textContent = start + 's'; }
+        }
+        try { preview.currentTime = start; } catch (err) {}
+        preview.play().catch(function () {});
+        btn.textContent = '⏸';
+      };
+      if (preview.readyState >= 1) begin();
+      else preview.addEventListener('loadedmetadata', begin, { once: true });
+    });
+  });
+  preview.addEventListener('timeupdate', function () {
+    if (!previewUrl) return;
+    var start = parseInt(startIn.value, 10) || 0;
+    var len = parseInt(lenIn.value, 10) || 15;
+    if (preview.currentTime >= start + len) stopPreview();
+  });
+  preview.addEventListener('ended', stopPreview);
+  startIn.addEventListener('input', function () {
+    startLbl.textContent = startIn.value + 's';
+    if (previewUrl && !preview.paused) {
+      try { preview.currentTime = parseInt(startIn.value, 10) || 0; } catch (e) {}
+    }
+  });
+  volIn.addEventListener('input', function () {
+    volLbl.textContent = volIn.value + '%';
+    preview.volume = parseInt(volIn.value, 10) / 100;
+  });
+  document.querySelectorAll('#mus-lens .chip').forEach(function (b) {
+    b.addEventListener('click', function () {
+      lenIn.value = b.getAttribute('data-len');
+      document.querySelectorAll('#mus-lens .chip').forEach(function (x) {
+        x.classList.toggle('on', x === b);
+      });
+    });
+  });
+  $('mus-remove').addEventListener('click', function () {
+    kindIn.value = ''; refIn.value = '';
+    document.querySelectorAll('.mus-row').forEach(function (x) { x.classList.remove('on'); });
+    nameEl.textContent = 'No music selected';
+    ctl.hidden = true;
+    stopPreview(); previewUrl = '';
+    var mf = $('mus-file'); if (mf) mf.value = '';
+  });
+  // a freshly chosen upload counts as the selection (server agrees)
+  var musFile = $('mus-file');
+  musFile.addEventListener('change', function () {
+    if (musFile.files && musFile.files[0]) {
+      nameEl.textContent = musFile.files[0].name + ' (will upload)';
+      ctl.hidden = false;
+    }
+  });
+
+  // ---- lifetime chips ----
+  document.querySelectorAll('#life-chips .chip').forEach(function (b) {
+    b.addEventListener('click', function () {
+      $('life-val').value = b.getAttribute('data-life');
+      document.querySelectorAll('#life-chips .chip').forEach(function (x) {
+        x.classList.toggle('on', x === b);
+      });
+      $('life-custom').hidden = b.getAttribute('data-life') !== 'custom';
+    });
+  });
+})();
+</script>
 {% endblock %}
