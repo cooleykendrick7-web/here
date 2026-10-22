@@ -214,8 +214,8 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 .call-top{position:relative;z-index:2;text-align:center;padding:22px 16px 0}
 #call-peer-name{font-size:22px;font-weight:800;text-shadow:0 1px 6px rgba(0,0,0,.8)}
 #call-state{font-size:15px;color:#e8e8e8;margin-top:4px;text-shadow:0 1px 6px rgba(0,0,0,.8)}
-.call-controls{position:relative;z-index:2;margin-top:auto;display:flex;gap:16px;
-  justify-content:center;padding:0 16px 30px}
+.call-controls{position:relative;z-index:5;margin-top:auto;display:flex;gap:16px;
+  justify-content:center;padding:0 16px 30px;flex-wrap:wrap}
 .call-ctl{width:58px;height:58px;border-radius:50%;border:none;background:rgba(255,255,255,.18);
   color:#fff;font-size:24px;cursor:pointer;display:flex;align-items:center;justify-content:center}
 .call-ctl.off{background:#fff;color:#111}
@@ -227,6 +227,43 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 #call-error[hidden]{display:none}
 #call-error button{margin-top:12px}
 .call-start-btns{display:inline-flex;gap:6px;flex-shrink:0}
+.call-ctl.sm{width:44px;height:44px;font-size:19px}
+#call-toast{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);z-index:5;
+  width:min(88vw,340px);background:rgba(28,28,30,.96);border:1px solid var(--red);
+  border-radius:10px;padding:10px 14px;font-size:14px;text-align:center}
+#call-toast[hidden]{display:none}
+
+/* ===== call multitasking: floating mini tile =====
+   Minimizing MOVES the live #call-remote-video element into this tile
+   (appendChild — the stream never restarts); restoring moves it back.
+   The tile floats above page content (header is 1000) but below the
+   body-level sheets (1990/2000) and the incoming-call sheet (3000).
+   touch-action:none so dragging the tile never scrolls the page. */
+#call-mini{position:fixed;right:12px;bottom:12px;width:104px;height:139px;z-index:1500;
+  background:#000;border:2px solid rgba(255,255,255,.55);border-radius:12px;overflow:hidden;
+  box-shadow:0 10px 28px rgba(0,0,0,.5);color:#fff;touch-action:none;cursor:pointer}
+#call-mini[hidden]{display:none}
+#call-mini #call-remote-video{z-index:0}
+#call-mini-voice{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:5px;padding:8px;text-align:center;background:#1c1c1e}
+#call-mini-voice[hidden]{display:none}
+#call-mini-voice .avatar,#call-mini-voice .av-ph{flex-shrink:0}
+#call-mini-voice .nm{font-size:13px;font-weight:700;line-height:1.25;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#call-mini-voice .st{font-size:12px;color:#c9c9c9}
+.call-mini-meta{min-width:0}
+.call-mini-btns{position:absolute;left:0;right:0;bottom:6px;z-index:2;display:flex;
+  gap:10px;justify-content:center}
+.call-mini-btn{width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,.22);
+  color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.call-mini-btn.off{background:#fff;color:#111}
+#call-mini-end{background:var(--red)}
+#call-mini.voice{width:248px;height:64px;border-radius:32px}
+#call-mini.voice #call-mini-voice{flex-direction:row;justify-content:flex-start;gap:10px;
+  padding:8px 104px 8px 12px;text-align:left}
+#call-mini.voice #call-mini-voice .nm{white-space:normal}
+#call-mini.voice .call-mini-btns{left:auto;right:10px;bottom:auto;top:50%;
+  transform:translateY(-50%)}
 
 /* ===== post card ===== */
 .post-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -577,11 +614,31 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <div id="call-error-text"></div>
     <button type="button" class="btn" id="call-error-close">Close</button>
   </div>
+  <div id="call-toast" hidden></div>
   <div class="call-controls" id="call-controls">
+    <button type="button" class="call-ctl sm" id="call-min-btn" title="Minimize">⌄</button>
     <button type="button" class="call-ctl" id="call-mute-btn" title="Mute">🎤</button>
     <button type="button" class="call-ctl" id="call-cam-btn" title="Camera on/off" hidden>📷</button>
     <button type="button" class="call-ctl" id="call-flip-btn" title="Switch camera" hidden>🔄</button>
+    <button type="button" class="call-ctl sm" id="call-pip-btn" title="Pop out video" hidden>⧉</button>
     <button type="button" class="call-ctl" id="call-end-btn" title="End call">📞</button>
+  </div>
+</div>
+
+<!-- ===== minimized call: floating tile (the live remote <video> is
+     moved in here by JS so the stream never restarts) ===== -->
+<div id="call-mini" hidden>
+  <div id="call-mini-voice" hidden>
+    <img class="avatar av-40" id="call-mini-img" src="" alt="" hidden>
+    <span class="av-ph av-40" id="call-mini-ph"></span>
+    <div class="call-mini-meta">
+      <div class="nm" id="call-mini-name"></div>
+      <div class="st" id="call-mini-state"></div>
+    </div>
+  </div>
+  <div class="call-mini-btns">
+    <button type="button" class="call-mini-btn" id="call-mini-mute" title="Mute">🎤</button>
+    <button type="button" class="call-mini-btn" id="call-mini-end" title="End call">📞</button>
   </div>
 </div>
 
@@ -906,6 +963,12 @@ document.addEventListener('click', function(ev){
       errText = $('call-error-text'), controlsRow = $('call-controls'),
       muteBtn = $('call-mute-btn'), camBtn = $('call-cam-btn'),
       flipBtn = $('call-flip-btn'), endBtn = $('call-end-btn'),
+      minBtn = $('call-min-btn'), pipBtn = $('call-pip-btn'),
+      toastEl = $('call-toast'),
+      miniEl = $('call-mini'), miniVoice = $('call-mini-voice'),
+      miniImg = $('call-mini-img'), miniPh = $('call-mini-ph'),
+      miniName = $('call-mini-name'), miniState = $('call-mini-state'),
+      miniMute = $('call-mini-mute'), miniEnd = $('call-mini-end'),
       sheet = $('incoming-sheet'), incImg = $('inc-avatar-img'),
       incPh = $('inc-avatar-ph'), incName = $('inc-name'),
       incKind = $('inc-kind'), incAnswer = $('inc-answer'),
@@ -937,6 +1000,13 @@ document.addEventListener('click', function(ev){
   var shownReqId = 0;
   var gen = 0;         /* overlay generation; stale timers can't hide a new call */
 
+  /* Call multitasking: minimizing moves the remote <video> element
+     itself into the floating tile (its stream keeps playing — the
+     element is never re-created and srcObject is never re-set), and
+     restoring moves it back to its home slot in the overlay. */
+  var remoteHome = {parent: remoteVideo.parentNode, next: remoteVideo.nextSibling};
+  var minimized = false;
+
   function jget(url){
     return fetch(url, {credentials: 'same-origin'})
       .then(function(r){ return r.json(); });
@@ -947,7 +1017,10 @@ document.addEventListener('click', function(ev){
       body: body ? JSON.stringify(body) : '{}'})
       .then(function(r){ return r.json().catch(function(){ return {}; }); });
   }
-  function setState(t){ stateEl.textContent = t; }
+  /* One text sink for the call state/timer: the overlay line and the
+     mini tile's line are mirrors, so the timer stays correct in both
+     modes (the duration interval only ever calls setState). */
+  function setState(t){ stateEl.textContent = t; miniState.textContent = t; }
   function fmtDur(ms){
     var s = Math.floor(ms / 1000);
     return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
@@ -983,6 +1056,45 @@ document.addEventListener('click', function(ev){
   }
 
   /* ---------------- overlay plumbing ---------------- */
+  function moveVideoHome(){
+    if (remoteVideo.parentNode !== remoteHome.parent)
+      remoteHome.parent.insertBefore(remoteVideo, remoteHome.next);
+  }
+  function hideMini(){
+    minimized = false;
+    miniEl.hidden = true;
+    moveVideoHome();
+  }
+  function minimizeCall(){
+    if (!S || minimized) return;
+    minimized = true;
+    var isVideo = S.kind === 'video';
+    miniEl.classList.toggle('voice', !isVideo);
+    miniVoice.hidden = isVideo;
+    if (!isVideo){
+      if (S.other.avatar){
+        miniImg.src = S.other.avatar; miniImg.hidden = false; miniPh.hidden = true;
+      } else {
+        miniImg.hidden = true; miniPh.hidden = false;
+        miniPh.textContent = (S.other.name || '?').charAt(0).toUpperCase();
+      }
+      miniName.textContent = S.other.name || '';
+      miniState.textContent = stateEl.textContent;
+    }
+    /* The element itself moves — same node, same srcObject, the
+       stream never restarts. For voice calls it rides along hidden
+       (it carries the audio) under the pill's avatar view. */
+    miniEl.appendChild(remoteVideo);
+    overlay.hidden = true;
+    miniEl.hidden = false;
+  }
+  function restoreCall(){
+    if (!minimized) return;
+    minimized = false;
+    miniEl.hidden = true;
+    moveVideoHome();
+    overlay.hidden = false;
+  }
   function showOverlay(other, kind){
     gen++;
     peerName.textContent = other.name;
@@ -998,11 +1110,16 @@ document.addEventListener('click', function(ev){
     remoteVideo.style.visibility = isVideo ? 'visible' : 'hidden';
     camBtn.hidden = !isVideo;
     flipBtn.hidden = !isVideo;
+    pipBtn.hidden = !isVideo;
     localVideo.hidden = true;
     errBox.hidden = true;
+    toastEl.hidden = true;
+    hideMini(); /* a fresh call always starts full-screen, video home */
     controlsRow.style.display = '';
     muteBtn.classList.remove('off');
     muteBtn.textContent = '🎤';
+    miniMute.classList.remove('off');
+    miniMute.textContent = '🎤';
     camBtn.classList.remove('off');
     overlay.hidden = false;
   }
@@ -1015,6 +1132,10 @@ document.addEventListener('click', function(ev){
     if (S.pollTimer){ clearInterval(S.pollTimer); S.pollTimer = null; }
     if (S.durTimer){ clearInterval(S.durTimer); S.durTimer = null; }
     ringStop();
+    hideMini(); /* tile away, remote video back in the overlay */
+    if (document.pictureInPictureElement){
+      document.exitPictureInPicture().catch(function(){});
+    }
     if (S.pc){ try { S.pc.close(); } catch (e) {} S.pc = null; }
     if (S.localStream){
       S.localStream.getTracks().forEach(function(t){ t.stop(); });
@@ -1028,6 +1149,7 @@ document.addEventListener('click', function(ev){
     cleanupCall();
     var g = gen;
     if (finalMsg){
+      overlay.hidden = false; /* surface the message even if minimized */
       setState(finalMsg);
       setTimeout(function(){ if (gen === g) overlay.hidden = true; }, 1600);
     } else {
@@ -1213,15 +1335,30 @@ document.addEventListener('click', function(ev){
     if (b){ ev.preventDefault(); startCall(b); }
   });
 
-  /* ---------------- controls ---------------- */
-  muteBtn.addEventListener('click', function(){
+  /* ---------------- controls ----------------
+     One source of truth: the overlay buttons and the mini-tile
+     buttons call the same functions and paint from the same state. */
+  function paintMute(){
+    if (!S || !S.localStream) return;
+    var t = S.localStream.getAudioTracks()[0];
+    if (!t) return;
+    [muteBtn, miniMute].forEach(function(b){
+      b.classList.toggle('off', !t.enabled);
+      b.textContent = t.enabled ? '🎤' : '🔇';
+    });
+  }
+  function toggleMute(){
     if (!S || !S.localStream) return;
     var tracks = S.localStream.getAudioTracks();
     if (!tracks.length) return;
     var on = !tracks[0].enabled;
     tracks.forEach(function(t){ t.enabled = on; });
-    muteBtn.classList.toggle('off', !on);
-    muteBtn.textContent = on ? '🎤' : '🔇';
+    paintMute();
+  }
+  muteBtn.addEventListener('click', toggleMute);
+  miniMute.addEventListener('click', function(ev){
+    ev.stopPropagation();
+    toggleMute();
   });
   camBtn.addEventListener('click', function(){
     if (!S || !S.localStream) return;
@@ -1252,9 +1389,14 @@ document.addEventListener('click', function(ev){
       })
       .catch(function(){});
   });
-  endBtn.addEventListener('click', function(){
+  function endCallNow(){
     if (S && S.id) jpost('/calls/' + S.id + '/end').catch(function(){});
     endUi('Call ended');
+  }
+  endBtn.addEventListener('click', endCallNow);
+  miniEnd.addEventListener('click', function(ev){
+    ev.stopPropagation();
+    endCallNow();
   });
   $('call-error-close').addEventListener('click', function(){
     errBox.hidden = true;
@@ -1265,6 +1407,162 @@ document.addEventListener('click', function(ev){
       try { navigator.sendBeacon('/calls/' + S.id + '/end'); } catch (e) {}
     }
   });
+
+  /* ---------------- call multitasking ----------------
+     Minimize (⌄ button or a downward swipe on the overlay) shrinks
+     the call to the floating tile so the page underneath is usable;
+     tapping the tile restores full screen. The tile drags with
+     pointer events (touch + mouse); a drag (>8px) never restores,
+     a tap always does. */
+  minBtn.addEventListener('click', minimizeCall);
+  var swipeStart = null;
+  overlay.addEventListener('touchstart', function(ev){
+    swipeStart = null;
+    if (!S || ev.touches.length !== 1) return;
+    if (ev.target.closest && ev.target.closest('button')) return;
+    swipeStart = {x: ev.touches[0].clientX, y: ev.touches[0].clientY};
+  }, {passive: true});
+  overlay.addEventListener('touchend', function(ev){
+    if (!swipeStart) return;
+    var t = ev.changedTouches[0];
+    var dx = t.clientX - swipeStart.x, dy = t.clientY - swipeStart.y;
+    swipeStart = null;
+    if (dy > 70 && dy > Math.abs(dx) * 1.2) minimizeCall();
+  }, {passive: true});
+
+  var tileDrag = null, tileDragAt = 0;
+  miniEl.addEventListener('pointerdown', function(ev){
+    if (ev.target.closest && ev.target.closest('button')) return;
+    tileDrag = {x: ev.clientX, y: ev.clientY,
+                l: miniEl.offsetLeft, t: miniEl.offsetTop, moved: false};
+    try { miniEl.setPointerCapture(ev.pointerId); } catch (e) {}
+  });
+  miniEl.addEventListener('pointermove', function(ev){
+    if (!tileDrag) return;
+    var dx = ev.clientX - tileDrag.x, dy = ev.clientY - tileDrag.y;
+    if (!tileDrag.moved && Math.abs(dx) + Math.abs(dy) > 8) tileDrag.moved = true;
+    if (tileDrag.moved){
+      var nl = Math.min(Math.max(tileDrag.l + dx, 0),
+                        window.innerWidth - miniEl.offsetWidth);
+      var nt = Math.min(Math.max(tileDrag.t + dy, 0),
+                        window.innerHeight - miniEl.offsetHeight);
+      miniEl.style.left = nl + 'px';
+      miniEl.style.top = nt + 'px';
+      miniEl.style.right = 'auto';
+      miniEl.style.bottom = 'auto';
+    }
+  });
+  miniEl.addEventListener('pointerup', function(ev){
+    if (!tileDrag) return;
+    var wasDrag = tileDrag.moved;
+    tileDrag = null;
+    if (wasDrag){ tileDragAt = Date.now(); return; }
+    if (!(ev.target.closest && ev.target.closest('button'))) restoreCall();
+  });
+  miniEl.addEventListener('pointercancel', function(){ tileDrag = null; });
+  /* A drag that ends over a tile button must not also fire it. */
+  miniEl.addEventListener('click', function(ev){
+    if (Date.now() - tileDragAt < 300){ ev.preventDefault(); ev.stopPropagation(); }
+  }, true);
+
+  /* Pop-out (system picture-in-picture) for video calls. On
+     'leavepictureinpicture' nothing about the call changes — the
+     same element just renders back into the page. Platforms without
+     either API (the WebView wrappers, old browsers) get the toast. */
+  function pipToast(){
+    toastEl.textContent = "Pop-out isn't available in this app"
+      + ' — use HERE in your browser for that.';
+    toastEl.hidden = false;
+    clearTimeout(pipToast._t);
+    pipToast._t = setTimeout(function(){ toastEl.hidden = true; }, 2800);
+  }
+  pipBtn.addEventListener('click', function(){
+    if (!S || S.kind !== 'video') return;
+    if (document.pictureInPictureElement){
+      document.exitPictureInPicture().catch(function(){});
+      return;
+    }
+    if (remoteVideo.requestPictureInPicture){
+      remoteVideo.requestPictureInPicture().catch(function(){ pipToast(); });
+    } else if (remoteVideo.webkitSupportsPresentationMode
+               && remoteVideo.webkitSupportsPresentationMode('picture-in-picture')
+               && remoteVideo.webkitSetPresentationMode){
+      try { remoteVideo.webkitSetPresentationMode('picture-in-picture'); }
+      catch (e) { pipToast(); }
+    } else {
+      pipToast();
+    }
+  });
+  /* Switching apps/tabs mid-video-call: try to pop the video out so
+     it keeps playing in the OS window. Some platforms demand a user
+     gesture and refuse — that failure is silent by design. */
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState !== 'hidden') return;
+    if (!S || S.kind !== 'video' || !S.connected) return;
+    if (document.pictureInPictureElement) return;
+    try {
+      if (remoteVideo.requestPictureInPicture){
+        if (!remoteVideo.paused && remoteVideo.readyState >= 2)
+          remoteVideo.requestPictureInPicture().catch(function(){});
+      } else if (remoteVideo.webkitSetPresentationMode
+                 && remoteVideo.webkitPresentationMode === 'inline'){
+        remoteVideo.webkitSetPresentationMode('picture-in-picture');
+      }
+    } catch (e) {}
+  });
+
+  /* Navigation guard: while a call is live (ringing or connected,
+     full-screen or minimized), an in-page link tap that would leave
+     this page asks first. Declining keeps the call; confirming lets
+     the navigation happen and the beforeunload beacon above ends
+     the call row exactly as it does today. In-page anchors (#…,
+     same-page #fragment links) and new-tab/external links never
+     trigger it, and with no call live it never fires. */
+  function callLive(){ return !!(S && S.id && !TERMINAL[S.status]); }
+  document.addEventListener('click', function(ev){
+    if (!callLive()) return;
+    var a = ev.target.closest ? ev.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (!href || href.charAt(0) === '#') return;
+    if (a.target && a.target !== '_self') return;
+    var url;
+    try { url = new URL(a.href, window.location.href); } catch (e) { return; }
+    if (url.origin !== window.location.origin) return;
+    if (url.hash && url.pathname === window.location.pathname
+        && url.search === window.location.search) return;
+    if (!window.confirm("You're on a call. Leave this page? Your call will end.")){
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+  }, true);
+
+  /* Form-submit guard: the link guard above can't see plain form
+     submits, and HERE's composer, comment forms and message form all
+     POST and reload the page — so Post/Comment/Send mid-call would
+     drop the call with no warning. While a call is live, a submit
+     that would navigate asks the SAME question first. Cancelling
+     preventDefault()s the submit: nothing is sent, the page stays,
+     and whatever the user typed stays in the box. Confirming lets
+     the submit go out untouched (the unload beacon ends the call,
+     exactly like a confirmed link tap). Exempt: the like/react
+     forms — the submit handler elsewhere in base.html converts them
+     to fetch, so they never navigate; target=_blank forms (they
+     open elsewhere and leave this page — and the call — alone);
+     and anything inside the call overlay / mini tile themselves. */
+  document.addEventListener('submit', function(ev){
+    if (!callLive()) return;
+    var f = ev.target;
+    if (!f || f.tagName !== 'FORM') return;
+    if (f.classList && (f.classList.contains('like-form')
+                        || f.classList.contains('react-form'))) return;
+    if (f.target && f.target !== '_self') return;
+    if (f.closest && f.closest('#call-overlay, #call-mini')) return;
+    if (!window.confirm("You're on a call. Leave this page? Your call will end.")){
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+  }, true);
 
   /* ---------------- incoming-call sheet + poller ---------------- */
   function showSheet(call){
