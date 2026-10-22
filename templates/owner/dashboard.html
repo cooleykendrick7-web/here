@@ -56,6 +56,50 @@ table.admin tr:last-child td{border-bottom:none}
 </div>
 
 <section>
+  <h2>🔴 Live Now</h2>
+  {% if live_now %}
+  <div class="table-wrap">
+  <table class="admin">
+    <tr><th>Host</th><th>Title</th><th>Started</th><th>Watching</th><th></th></tr>
+    {% for l in live_now %}
+    <tr>
+      <td><a href="/user/{{ l.host_id }}">{{ l.host_name|e }}</a></td>
+      <td>{{ l.title|e if l.title else '—' }}</td>
+      <td>{{ l.created_at|e }}</td>
+      <td>👁 {{ l.viewers }}</td>
+      <td>
+        <a class="btn-ghost" href="/live/{{ l.id }}">Watch</a>
+        <form class="inline-form" method="post" action="/owner/live/{{ l.id }}/end"
+          onsubmit="return confirm('End {{ l.host_name|e }}\'s live for everyone?')">
+          <button type="submit" class="btn">End live</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% else %}
+  <p class="empty">Nobody is live right now.</p>
+  {% endif %}
+  {% if live_recent %}
+  <p style="color:#9a9a9a;font-size:13px;margin:12px 0 6px">Recently ended:</p>
+  <div class="table-wrap">
+  <table class="admin">
+    <tr><th>Host</th><th>Title</th><th>Started</th><th>Ended</th></tr>
+    {% for l in live_recent %}
+    <tr>
+      <td>{{ l.host_name|e }}</td>
+      <td>{{ l.title|e if l.title else '—' }}</td>
+      <td>{{ l.created_at|e }}</td>
+      <td>{{ l.ended_at|e }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  {% endif %}
+</section>
+
+<section>
   <h2>⭐ Verification Requests</h2>
   <p style="color:#9a9a9a;font-size:13px;margin-bottom:10px">Review the page and its posts before deciding. AI can pre-screen, but <strong>only you approve</strong> — content must be very interesting, eye-catching, and attention-grabbing.</p>
   <div class="table-wrap">
