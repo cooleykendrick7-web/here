@@ -100,7 +100,8 @@ Profile backgrounds: every user can set a MySpace-style full-page background pho
 |---|---|---|---|
 | GET | / | redirect /home if logged in else /login | |
 | GET | /sw.js | static/sw.js (FileResponse, Service-Worker-Allowed: /) | PWA service worker — caches ONLY manifest + icons; pages/API always network |
-| GET | /download/android | static/here.apk (FileResponse) | Real signed Android APK (package com.hereapp.here); 404 if the APK file is absent. Login page "Get the HERE app" card links here; iPhone instead gets Add-to-Home-Screen steps (PWA: /static/manifest.json + /static/icons/*) |
+| GET | /download/android | static/here.apk (FileResponse) | Real signed Android APK (package com.hereapp.here); 404 if the APK file is absent. Login page "Get the HERE app" card links here |
+| GET | /download/ios | static/here.ipa (FileResponse, application/octet-stream) | Real iPhone IPA (bundle com.hereapp.here, source in ios/) built UNSIGNED by GitHub Actions (.github/workflows/build-ipa.yml) and committed back by CI; 404 until the first CI build lands it. Installs via AltStore/SideStore sideloading (Apple blocks installing app files from Safari); login card / /app explain the steps and also keep the Add-to-Home-Screen PWA path (/static/manifest.json + /static/icons/*) |
 | GET | /app | templates/app.html | Login-required "Get the HERE app" page (same card as the login page) so logged-in users can reach the app downloads; linked from the ☰ menu and sidebar as "📱 Get the app". Redirects to /login when logged out |
 | GET | /signup | auth/signup.html | error? |
 | POST | /signup | fields: name, email, password | -> redirect /home |

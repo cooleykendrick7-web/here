@@ -951,6 +951,24 @@ async def download_android():
     )
 
 
+@app.get("/download/ios")
+async def download_ios():
+    # The IPA is built unsigned by GitHub Actions (see ios/ and
+    # .github/workflows/build-ipa.yml) and committed back as
+    # static/here.ipa; until the first CI run lands it, this 404s.
+    # It installs via AltStore/SideStore sideloading — iOS cannot
+    # install it straight from Safari (Apple's rule, explained on the
+    # login page / /app next to the button).
+    ipa = os.path.join(BASE, "static", "here.ipa")
+    if not os.path.exists(ipa):
+        raise HTTPException(status_code=404, detail="iPhone app not available yet")
+    return FileResponse(
+        ipa,
+        media_type="application/octet-stream",
+        filename="here.ipa",
+    )
+
+
 @app.get("/app", response_class=HTMLResponse)
 async def app_page(request: Request):
     # The "Get the HERE app" card for people who are already logged in —
