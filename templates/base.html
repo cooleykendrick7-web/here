@@ -292,6 +292,37 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 .comment-form{display:flex;gap:8px;margin-top:12px}
 .comment-form input{flex:1;border:1px solid var(--border);border-radius:20px;padding:9px 14px;font-size:14px;outline:none}
 .comment-form input:focus{border-color:var(--red)}
+.comment.reply{margin-left:44px;border-top:none;padding-top:2px}
+.cmenu-btn{float:right;background:none;border:none;font-size:19px;font-weight:800;line-height:1;
+  color:var(--muted);cursor:pointer;padding:0 2px;margin-left:8px;border-radius:6px}
+.cmenu-btn:hover{color:var(--red);background:#e4e6eb}
+.clink{background:none;border:none;color:var(--muted);font-weight:700;font-size:12px;cursor:pointer;padding:0}
+.clink:hover{color:var(--red);text-decoration:underline}
+.reply-box{margin:2px 0 10px 42px}
+.reply-box.reply{margin-left:86px}
+.reply-box[hidden]{display:none}
+.reply-form{display:flex;gap:8px;align-items:flex-start}
+.reply-form textarea{flex:1;border:1px solid var(--border);border-radius:14px;padding:8px 12px;
+  font-size:14px;resize:vertical;min-height:40px;outline:none;font-family:inherit}
+.reply-form textarea:focus{border-color:var(--red)}
+.blocked-note{margin-top:12px;background:var(--red-soft);border:1px solid var(--red);
+  border-radius:10px;padding:10px 12px;font-size:14px;font-weight:600;color:var(--red-dark)}
+/* ===== comment ⋯ menu: ONE shared fixed sheet at body level =====
+   Same lesson as the aud sheets: a menu rendered inside a glass card
+   (backdrop-filter) is trapped in that card's stacking context and the
+   next card paints over it. So the sheet lives directly under <body>
+   and JS fills it with the actions for the tapped comment. */
+#cmenu-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
+#cmenu-backdrop[hidden]{display:none}
+#cmenu-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(92vw,340px);background:#fff;border:1px solid var(--border);border-radius:12px;
+  padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left}
+#cmenu-sheet[hidden]{display:none}
+#cmenu-confirm[hidden]{display:none}
+.cmenu-item{display:block;width:100%;text-align:left;background:none;border:none;
+  padding:12px 8px;font-size:15px;font-weight:600;cursor:pointer;border-radius:8px;color:#1c1e21}
+.cmenu-item:hover{background:var(--red-soft)}
+.cmenu-item.danger{color:var(--red-dark)}
 
 /* ===== generic lists / forms ===== */
 .row-item{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
@@ -553,6 +584,27 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <button type="button" class="call-ctl" id="call-end-btn" title="End call">📞</button>
   </div>
 </div>
+
+<!-- ===== comment ⋯ menu: one shared fixed sheet, filled by JS ===== -->
+<div id="cmenu-backdrop" hidden></div>
+<div id="cmenu-sheet" hidden>
+  <div class="aud-title">Comment options</div>
+  <div id="cmenu-main">
+    <button type="button" class="cmenu-item danger" id="cmenu-del-btn" hidden>🗑 Delete comment</button>
+    <form id="cmenu-block-form" method="post" action="" hidden>
+      <input type="hidden" name="user_id" id="cmenu-block-uid" value="">
+      <button type="submit" class="cmenu-item" id="cmenu-block-btn">🚫 Block</button>
+    </form>
+    <button type="button" class="cmenu-item" id="cmenu-cancel">Cancel</button>
+  </div>
+  <div id="cmenu-confirm" hidden>
+    <p style="font-size:15px;margin:4px 0 10px">Delete this comment? Any replies to it go too.</p>
+    <form id="cmenu-del-form" method="post" action="">
+      <button type="submit" class="cmenu-item danger">🗑 Delete</button>
+    </form>
+    <button type="button" class="cmenu-item" id="cmenu-confirm-cancel">Cancel</button>
+  </div>
+</div>
 {% endif %}
 
 <script>
@@ -629,6 +681,81 @@ document.addEventListener('click', function(ev){
     if (ap){ if (ap.hidden) openAudPopup(ap); else closeAudPopup(ap); }
   }
 });
+</script>
+<script>
+/* ===== Comment controls: ⋯ menu sheet, reply boxes, blocked sheet =====
+   The ⋯ menu is ONE shared fixed sheet at body level (see the CSS
+   note): the tapped comment's data-* attributes say which actions the
+   viewer gets — Delete for the comment's author and the post's
+   author, Block (post author only) for someone else's comment.
+   Delete asks "are you sure?" inline in the sheet before the form
+   goes out. Reply toggles open the inline reply box under a comment.
+   The author's "🚫 Blocked (N)" button reuses the aud sheet portal
+   for the per-post blocked-people list (with Unblock buttons). */
+(function(){
+  var sheet = document.getElementById('cmenu-sheet');
+  if (!sheet) return; /* guests get no comment UI */
+  var bd = document.getElementById('cmenu-backdrop'),
+      main = document.getElementById('cmenu-main'),
+      confirmBox = document.getElementById('cmenu-confirm'),
+      delBtn = document.getElementById('cmenu-del-btn'),
+      delForm = document.getElementById('cmenu-del-form'),
+      blockForm = document.getElementById('cmenu-block-form'),
+      blockBtn = document.getElementById('cmenu-block-btn'),
+      blockUid = document.getElementById('cmenu-block-uid');
+  function closeSheet(){ sheet.hidden = true; bd.hidden = true; }
+  function openSheet(){
+    main.hidden = false; confirmBox.hidden = true;
+    sheet.hidden = false; bd.hidden = false;
+  }
+  bd.addEventListener('click', closeSheet);
+  document.getElementById('cmenu-cancel').addEventListener('click', closeSheet);
+  document.getElementById('cmenu-confirm-cancel').addEventListener('click', closeSheet);
+  delBtn.addEventListener('click', function(){
+    main.hidden = true; confirmBox.hidden = false;
+  });
+  document.addEventListener('click', function(ev){
+    var t = ev.target.closest ? ev.target.closest('.cmenu-btn') : null;
+    if (t){
+      var canDel = t.getAttribute('data-del') === '1',
+          canBlk = t.getAttribute('data-blk') === '1';
+      delBtn.hidden = !canDel;
+      delForm.action = '/comment/' + t.getAttribute('data-cid') + '/delete';
+      blockForm.hidden = !canBlk;
+      if (canBlk){
+        blockForm.action = '/post/' + t.getAttribute('data-pid') + '/comment-block';
+        blockUid.value = t.getAttribute('data-auid');
+        blockBtn.textContent = '🚫 Block ' + t.getAttribute('data-aname') +
+          ' from commenting on this post';
+      }
+      openSheet();
+      return;
+    }
+    var r = ev.target.closest ? ev.target.closest('.reply-toggle') : null;
+    if (r){
+      var box = document.getElementById(r.getAttribute('data-box'));
+      if (box){
+        box.hidden = !box.hidden;
+        if (!box.hidden){
+          var ta = box.querySelector('textarea');
+          if (ta) ta.focus();
+        }
+      }
+      return;
+    }
+    var cb = ev.target.closest ? ev.target.closest('.cblock-toggle') : null;
+    if (cb){
+      var pop = document.getElementById('cblock-popup-' + cb.getAttribute('data-pid'));
+      if (pop){ if (pop.hidden) openAudPopup(pop); else closeAudPopup(pop); }
+      return;
+    }
+    var cc = ev.target.closest ? ev.target.closest('.cblock-close') : null;
+    if (cc){
+      var p2 = cc.closest('.aud-popup');
+      if (p2) closeAudPopup(p2);
+    }
+  });
+})();
 </script>
 <script>
 /* ===== Facebook-style @ tagging in the composer =====

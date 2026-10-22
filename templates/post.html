@@ -4,26 +4,58 @@
 
 {% include "partials/post_card.html" %}
 
+{# One comment (or reply) row: avatar + bubble. The ⋯ button (rendered
+   only when the viewer may act on this comment) opens the shared
+   body-level menu sheet in base.html; the Reply link opens the small
+   inline reply box under the comment. Replies render indented under
+   their top-level comment; a reply aimed at another reply carries a
+   linked "@Name" prefix (reply_prefix). #}
+{% macro comment_row(c, post, is_reply) %}
+<div class="comment{% if is_reply %} reply{% endif %}" id="comment-{{ c.id }}">
+  {% if c.author_avatar %}<img class="avatar av-32" src="{{ c.author_avatar|e }}" alt="">
+  {% else %}<span class="av-ph av-32">{{ c.author_name[:1]|upper|e }}</span>{% endif %}
+  <div class="cbub">
+    {% if c.can_delete or c.can_block %}
+    <button type="button" class="cmenu-btn" title="Comment options" aria-label="Comment options"
+      data-cid="{{ c.id }}" data-pid="{{ post.id }}"
+      data-aname="{{ c.author_name|e }}" data-auid="{{ c.user_id }}"
+      data-del="{{ 1 if c.can_delete else 0 }}" data-blk="{{ 1 if c.can_block else 0 }}">⋯</button>
+    {% endif %}
+    <div class="cnm"><a href="/user/{{ c.user_id }}">{{ c.author_name|e }}</a></div>
+    <div class="ctxt">{% if c.reply_prefix %}<a class="tag-link" href="/user/{{ c.reply_prefix.id }}">@{{ c.reply_prefix.name|e }}</a> {% endif %}{{ c.body_html|safe }}</div>
+    <div class="cmeta">{{ c.created_at|e }}{% if not post.viewer_comment_blocked %} · <button type="button" class="clink reply-toggle" data-box="replybox-{{ c.id }}">Reply</button>{% endif %}</div>
+  </div>
+</div>
+{% if not post.viewer_comment_blocked %}
+<div class="reply-box{% if is_reply %} reply{% endif %}" id="replybox-{{ c.id }}" hidden>
+  <form class="reply-form" action="/post/{{ post.id }}/comment" method="post">
+    <input type="hidden" name="parent_id" value="{{ c.id }}">
+    <textarea name="body" rows="2" maxlength="2000" placeholder="Write a reply…" required></textarea>
+    <button type="submit" class="btn btn-sm">Post</button>
+  </form>
+</div>
+{% endif %}
+{% endmacro %}
+
 <div class="card">
   <div class="section-title">💬 Comments</div>
   {% for c in post.comments %}
-  <div class="comment">
-    {% if c.author_avatar %}<img class="avatar av-32" src="{{ c.author_avatar|e }}" alt="">
-    {% else %}<span class="av-ph av-32">{{ c.author_name[:1]|upper|e }}</span>{% endif %}
-    <div class="cbub">
-      <div class="cnm"><a href="/user/{{ c.user_id }}">{{ c.author_name|e }}</a></div>
-      <div class="ctxt">{{ c.body_html|safe }}</div>
-      <div class="cmeta">{{ c.created_at|e }}</div>
-    </div>
-  </div>
+  {{ comment_row(c, post, false) }}
+  {% for r in c.replies %}
+  {{ comment_row(r, post, true) }}
+  {% endfor %}
   {% else %}
   <p style="color:var(--muted);font-size:14px">No comments yet — start the conversation.</p>
   {% endfor %}
 
+  {% if post.viewer_comment_blocked %}
+  <div class="blocked-note">🚫 The author of this post has blocked you from commenting here.</div>
+  {% else %}
   <form class="comment-form" action="/post/{{ post.id }}/comment" method="post">
     <input type="text" name="body" placeholder="Write a comment…" required maxlength="2000" autocomplete="off">
     <button type="submit" class="btn btn-sm">Send</button>
   </form>
+  {% endif %}
 </div>
 
 {% endblock %}
