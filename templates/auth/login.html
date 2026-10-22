@@ -68,7 +68,7 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
   <div class="switch">New to HERE? <a href="/signup">Create an account</a></div>
 </div>
 <div class="app-card" id="app-card">
-  <h3>📱 Get the HERE app</h3>
+  <h3 id="app-card-title">📱 Get the HERE app</h3>
   <p>Same HERE you know — right on your home screen, fullscreen, one tap away.</p>
   <div class="app-rec" id="rec-android">Recommended for your phone</div>
   <a class="app-btn android" href="/download/android" download>🤖 Download for Android</a>
@@ -91,9 +91,13 @@ if ("serviceWorker" in navigator) {
   });
 }
 (function () {
-  // Already running as the installed app? No need to pitch the download.
+  // The app card ALWAYS stays visible — even inside the installed app
+  // (where we just swap the heading). Hiding it left people who opened
+  // the login page from the installed app with no buttons at all.
   var standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
-  if (standalone) { document.getElementById("app-card").style.display = "none"; return; }
+  if (standalone) {
+    document.getElementById("app-card-title").textContent = "You're using the HERE app ✅";
+  }
   var ua = navigator.userAgent || "";
   if (/Android/i.test(ua)) document.getElementById("rec-android").style.display = "block";
   if (/iPhone|iPad|iPod/i.test(ua)) document.getElementById("rec-iphone").style.display = "block";
