@@ -110,6 +110,27 @@
       </form>
       {% endif %}
     {% endif %}
+    {% if post.blocked_commenters %}
+    <div class="aud-wrap">
+      <button type="button" class="action-link cblock-toggle" data-pid="{{ post.id }}" title="People blocked from commenting on this post" style="background:none;border:none;cursor:pointer">🚫 Blocked ({{ post.blocked_commenters|length }})</button>
+      <div class="aud-popup" id="cblock-popup-{{ post.id }}" hidden>
+        <div class="aud-title">🚫 Blocked from commenting here</div>
+        <p class="aud-hint">These people can't add new comments or replies on this post. Their old comments stay unless you delete them. Unblock lets them comment here again.</p>
+        <div class="aud-list">
+          {% for b in post.blocked_commenters %}
+          <div class="aud-row" style="cursor:default">
+            <span style="flex:1;min-width:0">{{ b.name|e }}</span>
+            <form class="inline-form" action="/post/{{ post.id }}/comment-unblock" method="post">
+              <input type="hidden" name="user_id" value="{{ b.id }}">
+              <button type="submit" class="btn-ghost btn-sm">Unblock</button>
+            </form>
+          </div>
+          {% endfor %}
+        </div>
+        <button type="button" class="btn btn-sm cblock-close" style="margin-top:8px">Done</button>
+      </div>
+    </div>
+    {% endif %}
     <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
       {% if post.is_share %}
         {% if post.can_unshare %}
