@@ -140,19 +140,26 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 .tag-item-name{font-weight:600;font-size:15px}
 .tag-hint{font-size:12px;color:var(--muted);margin-top:4px}
 .tag-link{color:var(--red);font-weight:600}
-/* ===== eyeball audience popup (on your own posts) ===== */
+/* ===== eyeball audience popup (on your own posts + composer) =====
+   Rendered as a fixed sheet over a dim backdrop, portaled to <body> by JS
+   (see openAudPopup) — it used to be position:absolute inside the card,
+   but glass cards (backdrop-filter) trap children in the card's stacking
+   context, so the next card painted over the popup and it was unusable. */
 .aud-wrap{position:relative;display:inline-block}
-.aud-popup{position:absolute;bottom:135%;left:0;width:250px;background:#fff;border:1px solid var(--border);
-  border-radius:8px;padding:12px;box-shadow:0 4px 14px rgba(0,0,0,.18);z-index:60;text-align:left}
+.aud-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
+.aud-popup{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,340px);
+  max-height:82vh;background:#fff;border:1px solid var(--border);
+  border-radius:12px;padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left;
+  display:flex;flex-direction:column}
 .aud-popup[hidden]{display:none}
+.aud-popup form{display:flex;flex-direction:column;min-height:0}
 .aud-title{font-weight:700;font-size:14px;margin-bottom:4px;color:#1c1e21}
 .aud-hint{font-size:12px;color:var(--muted);margin-bottom:6px}
-.aud-list{max-height:200px;overflow-y:auto}
+.aud-list{max-height:52vh;overflow-y:auto;min-height:0}
 .aud-row{display:flex;align-items:center;gap:8px;padding:7px 4px;font-size:14px;font-weight:600;cursor:pointer;color:#1c1e21}
 .aud-row input{accent-color:var(--red);width:18px;height:18px;flex-shrink:0}
 /* ===== composer eyeball (hide-from picker behind a 👁 button, before posting) ===== */
 .composer-aud{position:relative;display:inline-block;margin-top:10px}
-.composer-aud-popup{top:calc(100% + 6px);bottom:auto}
 
 /* ===== post card ===== */
 .post-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -409,6 +416,35 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 </div>
 
 <script>
+/* ===== Hide-from popups: fixed sheet on top of everything =====
+   The popups live inside glass cards (backdrop-filter), which trap
+   absolutely-positioned children in the card's stacking context — the
+   next card painted over them. So on open we move the popup to <body>
+   (escaping every card) and show it as a fixed centered sheet over a
+   dim backdrop; on close we put it back exactly where it came from,
+   so composer checkboxes rejoin their form before posting. */
+function openAudPopup(pop){
+  if (!pop.hidden) return;
+  if (!pop._audHome) pop._audHome = document.createComment('aud-popup-home');
+  if (!pop._audBackdrop){
+    var bd = document.createElement('div');
+    bd.className = 'aud-backdrop';
+    bd.addEventListener('click', function(){ closeAudPopup(pop); });
+    pop._audBackdrop = bd;
+  }
+  pop.parentNode.insertBefore(pop._audHome, pop);
+  document.body.appendChild(pop._audBackdrop);
+  document.body.appendChild(pop);
+  pop.hidden = false;
+}
+function closeAudPopup(pop){
+  if (pop.hidden) return;
+  pop.hidden = true;
+  if (pop._audBackdrop && pop._audBackdrop.parentNode)
+    pop._audBackdrop.parentNode.removeChild(pop._audBackdrop);
+  if (pop._audHome && pop._audHome.parentNode)
+    pop._audHome.parentNode.replaceChild(pop, pop._audHome);
+}
 var REACT_EMOJI = {like:'👍',love:'❤️',laugh:'😂',wow:'😮',sad:'😢',angry:'😡'};
 var REACT_LABEL = {like:'Liked',love:'Loved',laugh:'Haha',wow:'Wow',sad:'Sad',angry:'Angry'};
 function paintReaction(card, d){
@@ -450,7 +486,7 @@ document.addEventListener('click', function(ev){
   var a = ev.target.closest ? ev.target.closest('.aud-toggle') : null;
   if (a){
     var ap = document.getElementById('aud-popup-' + a.getAttribute('data-pid'));
-    if (ap) ap.hidden = !ap.hidden;
+    if (ap){ if (ap.hidden) openAudPopup(ap); else closeAudPopup(ap); }
   }
 });
 </script>
@@ -566,18 +602,19 @@ document.addEventListener('click', function(ev){
     btn.textContent = n ? '👁 Hide from (' + n + ')' : '👁 Hide from…';
   }
   btn.addEventListener('click', function(){
-    var opening = pop.hidden;
-    pop.hidden = !pop.hidden;
-    if (opening){
+    if (pop.hidden){
+      openAudPopup(pop);
       var ts = document.getElementById('tag-suggest');
       if (ts) ts.hidden = true;
+    } else {
+      closeAudPopup(pop);
     }
   });
   pop.addEventListener('change', paint);
   var done = pop.querySelector('.composer-aud-done');
-  if (done) done.addEventListener('click', function(){ pop.hidden = true; });
+  if (done) done.addEventListener('click', function(){ closeAudPopup(pop); });
   var ta = document.getElementById('composer-body');
-  if (ta) ta.addEventListener('input', function(){ pop.hidden = true; });
+  if (ta) ta.addEventListener('input', function(){ closeAudPopup(pop); });
   paint();
 })();
 </script>
