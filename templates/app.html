@@ -12,6 +12,9 @@
 .app-dl-btn.iphone{background:#1f1f1f;color:#f0f0f0;border:1px solid #333}
 .app-dl-btn.iphone:hover{border-color:var(--red)}
 .app-dl-rec{display:none;font-size:11px;font-weight:700;color:#b8860b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.app-dl-linklike{display:block;width:100%;background:none;border:none;color:var(--red);font-weight:700;font-size:13.5px;padding:5px 6px;cursor:pointer;text-align:center}
+.app-dl-linklike:hover{text-decoration:underline}
+.ios-lead{font-size:13.5px;margin-bottom:10px;line-height:1.5;text-align:left}
 .ios-steps{display:none;text-align:left;background:rgba(0,0,0,.05);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-top:4px}
 body.has-profile-bg .ios-steps{background:rgba(0,0,0,.35)}
 .ios-steps.open{display:block}
@@ -28,14 +31,25 @@ body.has-profile-bg .ios-note{color:#ccc}
   <div class="app-dl-rec" id="rec-android">Recommended for your phone</div>
   <a class="app-dl-btn android" href="/download/android" download>🤖 Download for Android</a>
   <div class="app-dl-rec" id="rec-iphone">Recommended for your phone</div>
-  <button type="button" class="app-dl-btn iphone" id="ios-btn">🍎 Add to iPhone Home Screen</button>
+  <a class="app-dl-btn iphone" href="/download/ios" download>🍎 Download for iPhone (IPA)</a>
+  <button type="button" class="app-dl-linklike" id="ios-how-btn">How to install it on iPhone</button>
+  <div class="ios-steps" id="ios-ipa-steps">
+    <p class="ios-lead">First, the honest part: an iPhone can't install an app file straight from Safari — Apple blocks that for every app, not just HERE. The free way in is a one-time setup with a tool called <strong>AltStore</strong> or <strong>SideStore</strong>:</p>
+    <ol>
+      <li>On a computer, go to <strong>altstore.io</strong> (or look up <strong>SideStore</strong>) and follow its setup. It puts the tool on your iPhone and asks for your Apple ID — that's how it signs HERE for <em>your</em> phone only.</li>
+      <li>Tap <strong>“Download for iPhone (IPA)”</strong> above to get the HERE app file.</li>
+      <li>Open the file in AltStore/SideStore — it installs HERE on your phone, like a real app.</li>
+    </ol>
+    <div class="ios-note">One catch, so you hear it from us: apps put on this way need a quick refresh from the tool every 7 days to keep opening. The tool can refresh by itself on your Wi-Fi — its setup shows you how.</div>
+  </div>
+  <button type="button" class="app-dl-linklike" id="ios-hs-btn">No computer? Add HERE to your Home Screen instead →</button>
   <div class="ios-steps" id="ios-steps">
     <ol>
       <li>Tap the <strong>Share</strong> button at the bottom of Safari — the square with an arrow pointing up.</li>
       <li>Scroll down and tap <strong>“Add to Home Screen”</strong>.</li>
       <li>Tap <strong>“Add”</strong> — HERE lands on your home screen and opens like a real app.</li>
     </ol>
-    <div class="ios-note">Apple doesn't let websites hand out iPhone app files, so this is how iPhone installs HERE. Same app, same everything.</div>
+    <div class="ios-note">No file and no tools — HERE sits on your home screen and opens fullscreen. Same app, same everything.</div>
   </div>
 </div>
 
@@ -50,7 +64,10 @@ body.has-profile-bg .ios-note{color:#ccc}
   var ua = navigator.userAgent || "";
   if (/Android/i.test(ua)) document.getElementById("rec-android").style.display = "block";
   if (/iPhone|iPad|iPod/i.test(ua)) document.getElementById("rec-iphone").style.display = "block";
-  document.getElementById("ios-btn").addEventListener("click", function () {
+  document.getElementById("ios-how-btn").addEventListener("click", function () {
+    document.getElementById("ios-ipa-steps").classList.toggle("open");
+  });
+  document.getElementById("ios-hs-btn").addEventListener("click", function () {
     document.getElementById("ios-steps").classList.toggle("open");
   });
 })();
