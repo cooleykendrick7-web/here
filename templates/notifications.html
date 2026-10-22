@@ -19,6 +19,7 @@
     <div class="grow">
       <div style="font-size:15px">
         {% if n.kind == 'friend_request' %}👥
+        {% elif n.kind == 'live' %}🔴
         {% elif n.kind == 'tap' %}🖐️
         {% elif n.kind == 'message' %}💬
         {% elif n.kind == 'share' %}🔁

@@ -17,6 +17,21 @@
   </a>
 </div>
 
+{% if live_now %}
+<div class="live-strip" style="display:flex;gap:10px;overflow-x:auto;padding:4px 2px 12px">
+  {% for l in live_now %}
+  <a href="/live/{{ l.id }}" style="display:flex;align-items:center;gap:9px;background:#1c1e21;color:#fff;border-radius:999px;padding:6px 14px 6px 6px;white-space:nowrap;flex:none">
+    {% if l.avatar %}<img src="{{ l.avatar|e }}" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:2px solid var(--red)">
+    {% else %}<span style="width:34px;height:34px;border-radius:50%;background:#3a3b3d;border:2px solid var(--red);display:flex;align-items:center;justify-content:center;font-weight:800">{{ l.name[:1]|upper|e }}</span>{% endif %}
+    <span>
+      <span style="display:block;font-weight:800;font-size:13px">🔴 {{ l.name|e }}{% if l.is_self %} (you){% endif %}</span>
+      <span style="display:block;font-size:12px;color:#d7d7d7;max-width:210px;overflow:hidden;text-overflow:ellipsis">{{ l.title|e if l.title else 'Live now' }} · 👁 {{ l.viewers }}</span>
+    </span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="card composer">
   <form action="/posts" method="post" enctype="multipart/form-data">
     <input type="hidden" name="kind" id="kind-input" value="text">

@@ -313,6 +313,24 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .call-mini-btn.off{background:#fff;color:#111}
 #call-mini-end{background:var(--red)}
 #call-mini.voice{width:248px;height:64px;border-radius:32px}
+
+/* ===== Go Live: floating tab + start sheet =====
+   Bottom-right, z-index 900 — below the header (1000), the call
+   mini tile (1500), body sheets (2000), the story viewer (2500) and
+   the call overlay (3100), so it never covers an active call or a
+   story; it simply isn't rendered on /live/ pages at all. */
+#golive-btn{position:fixed;right:14px;bottom:16px;z-index:900;background:var(--red);
+  color:#fff;border:none;border-radius:999px;padding:12px 18px;font-size:15px;
+  font-weight:800;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.35)}
+#golive-btn:hover{background:var(--red-dark)}
+#golive-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
+#golive-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(92vw,380px);background:var(--card);border-radius:14px;padding:16px;
+  z-index:2000;box-shadow:0 12px 34px rgba(0,0,0,.4)}
+#golive-sheet input{width:100%;border:1px solid var(--border);border-radius:10px;
+  padding:11px 12px;font-size:15px;margin:8px 0 12px}
+#golive-error{color:var(--red);font-size:13px;font-weight:600;min-height:16px}
+@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.55}}
 #call-mini.voice #call-mini-voice{flex-direction:row;justify-content:flex-start;gap:10px;
   padding:8px 104px 8px 12px;text-align:left}
 #call-mini.voice #call-mini-voice .nm{white-space:normal}
@@ -829,6 +847,20 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <button type="button" class="cmenu-item" id="dmenu-confirm-cancel">Cancel</button>
   </div>
 </div>
+
+<!-- ===== Go Live: floating tab + start sheet (not on /live/ pages) ===== -->
+{% if not hide_golive %}
+<button type="button" id="golive-btn">🔴 Go Live</button>
+<div id="golive-backdrop" hidden></div>
+<div id="golive-sheet" hidden>
+  <div class="aud-title">🔴 Go Live</div>
+  <p style="font-size:14px;color:var(--muted)">Stream right from your phone. Friends get told the moment you start, and one of them can join you on camera.</p>
+  <input id="golive-title" maxlength="80" placeholder="What's this live about? (optional)" autocomplete="off">
+  <div id="golive-error"></div>
+  <button type="button" class="cmenu-item danger" id="golive-start" style="text-align:center;font-weight:800">🔴 Start live</button>
+  <button type="button" class="cmenu-item" id="golive-cancel">Cancel</button>
+</div>
+{% endif %}
 {% endif %}
 
 <script>
@@ -905,6 +937,42 @@ document.addEventListener('click', function(ev){
     if (ap){ if (ap.hidden) openAudPopup(ap); else closeAudPopup(ap); }
   }
 });
+</script>
+<script>
+/* ===== Go Live floating tab: open the sheet, POST /live/start,
+   land on the new live's page. Hidden entirely on /live/ pages
+   (the server doesn't render the button there). ===== */
+(function(){
+  var btn = document.getElementById('golive-btn');
+  if (!btn) return; /* guests + live pages get no Go Live tab */
+  var sheet = document.getElementById('golive-sheet'),
+      bd = document.getElementById('golive-backdrop'),
+      title = document.getElementById('golive-title'),
+      err = document.getElementById('golive-error'),
+      start = document.getElementById('golive-start'),
+      cancel = document.getElementById('golive-cancel');
+  function open(){ sheet.hidden = false; bd.hidden = false; err.textContent = ''; }
+  function close(){ sheet.hidden = true; bd.hidden = true; }
+  btn.addEventListener('click', open);
+  bd.addEventListener('click', close);
+  cancel.addEventListener('click', close);
+  start.addEventListener('click', function(){
+    start.disabled = true;
+    fetch('/live/start', {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title: title.value || ''})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        start.disabled = false;
+        if (d && d.ok && d.url){ window.location.href = d.url; return; }
+        err.textContent = (d && d.error) || 'Could not start the live.';
+      })
+      .catch(function(){
+        start.disabled = false;
+        err.textContent = 'Could not start the live.';
+      });
+  });
+})();
 </script>
 <script>
 /* ===== Comment controls: ⋯ menu sheet, reply boxes, blocked sheet =====

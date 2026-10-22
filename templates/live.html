@@ -1,0 +1,762 @@
+{% extends "base.html" %}
+{% block title %}{% if mode == 'live' %}🔴 {{ host.name|e }} is live — HERE{% else %}Live — HERE{% endif %}{% endblock %}
+{% block content %}
+
+{% if mode == 'ended' %}
+<div class="card" style="text-align:center;padding:34px 20px">
+  <div style="font-size:44px">📺</div>
+  <h2 style="margin:10px 0 6px">This live has ended</h2>
+  <p style="color:var(--muted)">{{ host.name|e }} was live{% if live.title %} — “{{ live.title|e }}”{% endif %}. Catch the next one!</p>
+  <a class="btn" href="/home" style="margin-top:14px;display:inline-block">🏠 Back home</a>
+</div>
+
+{% elif mode == 'unavailable' %}
+<div class="card" style="text-align:center;padding:34px 20px">
+  <div style="font-size:44px">📺</div>
+  <h2 style="margin:10px 0 6px">This live isn't available</h2>
+  <p style="color:var(--muted)">It may have ended, or it isn't open to you.</p>
+  <a class="btn" href="/home" style="margin-top:14px;display:inline-block">🏠 Back home</a>
+</div>
+
+{% else %}
+<style>
+.live-stage{position:relative;background:#000;border-radius:14px;overflow:hidden;
+  height:54vh;min-height:330px;box-shadow:0 8px 28px rgba(0,0,0,.35)}
+.live-stage video.main{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+.live-stage video.guestvid{position:absolute;right:10px;bottom:10px;width:27%;max-width:170px;
+  aspect-ratio:3/4;object-fit:cover;border-radius:10px;border:2px solid rgba(255,255,255,.75);
+  background:#181818;z-index:3}
+.live-topbar{position:absolute;top:0;left:0;right:0;z-index:4;display:flex;gap:8px;
+  align-items:flex-start;padding:10px;background:linear-gradient(rgba(0,0,0,.65),transparent)}
+.live-pill{background:var(--red);color:#fff;font-weight:800;font-size:12px;
+  border-radius:6px;padding:3px 8px;letter-spacing:.4px;white-space:nowrap}
+.live-pill .dot{animation:livepulse 1.2s infinite}
+@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.25}}
+.live-meta{color:#fff;min-width:0}
+.live-host{font-weight:800;font-size:15px;text-shadow:0 1px 4px rgba(0,0,0,.8)}
+.live-title{font-size:13px;color:#eee;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;text-shadow:0 1px 4px rgba(0,0,0,.8)}
+.live-stats{margin-left:auto;text-align:right;color:#fff;font-size:12px;
+  font-weight:700;white-space:nowrap;text-shadow:0 1px 4px rgba(0,0,0,.8)}
+.live-statusline{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
+  z-index:5;background:rgba(0,0,0,.72);color:#fff;border-radius:10px;
+  padding:10px 16px;font-size:14px;font-weight:600;text-align:center;max-width:86%}
+.live-guest-tag{position:absolute;right:10px;top:64px;z-index:4}
+.live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.live-ctl{background:#1c1e21;color:#fff;border:1px solid #3a3b3d;border-radius:999px;
+  padding:9px 14px;font-size:14px;font-weight:700;cursor:pointer}
+.live-ctl.off{background:var(--red);border-color:var(--red-dark)}
+.live-ctl.danger{background:var(--red);border-color:var(--red-dark)}
+.live-ctl:disabled{opacity:.45;cursor:default}
+.live-panel{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:12px;margin-bottom:12px}
+.live-comments{max-height:38vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.live-comment{display:flex;gap:8px;align-items:flex-start;font-size:14px}
+.live-comment .av-32{width:32px;height:32px;border-radius:50%;object-fit:cover;flex:none}
+.live-comment .ph-32{width:32px;height:32px;border-radius:50%;background:#3a3b3d;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:800;flex:none}
+.live-comment .who{font-weight:800}
+.live-comment .hosttag{background:var(--red);color:#fff;font-size:10px;font-weight:800;
+  border-radius:5px;padding:1px 5px;margin-left:4px;vertical-align:2px}
+.live-comment .del{margin-left:auto;background:none;border:none;cursor:pointer;
+  font-size:13px;opacity:.65;flex:none}
+.live-comment-form{display:flex;gap:8px;margin-top:10px}
+.live-comment-form input{flex:1;border:1px solid var(--border);border-radius:999px;
+  padding:10px 14px;font-size:14px;min-width:0}
+.live-req{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}
+.live-req:last-child{border-bottom:none}
+.live-err{background:#3d0a0e;color:#ffd7da;border:1px solid #7a1620;border-radius:12px;
+  padding:12px 14px;margin-bottom:12px;font-size:14px}
+</style>
+
+<div class="live-stage" id="live-stage">
+  <video class="main" id="live-main" autoplay playsinline></video>
+  <video class="guestvid" id="live-guest" autoplay playsinline hidden></video>
+  <div class="live-topbar">
+    <span class="live-pill"><span class="dot">●</span> LIVE</span>
+    <div class="live-meta">
+      <div class="live-host">{{ host.name|e }}</div>
+      {% if live.title %}<div class="live-title">{{ live.title|e }}</div>{% endif %}
+    </div>
+    <div class="live-stats">
+      <div>👁 <span id="live-viewers">0</span></div>
+      <div>⏱ <span id="live-timer">0:00</span></div>
+    </div>
+  </div>
+  <div class="live-statusline" id="live-status">Connecting…</div>
+  <div class="live-guest-tag" id="live-guest-tag" hidden>
+    <span class="live-pill" style="background:#1c1e21">🎥 <span id="live-guest-name"></span></span>
+    <button type="button" class="live-ctl danger" id="live-guest-remove" hidden
+      style="padding:4px 10px;font-size:12px;margin-left:6px">Remove</button>
+  </div>
+</div>
+
+<div class="live-err" id="live-error" hidden>
+  <div id="live-error-text"></div>
+  <button type="button" class="live-ctl" id="live-error-retry" style="margin-top:8px">🔁 Try again</button>
+</div>
+
+<div class="live-controls" id="live-controls">
+  <!-- host -->
+  <button type="button" class="live-ctl" id="ctl-mute" hidden>🎤 Mute</button>
+  <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
+  <button type="button" class="live-ctl" id="ctl-flip" hidden>🔄 Flip</button>
+  <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
+  <!-- guest -->
+  <button type="button" class="live-ctl" id="ctl-guest-leave" hidden>🚪 Leave guest spot</button>
+  <!-- watcher -->
+  <button type="button" class="live-ctl" id="ctl-sound" hidden>🔇 Sound off</button>
+  <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
+  <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
+</div>
+<div id="live-join-msg" style="font-size:13px;color:var(--muted);margin:-6px 0 10px" hidden></div>
+<div id="live-guest-banner" class="live-panel" hidden style="background:var(--red-soft);border-color:#f3c2c7">
+  🎥 <strong>You're on camera!</strong> Everyone watching can see and hear you.
+</div>
+
+<div class="live-panel" id="live-requests-panel" hidden>
+  <div style="font-weight:800;margin-bottom:4px">✋ Want to join your live</div>
+  <div id="live-requests"></div>
+</div>
+
+<div class="live-panel">
+  <div style="font-weight:800;margin-bottom:8px">💬 Live comments</div>
+  <div class="live-comments" id="live-comments"></div>
+  <form class="live-comment-form" id="live-comment-form">
+    <input id="live-comment-input" maxlength="300" autocomplete="off"
+      placeholder="Say something nice…">
+    <button type="submit" class="btn">Send</button>
+  </form>
+</div>
+
+<script>
+var LIVE_BOOT = {{ boot|safe }};
+</script>
+<script>
+(function(){
+  'use strict';
+  var B = LIVE_BOOT;
+  /* Same ICE config as 1:1 calls in base.html — keep the two in sync. */
+  var ICE_CONFIG = {iceServers: [
+    {urls: 'stun:stun.l.google.com:19302'},
+    {urls: 'stun:stun1.l.google.com:19302'},
+    {urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject'},
+    {urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject'},
+    {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'}
+  ]};
+  var $ = function(id){ return document.getElementById(id); };
+  var mainVideo = $('live-main'), guestVideo = $('live-guest'),
+      statusEl = $('live-status'), errBox = $('live-error'),
+      errText = $('live-error-text'), viewersEl = $('live-viewers'),
+      timerEl = $('live-timer'), commentsEl = $('live-comments'),
+      guestTag = $('live-guest-tag'), guestNameEl = $('live-guest-name'),
+      guestRemoveBtn = $('live-guest-remove');
+
+  var myRole = B.role;                 /* host | guest | watcher */
+  var guestId = B.guest ? B.guest.id : null;
+  var peers = {};                      /* uid -> {pc, iceQ, offered} */
+  var myStream = null, mediaReady = false, facing = 'user';
+  var lastSignal = 0, lastComment = 0, renderedComments = {};
+  var lastViewerList = [];
+  var ended = false, helloSent = false, startedAt = Date.now();
+  try {
+    var t = Date.parse(B.created_at);
+    if (!isNaN(t)) startedAt = t;
+  } catch (e) {}
+  var timers = [];
+
+  function jget(url){
+    return fetch(url, {credentials: 'same-origin'})
+      .then(function(r){ return r.json(); });
+  }
+  function jpost(url, body){
+    return fetch(url, {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: body ? JSON.stringify(body) : '{}'})
+      .then(function(r){ return r.json().catch(function(){ return {}; }); });
+  }
+  function post(path, body){ return jpost('/live/' + B.id + path, body); }
+  function signal(toId, kind, payload){
+    return post('/signal', {to_id: toId, kind: kind, payload: payload || ''})
+      .catch(function(){});
+  }
+  function setStatus(t){
+    if (!t){ statusEl.hidden = true; return; }
+    statusEl.hidden = false;
+    statusEl.textContent = t;
+  }
+  function every(ms, fn){ timers.push(setInterval(fn, ms)); }
+
+  /* ---------------- local media (host + guest) ---------------- */
+  function acquireMedia(){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      return Promise.reject(new Error('nomedia'));
+    }
+    return navigator.mediaDevices.getUserMedia({
+      audio: true, video: {facingMode: facing}});
+  }
+  function showMediaError(){
+    errText.textContent = 'Camera/mic blocked — allow access in the '
+      + 'browser prompt, then tap Try again. If you are in the HERE '
+      + 'app and it still will not work, open HERE in your phone\u2019s '
+      + 'browser instead.';
+    errBox.hidden = false;
+  }
+  function setupLocalMedia(){
+    return acquireMedia().then(function(stream){
+      errBox.hidden = true;
+      if (myStream){ /* camera flip: keep old audio, swap video */
+        var oldVideo = myStream.getVideoTracks()[0];
+        var newVideo = stream.getVideoTracks()[0];
+        var audio = myStream.getAudioTracks()[0];
+        Object.keys(peers).forEach(function(uid){
+          var senders = peers[uid].pc.getSenders();
+          senders.forEach(function(s){
+            if (s.track && s.track.kind === 'video' && newVideo)
+              s.replaceTrack(newVideo).catch(function(){});
+          });
+        });
+        if (oldVideo) oldVideo.stop();
+        stream.getAudioTracks().forEach(function(t){ t.stop(); });
+        myStream = new MediaStream([audio, newVideo].filter(Boolean));
+      } else {
+        myStream = stream;
+      }
+      mediaReady = true;
+      if (myRole === 'host'){
+        mainVideo.srcObject = myStream;
+        mainVideo.muted = true;
+        mainVideo.play().catch(function(){});
+        setStatus(null);
+        /* A watcher may have said hello before the camera was
+           ready: put my tracks on those early peers and re-offer. */
+        Object.keys(peers).forEach(function(uid){
+          var P = peers[uid];
+          addLocalTracks(P);
+          if (P.offered && P.pc.signalingState === 'stable')
+            makeOffer(uid);
+        });
+      } else if (myRole === 'guest'){
+        guestVideo.srcObject = myStream;
+        guestVideo.muted = true;
+        guestVideo.hidden = false;
+        /* If the host peer already exists, make sure my tracks are
+           on it, then nudge the host to (re)offer so my video lands. */
+        var hp = peers[B.host.id];
+        if (hp) addLocalTracks(hp);
+        signal(B.host.id, 'hello', {guest: 1});
+        offerToWatchers();
+      }
+    }).catch(function(){
+      mediaReady = false;
+      showMediaError();
+      if (myRole === 'host')
+        setStatus('Your live is on air, but HERE can\u2019t reach your camera yet.');
+    });
+  }
+  $('live-error-retry').addEventListener('click', function(){
+    errBox.hidden = true;
+    setupLocalMedia();
+  });
+
+  /* ---------------- peers ---------------- */
+  function addLocalTracks(P){
+    if (!myStream) return;
+    var have = {};
+    P.pc.getSenders().forEach(function(s){
+      if (s.track) have[s.track.kind] = 1;
+    });
+    myStream.getTracks().forEach(function(t){
+      if (!have[t.kind]){ try { P.pc.addTrack(t, myStream); } catch (e) {} }
+    });
+  }
+  function ensurePeer(uid, offerer){
+    if (peers[uid]) return peers[uid];
+    var pc = new RTCPeerConnection(ICE_CONFIG);
+    var P = {pc: pc, iceQ: [], offered: false};
+    peers[uid] = P;
+    pc.onicecandidate = function(ev){
+      if (ev.candidate) signal(uid, 'ice', ev.candidate.toJSON());
+    };
+    pc.ontrack = function(ev){
+      if (ev.streams && ev.streams[0]) attachRemote(uid, ev.streams[0]);
+    };
+    pc.onconnectionstatechange = function(){
+      if (ended || peers[uid] !== P) return;
+      var st = pc.connectionState;
+      if (st === 'connected'){ setStatus(null); }
+      else if (st === 'disconnected'){ setStatus('Reconnecting…'); }
+      else if (st === 'failed'){
+        setStatus('Connection problem — reconnecting…');
+        if (P.offered){ /* I drive this pair: restart ICE + re-offer */
+          try { pc.restartIce(); } catch (e) {}
+          makeOffer(uid);
+        } else { /* the other side drives: ask for a fresh offer */
+          closePeer(uid);
+          if (uid === B.host.id){ helloSent = false; sayHello(); }
+        }
+      }
+    };
+    if (myStream && myRole !== 'watcher') addLocalTracks(P);
+    if (offerer) makeOffer(uid);
+    return P;
+  }
+  function makeOffer(uid){
+    var P = peers[uid];
+    if (!P) return;
+    P.offered = true;
+    var pc = P.pc;
+    pc.createOffer()
+      .then(function(o){ return pc.setLocalDescription(o); })
+      .then(function(){
+        signal(uid, 'offer', pc.localDescription.toJSON());
+      })
+      .catch(function(){});
+  }
+  function flushIce(P){
+    var q = P.iceQ;
+    P.iceQ = [];
+    q.forEach(function(c){ P.pc.addIceCandidate(c).catch(function(){}); });
+  }
+  function closePeer(uid){
+    var P = peers[uid];
+    if (!P) return;
+    delete peers[uid];
+    try { P.pc.close(); } catch (e) {}
+    if (uid === guestId && myRole !== 'guest'){
+      guestVideo.srcObject = null;
+      guestVideo.hidden = true;
+    }
+  }
+  function attachRemote(uid, stream){
+    if (uid === B.host.id){
+      mainVideo.srcObject = stream;
+      if (myRole !== 'host'){
+        mainVideo.muted = false;
+        mainVideo.play().catch(function(){
+          /* Autoplay with sound blocked: start muted, offer the
+             sound button — one tap fixes it. */
+          mainVideo.muted = true;
+          $('ctl-sound').textContent = '🔊 Tap for sound';
+          mainVideo.play().catch(function(){});
+        });
+      }
+      setStatus(null);
+    } else {
+      guestVideo.srcObject = stream;
+      guestVideo.muted = false;
+      guestVideo.hidden = false;
+      showGuestTag();
+    }
+  }
+  function showGuestTag(){
+    if (!guestId) return;
+    guestTag.hidden = false;
+    var g = lastGuestInfo || {};
+    guestNameEl.textContent = (guestId === B.me) ? 'You' : (g.name || 'Guest');
+    guestRemoveBtn.hidden = !(myRole === 'host');
+  }
+  var lastGuestInfo = B.guest || null;
+
+  function handleSignal(sig){
+    if (ended) return;
+    var from = sig.from_id;
+    if (from === B.me) return;
+    var pc, P;
+    if (sig.kind === 'hello'){
+      /* A watcher (or the guest) wants me to send to them. Only the
+         host and the guest ever send. */
+      if (myRole === 'host' || myRole === 'guest'){
+        P = ensurePeer(from, true);
+        if (P.pc.signalingState === 'stable' && P.offered)
+          makeOffer(from); /* re-offer (guest just got their camera) */
+      }
+    } else if (sig.kind === 'offer'){
+      P = ensurePeer(from, false);
+      pc = P.pc;
+      if (myRole === 'guest') addLocalTracks(P);
+      pc.setRemoteDescription(new RTCSessionDescription(sig.payload || {}))
+        .then(function(){
+          flushIce(P);
+          return pc.createAnswer();
+        })
+        .then(function(a){ return pc.setLocalDescription(a); })
+        .then(function(){
+          signal(from, 'answer', pc.localDescription.toJSON());
+        })
+        .catch(function(){});
+    } else if (sig.kind === 'answer'){
+      P = peers[from];
+      if (!P) return;
+      P.pc.setRemoteDescription(
+          new RTCSessionDescription(sig.payload || {}))
+        .then(function(){ flushIce(P); })
+        .catch(function(){});
+    } else if (sig.kind === 'ice'){
+      P = peers[from];
+      if (!P) return;
+      var cand = null;
+      try { cand = new RTCIceCandidate(sig.payload); } catch (e) {}
+      if (!cand) return;
+      if (P.pc.remoteDescription && P.pc.remoteDescription.type){
+        P.pc.addIceCandidate(cand).catch(function(){});
+      } else {
+        P.iceQ.push(cand);
+      }
+    } else if (sig.kind === 'bye'){
+      closePeer(from);
+      if (from === guestId){
+        guestId = null;
+        lastGuestInfo = null;
+        guestTag.hidden = true;
+      }
+    }
+  }
+  function pollSignals(){
+    if (ended) return;
+    jget('/live/' + B.id + '/signals?since=' + lastSignal)
+      .then(function(d){
+        if (!d || !d.ok) return;
+        (d.signals || []).forEach(function(sig){
+          if (sig.id > lastSignal) lastSignal = sig.id;
+          handleSignal(sig);
+        });
+        if (d.status === 'ended') teardownEnded();
+      })
+      .catch(function(){});
+  }
+
+  /* ---------------- guest flows ---------------- */
+  function sayHello(){
+    if (helloSent || ended) return;
+    helloSent = true;
+    signal(B.host.id, 'hello', {watch: 1});
+  }
+  function offerToWatchers(){
+    if (myRole !== 'guest' || !mediaReady) return;
+    lastViewerList.forEach(function(v){
+      if (v.id !== B.me && v.id !== B.host.id) ensurePeer(v.id, true);
+    });
+  }
+  function becomeGuest(){
+    if (myRole === 'guest') return;
+    myRole = 'guest';
+    guestId = B.me;
+    lastGuestInfo = {id: B.me, name: 'You'};
+    $('live-guest-banner').hidden = false;
+    $('ctl-join').hidden = true;
+    $('live-join-msg').hidden = true;
+    $('ctl-guest-leave').hidden = false;
+    $('ctl-mute').hidden = false;
+    $('ctl-cam').hidden = false;
+    showGuestTag();
+    setupLocalMedia();
+  }
+  function stepDownFromGuest(){
+    /* The live ended for me as guest (host removed me / I left):
+       drop the camera and go back to being a plain watcher. */
+    myRole = 'watcher';
+    if (myStream){
+      myStream.getTracks().forEach(function(t){ t.stop(); });
+      myStream = null;
+    }
+    mediaReady = false;
+    Object.keys(peers).forEach(function(uid){ closePeer(+uid); });
+    guestVideo.srcObject = null;
+    guestVideo.hidden = true;
+    guestTag.hidden = true;
+    $('live-guest-banner').hidden = true;
+    $('ctl-guest-leave').hidden = true;
+    $('ctl-join').hidden = false;
+    post('/heartbeat').catch(function(){});
+    helloSent = false;
+    sayHello();
+  }
+
+  /* ---------------- state poll ---------------- */
+  function renderRequests(reqs){
+    var panel = $('live-requests-panel'), box = $('live-requests');
+    if (myRole !== 'host' || !reqs.length){ panel.hidden = true; return; }
+    panel.hidden = false;
+    box.innerHTML = '';
+    reqs.forEach(function(r){
+      var row = document.createElement('div');
+      row.className = 'live-req';
+      var nm = document.createElement('span');
+      nm.textContent = r.name;
+      nm.style.fontWeight = '700';
+      var ok = document.createElement('button');
+      ok.type = 'button'; ok.className = 'btn'; ok.textContent = '✅ Let in';
+      ok.addEventListener('click', function(){
+        post('/join-decide', {request_id: r.id, approve: 1});
+      });
+      var no = document.createElement('button');
+      no.type = 'button'; no.className = 'btn-ghost'; no.textContent = '❌ Not now';
+      no.addEventListener('click', function(){
+        post('/join-decide', {request_id: r.id, approve: 0});
+      });
+      row.appendChild(nm);
+      var sp = document.createElement('span'); sp.style.flex = '1';
+      row.appendChild(sp);
+      row.appendChild(ok); row.appendChild(no);
+      box.appendChild(row);
+    });
+  }
+  function addComment(c){
+    if (renderedComments[c.id]) return;
+    renderedComments[c.id] = 1;
+    var nearBottom = commentsEl.scrollTop + commentsEl.clientHeight
+      >= commentsEl.scrollHeight - 60;
+    var row = document.createElement('div');
+    row.className = 'live-comment';
+    row.id = 'live-comment-' + c.id;
+    if (c.avatar){
+      var img = document.createElement('img');
+      img.className = 'av-32'; img.src = c.avatar; img.alt = '';
+      row.appendChild(img);
+    } else {
+      var ph = document.createElement('span');
+      ph.className = 'ph-32';
+      ph.textContent = (c.name || '?').charAt(0).toUpperCase();
+      row.appendChild(ph);
+    }
+    var bodyWrap = document.createElement('div');
+    var who = document.createElement('span');
+    who.className = 'who'; who.textContent = c.name;
+    bodyWrap.appendChild(who);
+    if (c.from_host){
+      var tag = document.createElement('span');
+      tag.className = 'hosttag'; tag.textContent = 'HOST';
+      bodyWrap.appendChild(tag);
+    }
+    var body = document.createElement('div');
+    body.textContent = c.body;
+    bodyWrap.appendChild(body);
+    row.appendChild(bodyWrap);
+    if (c.can_delete){
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'del'; del.textContent = '🗑';
+      del.title = 'Delete comment';
+      del.addEventListener('click', function(){
+        post('/comment/' + c.id + '/delete').then(function(d){
+          if (d && d.ok) row.remove();
+        });
+      });
+      row.appendChild(del);
+    }
+    commentsEl.appendChild(row);
+    if (nearBottom) commentsEl.scrollTop = commentsEl.scrollHeight;
+  }
+  function updateJoinButton(d){
+    var btn = $('ctl-join'), msg = $('live-join-msg');
+    if (myRole !== 'watcher'){ btn.hidden = true; return; }
+    btn.hidden = false;
+    if (d.guest && d.guest.id !== B.me){
+      btn.disabled = true;
+      btn.textContent = '🎥 Someone is on camera';
+      return;
+    }
+    if (d.my_join && d.my_join.status === 'pending'){
+      btn.disabled = true;
+      btn.textContent = '⏳ Waiting for the host…';
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = '✋ Ask to join';
+    if (d.my_join && d.my_join.status === 'declined' && d.my_join.decided_at){
+      var age = (Date.now() - Date.parse(d.my_join.decided_at)) / 1000;
+      if (age < 60){
+        btn.disabled = true;
+        btn.textContent = '✋ Ask again in ' + Math.ceil(60 - age) + 's';
+      }
+    }
+    if (msg.dataset.sticky !== '1') msg.hidden = true;
+  }
+  function pollState(){
+    if (ended) return;
+    jget('/live/' + B.id + '/state?since_comment=' + lastComment)
+      .then(function(d){
+        if (!d || !d.ok) return;
+        if (d.status === 'ended'){ teardownEnded(); return; }
+        viewersEl.textContent = d.viewers;
+        (d.comments || []).forEach(function(c){
+          if (c.id > lastComment) lastComment = c.id;
+          addComment(c);
+        });
+        /* Guest changes */
+        var newGuest = d.guest ? d.guest.id : null;
+        if (newGuest !== guestId){
+          if (guestId && peers[guestId] && myRole !== 'guest')
+            closePeer(guestId);
+          guestId = newGuest;
+          lastGuestInfo = d.guest || null;
+          if (guestId){
+            showGuestTag();
+            /* Watchers: the guest will offer to us on their own
+               state poll; nothing to do but wait for the track. */
+          } else {
+            guestTag.hidden = true;
+            if (myRole !== 'guest'){
+              guestVideo.srcObject = null;
+              guestVideo.hidden = true;
+            }
+          }
+        } else if (guestId){
+          lastGuestInfo = d.guest || lastGuestInfo;
+          showGuestTag();
+        }
+        /* Did I just get approved (or dropped)? */
+        if (d.my_role === 'guest' && myRole === 'watcher') becomeGuest();
+        if (d.my_role === 'watcher' && myRole === 'guest')
+          stepDownFromGuest();
+        /* Host/guest room maintenance */
+        if (d.viewer_list){
+          lastViewerList = d.viewer_list;
+          if (myRole === 'guest') offerToWatchers();
+          if (myRole === 'host' || myRole === 'guest'){
+            var keep = {};
+            keep[B.host.id] = 1;
+            if (guestId) keep[guestId] = 1;
+            lastViewerList.forEach(function(v){ keep[v.id] = 1; });
+            Object.keys(peers).forEach(function(uid){
+              if (!keep[uid]) closePeer(+uid);
+            });
+          }
+        }
+        if (myRole === 'host') renderRequests(d.pending_requests || []);
+        updateJoinButton(d);
+      })
+      .catch(function(){});
+  }
+
+  /* ---------------- controls ---------------- */
+  function trackToggle(kind, btn, onText, offText){
+    if (!myStream) return;
+    var tracks = kind === 'audio' ? myStream.getAudioTracks()
+                                  : myStream.getVideoTracks();
+    if (!tracks.length) return;
+    var on = !tracks[0].enabled;
+    tracks.forEach(function(t){ t.enabled = on; });
+    btn.classList.toggle('off', !on);
+    btn.textContent = on ? onText : offText;
+  }
+  $('ctl-mute').addEventListener('click', function(){
+    trackToggle('audio', this, '🎤 Mute', '🔇 Unmute');
+  });
+  $('ctl-cam').addEventListener('click', function(){
+    trackToggle('video', this, '📷 Camera on', '🚫 Camera off');
+  });
+  $('ctl-flip').addEventListener('click', function(){
+    facing = facing === 'user' ? 'environment' : 'user';
+    setupLocalMedia();
+  });
+  $('ctl-end').addEventListener('click', function(){
+    if (!confirm('End this live for everyone?')) return;
+    post('/end').then(function(){
+      teardownEnded();
+    });
+  });
+  $('ctl-guest-leave').addEventListener('click', function(){
+    post('/guest-leave').then(function(){ stepDownFromGuest(); });
+  });
+  guestRemoveBtn.addEventListener('click', function(){
+    if (guestId) post('/guest-leave', {user_id: guestId});
+  });
+  $('ctl-sound').addEventListener('click', function(){
+    mainVideo.muted = !mainVideo.muted;
+    this.textContent = mainVideo.muted ? '🔊 Tap for sound' : '🔇 Sound off';
+    if (!mainVideo.muted) mainVideo.play().catch(function(){});
+  });
+  $('ctl-join').addEventListener('click', function(){
+    var msg = $('live-join-msg');
+    post('/join-request').then(function(d){
+      msg.hidden = false;
+      msg.dataset.sticky = '1';
+      if (d && d.ok){
+        msg.textContent = '✋ Request sent — the host can let you in.';
+      } else {
+        msg.textContent = (d && d.error) || 'Could not send the request.';
+      }
+      pollState();
+    });
+  });
+  $('ctl-leave').addEventListener('click', function(){
+    try {
+      navigator.sendBeacon('/live/' + B.id + '/leave');
+    } catch (e) {}
+    window.location.href = '/home';
+  });
+  $('live-comment-form').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var input = $('live-comment-input');
+    var body = input.value.trim();
+    if (!body || ended) return;
+    input.value = '';
+    post('/comment', {body: body}).then(function(d){
+      if (d && d.ok && d.comment) addComment(d.comment);
+      else if (d && d.error){
+        input.value = body;
+      }
+    });
+  });
+
+  /* ---------------- lifecycle ---------------- */
+  function teardownEnded(){
+    if (ended) return;
+    ended = true;
+    timers.forEach(clearInterval);
+    Object.keys(peers).forEach(function(uid){ closePeer(+uid); });
+    if (myStream){
+      myStream.getTracks().forEach(function(t){ t.stop(); });
+      myStream = null;
+    }
+    mainVideo.srcObject = null;
+    guestVideo.srcObject = null;
+    setStatus('📺 This live has ended.');
+    $('live-comment-input').disabled = true;
+    ['ctl-mute','ctl-cam','ctl-flip','ctl-end','ctl-guest-leave',
+     'ctl-join','live-requests-panel'].forEach(function(id){
+      var el = $(id);
+      if (el) el.hidden = true;
+    });
+  }
+  window.addEventListener('beforeunload', function(){
+    if (ended) return;
+    try {
+      if (myRole === 'host')
+        navigator.sendBeacon('/live/' + B.id + '/end');
+      else
+        navigator.sendBeacon('/live/' + B.id + '/leave');
+    } catch (e) {}
+  });
+  setInterval(function(){
+    var s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    timerEl.textContent = Math.floor(s / 60) + ':'
+      + ('0' + (s % 60)).slice(-2);
+  }, 1000);
+
+  /* ---------------- boot by role ---------------- */
+  if (myRole === 'host'){
+    $('ctl-mute').hidden = false;
+    $('ctl-cam').hidden = false;
+    $('ctl-flip').hidden = false;
+    $('ctl-end').hidden = false;
+    setStatus('You are live 🔴 — setting up your camera…');
+    setupLocalMedia();
+  } else {
+    $('ctl-sound').hidden = false;
+    $('ctl-leave').hidden = false;
+    if (myRole === 'watcher') $('ctl-join').hidden = false;
+    setStatus('Joining the live…');
+    post('/heartbeat').then(function(){ sayHello(); });
+    if (myRole === 'guest') becomeGuest();
+  }
+  every(2000, pollSignals);
+  every(3000, pollState);
+  every(10000, function(){ post('/heartbeat').catch(function(){}); });
+  pollState();
+  pollSignals();
+})();
+</script>
+{% endif %}
+{% endblock %}

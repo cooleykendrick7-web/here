@@ -37,6 +37,9 @@
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
       {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        {% if profile.live_id %}
+        <a class="btn" href="/live/{{ profile.live_id }}" style="background:var(--red);animation:livepulse 1.2s infinite">🔴 LIVE — watch now</a>
+        {% endif %}
         {% if profile.is_self %}
         <a class="btn-ghost" href="/settings/profile">✏️ Edit Profile</a>
         <a class="btn-ghost" href="/settings/profile#spot">🏠 Customize my spot</a>
