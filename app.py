@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import threading
 import uuid
@@ -230,6 +231,27 @@ def init_db():
             c.execute(f"ALTER TABLE posts ADD COLUMN {_mc} TEXT DEFAULT ''")
     if "music_start" not in _post_cols:
         c.execute("ALTER TABLE posts ADD COLUMN music_start INTEGER DEFAULT 0")
+    # --- story replies/reactions ride the messages table (safe) ---
+    # A message linked to a story carries the story's id plus the
+    # uploads-relative path of a SHARED clip copy (uploads/story_replies/)
+    # made when the first reply/reaction to that story lands, so the
+    # thread can show the clip forever — even after the story itself
+    # expires and is pruned. Plain messages keep story_id NULL.
+    _msg_cols = [r["name"] for r in
+                 c.execute("PRAGMA table_info(messages)").fetchall()]
+    if "story_id" not in _msg_cols:
+        c.execute("ALTER TABLE messages ADD COLUMN story_id INTEGER")
+    if "story_media" not in _msg_cols:
+        c.execute("ALTER TABLE messages ADD COLUMN story_media TEXT DEFAULT ''")
+    # --- tap acknowledgments (safe) ---
+    # A tap is just "I'm trying to get your attention": once the
+    # recipient has seen/answered it (visits the tapper's profile or
+    # taps them back — the same moments that delete the tap's bell
+    # notification), the pair's taps stop counting toward the number
+    # shown beside the Tap button. Taps after the ack count again.
+    c.execute("""CREATE TABLE IF NOT EXISTS tap_acks (
+        tapper_id INTEGER NOT NULL, tapped_id INTEGER NOT NULL,
+        acked_at TEXT NOT NULL, PRIMARY KEY(tapper_id, tapped_id))""")
     # --- stories (safe on existing DBs) ---
     c.execute("""CREATE TABLE IF NOT EXISTS stories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -433,6 +455,86 @@ def init_db():
               "ON live_comments(live_id, id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_live_join_room "
               "ON live_join_requests(live_id, status)")
+    # --- go live panel upgrade (safe on existing DBs) ---
+    # TikTok-style panel: the host plus up to 15 guests on camera,
+    # per-live admins appointed by the host, room bans, and likes.
+    # live_members is the panel roster EXCLUDING the host (the host is
+    # always panelist #1 via live_sessions.host_id); panel size is
+    # therefore 1 + (live_members rows with left_at NULL).
+    _live_sess_cols = [r["name"] for r in
+                       c.execute("PRAGMA table_info(live_sessions)")
+                       .fetchall()]
+    if "like_count" not in _live_sess_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN like_count "
+                  "INTEGER DEFAULT 0")
+    if "panel_order" not in _live_sess_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN panel_order "
+                  "TEXT")
+    _jr_cols = [r["name"] for r in
+                c.execute("PRAGMA table_info(live_join_requests)")
+                .fetchall()]
+    if "kind" not in _jr_cols:
+        # 'request' = a watcher asks to join; 'invite' = the host or
+        # an admin invites a watcher. Old rows are all requests.
+        c.execute("ALTER TABLE live_join_requests ADD COLUMN kind "
+                  "TEXT DEFAULT 'request'")
+    if "inviter_id" not in _jr_cols:
+        # For kind='invite' rows, user_id is the INVITEE (the column
+        # keeps its "the person this row is about" meaning) and the
+        # inviter rides here; NULL on plain join requests.
+        c.execute("ALTER TABLE live_join_requests ADD COLUMN "
+                  "inviter_id INTEGER")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_members (
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        muted INTEGER DEFAULT 0,
+        joined_at TEXT NOT NULL, left_at TEXT,
+        PRIMARY KEY (live_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_admins (
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        appointed_by INTEGER, created_at TEXT NOT NULL,
+        revoked_at TEXT,
+        PRIMARY KEY (live_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_bans (
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        by_id INTEGER, created_at TEXT NOT NULL,
+        PRIMARY KEY (live_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_like_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_members_room "
+              "ON live_members(live_id, left_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_admins_room "
+              "ON live_admins(live_id, revoked_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_bans_room "
+              "ON live_bans(live_id, user_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_likes_room "
+              "ON live_like_events(live_id, id)")
+    c.execute("UPDATE live_sessions SET like_count=0 "
+              "WHERE like_count IS NULL")
+    # Backfill pre-upgrade rooms: an approved join request WAS the
+    # on-camera guest — turn those rows into panel members and seed
+    # panel_order so a room live during the upgrade survives intact.
+    for _lr in c.execute(
+            "SELECT id, host_id FROM live_sessions "
+            "WHERE panel_order IS NULL").fetchall():
+        _approved = c.execute(
+            "SELECT user_id, created_at FROM live_join_requests "
+            "WHERE live_id=? AND status='approved' ORDER BY id ASC",
+            (_lr["id"],)).fetchall()
+        _order = [_lr["host_id"]]
+        for _a in _approved:
+            if _a["user_id"] == _lr["host_id"] \
+                    or _a["user_id"] in _order:
+                continue
+            c.execute(
+                "INSERT OR IGNORE INTO live_members(live_id, "
+                "user_id, muted, joined_at, left_at) "
+                "VALUES(?,?,0,?,NULL)",
+                (_lr["id"], _a["user_id"], _a["created_at"]))
+            _order.append(_a["user_id"])
+        c.execute("UPDATE live_sessions SET panel_order=? WHERE id=?",
+                  (json.dumps(_order), _lr["id"]))
     # --- phone push notifications (Web Push) ---
     # app_settings is a tiny key/value store; it holds the VAPID private
     # key (PEM) so the server's push identity survives restarts on the
@@ -2822,6 +2924,125 @@ async def story_viewers(request: Request, sid: int):
         for r in rows]})
 
 
+def _story_clip_for_replies(conn, s):
+    """Uploads-relative path of the shared clip copy for story s —
+    uploads/story_replies/<story_id>-<basename> — created on the FIRST
+    story-linked message for the story and reused by every later one.
+    The copy lives outside stories/ on purpose: prune_stories deletes
+    the story row (and the original is the story's own file), but this
+    snapshot belongs to the message thread and must survive the story
+    expiring — Facebook keeps the clip in the inbox the same way.
+    Returns '' when the story has no media, the file is missing, or
+    the copy fails; the thread then renders the 📖 placeholder tile."""
+    row = conn.execute(
+        "SELECT story_media FROM messages WHERE story_id=? "
+        "AND story_media != '' LIMIT 1", (s["id"],)).fetchone()
+    if row and os.path.isfile(os.path.join(UPLOAD_DIR, row["story_media"])):
+        return row["story_media"]
+    src_rel = s["media"] or ""
+    if not src_rel:
+        return ""
+    src = os.path.join(UPLOAD_DIR, src_rel)
+    if not os.path.isfile(src):
+        return ""
+    dest_rel = f"story_replies/{s['id']}-{os.path.basename(src_rel)}"
+    dest = os.path.join(UPLOAD_DIR, dest_rel)
+    try:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copyfile(src, dest)
+    except Exception:
+        return ""
+    return dest_rel
+
+
+def _story_interact_gate(user, sid):
+    """Shared gate for POST /story/{sid}/reply and /react. Returns
+    ((story, owner), None) or (None, JSONResponse). Rules mirror the
+    viewer + the message route: the story must exist; a pair blocked
+    either way is refused with the message route's exact wording; the
+    sender must be able to VIEW the story (owner + friends, unexpired —
+    the queue's rule); and nobody replies/reacts to their own story."""
+    s = _get_story(sid)
+    if not s:
+        return None, JSONResponse({"ok": False, "error": "not found"},
+                                  status_code=404)
+    if blocked_either_way(user["id"], s["user_id"]):
+        return None, JSONResponse(
+            {"ok": False, "error": "You can't message this person."},
+            status_code=403)
+    if s["user_id"] == user["id"]:
+        return None, JSONResponse(
+            {"ok": False, "error": "That's your own story."},
+            status_code=400)
+    if not _can_view_story(user, s):
+        return None, JSONResponse({"ok": False, "error": "not found"},
+                                  status_code=404)
+    owner = get_user(s["user_id"])
+    if not owner:
+        return None, JSONResponse({"ok": False, "error": "not found"},
+                                  status_code=404)
+    return (s, owner), None
+
+
+@app.post("/story/{sid}/reply")
+async def story_reply(request: Request, sid: int):
+    """Reply to someone's story: lands in their inbox as a normal
+    message (same insert path, badge, bell and push as any DM) with
+    the story clip attached. JSON {body} — body rules match the
+    message route (trimmed; empty is refused)."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    gate, resp = _story_interact_gate(user, sid)
+    if resp:
+        return resp
+    s, owner = gate
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    body = str((data or {}).get("body") or "").strip()
+    if not body:
+        return JSONResponse({"ok": False,
+                             "error": "Write something first."},
+                            status_code=400)
+    conn = db()
+    clip = _story_clip_for_replies(conn, s)
+    conn.close()
+    mid = _deliver_message(user, owner["id"], body, story_id=sid,
+                           story_media=clip)
+    return JSONResponse({"ok": True, "id": mid})
+
+
+@app.post("/story/{sid}/react")
+async def story_react(request: Request, sid: int):
+    """React to someone's story with one of the 6 standard reactions:
+    lands in their inbox as a story-linked message whose body is the
+    reaction emoji itself (the thread renders it as
+    "{name} reacted to your story")."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    gate, resp = _story_interact_gate(user, sid)
+    if resp:
+        return resp
+    s, owner = gate
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    kind = str((data or {}).get("kind") or "").strip()
+    if kind not in REACTION_EMOJI:
+        return JSONResponse({"ok": False, "error": "Unknown reaction."},
+                            status_code=400)
+    conn = db()
+    clip = _story_clip_for_replies(conn, s)
+    conn.close()
+    mid = _deliver_message(user, owner["id"], REACTION_EMOJI[kind],
+                           story_id=sid, story_media=clip)
+    return JSONResponse({"ok": True, "id": mid})
+
+
 @app.post("/story/{sid}/delete")
 async def story_delete(request: Request, sid: int):
     user, err = require_login(request)
@@ -3203,16 +3424,23 @@ async def profile(request: Request, uid: int):
             (user["id"], uid, now_iso(), user["id"], uid))
         # --- tap hygiene: visiting someone's profile clears the tap
         # notifications they sent me (their tap note points at THIS
-        # profile), so a seen tap doesn't sit in the bell forever ---
+        # profile), so a seen tap doesn't sit in the bell forever. The
+        # same visit ACKNOWLEDGES their taps to me: the number beside
+        # the Tap button counts only unacknowledged taps, so it clears
+        # here too — a fresh tap from them afterwards counts again. ---
         conn.execute(
             "DELETE FROM notifications WHERE user_id=? AND kind='tap' "
             "AND link=?", (user["id"], f"/user/{uid}"))
+        _ack_taps(conn, uid, user["id"])
         conn.commit()
     fcount = conn.execute(
         "SELECT COUNT(*) c FROM friendships WHERE status='accepted' AND "
         "(user_id=? OR friend_id=?)", (uid, uid)).fetchone()["c"]
-    tcount = conn.execute("SELECT COUNT(*) c FROM taps WHERE tapped_id=?",
-                          (uid,)).fetchone()["c"]
+    # The number beside the Tap button counts only UNACKNOWLEDGED taps
+    # this profile has received (see _ack_taps): once the owner has
+    # visited a tapper's profile or tapped them back, that tapper's
+    # taps stop counting and the number shrinks or vanishes entirely.
+    tcount = _unacked_tap_count(conn, uid)
     prows = conn.execute(
         "SELECT * FROM posts WHERE user_id=? AND page_id IS NULL "
         "ORDER BY pinned DESC, created_at DESC LIMIT 100", (uid,)).fetchall()
@@ -3589,6 +3817,30 @@ async def friend_remove(request: Request, uid: int):
 
 
 # ---------------- tap ----------------
+def _ack_taps(conn, tapper_id, tapped_id):
+    """Acknowledge tapper_id's taps to tapped_id: the recipient has
+    seen or answered them, so they stop counting toward the number
+    shown beside the Tap button (Ken's rule: a tap is only an
+    attention ping). Fires at the exact two moments the tap's bell
+    notification deletes itself — the recipient visiting the tapper's
+    profile, or tapping them back. A tap that lands AFTER this moment
+    is fresh and counts again (acked_at is compared per tap)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO tap_acks(tapper_id, tapped_id, acked_at) "
+        "VALUES(?,?,?)", (tapper_id, tapped_id, now_iso()))
+
+
+def _unacked_tap_count(conn, tapped_id):
+    """Taps RECEIVED by tapped_id that still show as a number: every
+    tap with no ack for its (tapper, recipient) pair at or after the
+    tap's own moment. Acknowledged taps render NO number at all."""
+    return conn.execute(
+        "SELECT COUNT(*) c FROM taps t WHERE t.tapped_id=? AND NOT EXISTS ("
+        "SELECT 1 FROM tap_acks a WHERE a.tapper_id=t.tapper_id "
+        "AND a.tapped_id=t.tapped_id AND a.acked_at>=t.created_at)",
+        (tapped_id,)).fetchone()["c"]
+
+
 @app.post("/tap/{uid}")
 async def tap(request: Request, uid: int):
     user, err = require_login(request)
@@ -3608,11 +3860,13 @@ async def tap(request: Request, uid: int):
            actor_id=user["id"])
     # Answering a tap clears the tap notifications THAT person sent me:
     # their tap note points at their profile, and once I've tapped back
-    # it has done its job.
+    # it has done its job. The tap-back also ACKNOWLEDGES their taps to
+    # me, so the number beside the Tap button clears at the same moment.
     conn = db()
     conn.execute(
         "DELETE FROM notifications WHERE user_id=? AND kind='tap' "
         "AND link=?", (user["id"], f"/user/{uid}"))
+    _ack_taps(conn, uid, user["id"])
     conn.commit()
     conn.close()
     return back(request)
@@ -3699,6 +3953,46 @@ async def unblock_user(request: Request, uid: int):
 
 
 # ---------------- messages ----------------
+def _deliver_message(sender, receiver_id, body, story_id=None,
+                     story_media=""):
+    """THE message insert path. POST /messages/{fid} and the story
+    reply/react endpoints all land here, so every message gets the
+    identical treatment: the row insert, the moderation scan, the bell
+    notification, and the push (silence/block-gated inside notify() /
+    notifications_allowed). Story-linked messages additionally carry
+    story_id + the shared clip copy path (see _story_clip_for_replies);
+    plain messages leave both empty. Returns the new message id."""
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO messages(sender_id, receiver_id, body, created_at, "
+        "story_id, story_media) VALUES(?,?,?,?,?,?)",
+        (sender["id"], receiver_id, body, now_iso(), story_id, story_media))
+    mid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    flag_item("message", mid, sender["id"], sender["name"], body)
+    notify(receiver_id, "message", f"New message from {sender['name']}.",
+           f"/messages/{sender['id']}", actor_id=sender["id"])
+    preview = body if len(body) <= 80 else body[:79] + "…"
+    if notifications_allowed(receiver_id, sender["id"]):
+        send_push(receiver_id, f"💬 {sender['name']}", preview,
+                  f"/messages/{sender['id']}", tag=f"msg-{sender['id']}")
+    return mid
+
+
+def _msg_preview(body, story_id):
+    """Inbox/Sent preview text for one message row. Story-linked
+    messages announce themselves: a reply reads "📖 Story reply: …"
+    and a reaction (body is exactly one reaction emoji) reads
+    "📖 {emoji} reacted to a story". Plain messages preview as-is."""
+    b = (body or "").strip()
+    if story_id:
+        if b in REACTION_EMOJI.values():
+            return f"📖 {b} reacted to a story"
+        return f"📖 Story reply: {b}"
+    return body or ""
+
+
 def _vis_frag(alias="m"):
     """SQL AND-fragment hiding messages the VIEWER deleted-for-me.
 
@@ -3747,7 +4041,8 @@ async def inbox(request: Request):
                  "presence": presence_of(
                      {"last_seen_at": r["rlast"], "status_mode": r["rmode"],
                       "inbox_status": r["rinbox"]}, inbox=True),
-                 "body": r["body"], "created_at": fancy_time(r["created_at"])}
+                 "body": _msg_preview(r["body"], r["story_id"]),
+                 "created_at": fancy_time(r["created_at"])}
                 for r in rows if r["receiver_id"] not in blocked]
         return render(request, "inbox.html",
                       {"box": "sent", "threads": [], "sent": sent})
@@ -3768,7 +4063,7 @@ async def inbox(request: Request):
             "SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
             "FROM users WHERE id=?", (fid,)).fetchone()
         last = conn.execute(
-            "SELECT m.body, m.created_at FROM messages m WHERE "
+            "SELECT m.body, m.created_at, m.story_id FROM messages m WHERE "
             "((m.sender_id=? AND m.receiver_id=?) OR "
             "(m.sender_id=? AND m.receiver_id=?))" + _vis_frag("m") +
             " ORDER BY m.created_at DESC LIMIT 1",
@@ -3784,7 +4079,8 @@ async def inbox(request: Request):
             "friend_name": f["name"] if f else "Deleted user",
             "friend_avatar": avatar_url(f["avatar"]) if f and f["avatar"] else "",
             "presence": presence_of(f, inbox=True) if f else None,
-            "last_body": last["body"] if last else "",
+            "last_body": _msg_preview(last["body"], last["story_id"])
+            if last else "",
             "last_at": fancy_time(last["created_at"]) if last else "",
             "unread": unread,
         })
@@ -3825,9 +4121,33 @@ async def thread(request: Request, fid: int):
         call_req = {"id": pending_req["id"], "kind": pending_req["kind"],
                     "direction": ("out" if pending_req["requester_id"] == user["id"]
                                   else "in")}
-    msgs = [{"id": r["id"], "sender_id": r["sender_id"], "body": r["body"],
+    msgs = []
+    for r in rows:
+        d = {"id": r["id"], "sender_id": r["sender_id"], "body": r["body"],
              "created_at": fancy_time(r["created_at"]),
-             "mine": r["sender_id"] == user["id"]} for r in rows]
+             "mine": r["sender_id"] == user["id"], "story": None}
+        if r["story_id"]:
+            # Story reply/reaction: the bubble carries the story clip
+            # (the shared story_replies copy, so it outlives the story)
+            # plus a label naming the interaction. A reaction's body
+            # IS the emoji; anything else is a reply. The receiver of a
+            # story message is always the story's owner.
+            reacted = (r["body"] or "").strip() in REACTION_EMOJI.values()
+            if d["mine"]:
+                label = (f"You reacted to {friend['name']}'s story"
+                         if reacted else
+                         f"You replied to {friend['name']}'s story")
+            else:
+                label = (f"{friend['name']} reacted to your story"
+                         if reacted else
+                         f"{friend['name']} replied to your story")
+            d["story"] = {
+                "media": avatar_url(r["story_media"]) if r["story_media"]
+                else "",
+                "is_video": (r["story_media"] or "").lower().endswith(
+                    (".mp4", ".mov", ".webm")),
+                "label": label}
+        msgs.append(d)
     return render(request, "thread.html", {
         "friend": {"id": friend["id"], "name": friend["name"],
                    "avatar": avatar_url(friend.get("avatar", "")),
@@ -3851,20 +4171,7 @@ async def send_message(request: Request, fid: int):
     body = (form.get("body") or "").strip()
     if not body:
         return redir(f"/messages/{fid}")
-    conn = db()
-    cur = conn.execute(
-        "INSERT INTO messages(sender_id, receiver_id, body, created_at) "
-        "VALUES(?,?,?,?)", (user["id"], fid, body, now_iso()))
-    mid = cur.lastrowid
-    conn.commit()
-    conn.close()
-    flag_item("message", mid, user["id"], user["name"], body)
-    notify(fid, "message", f"New message from {user['name']}.",
-           f"/messages/{user['id']}", actor_id=user["id"])
-    preview = body if len(body) <= 80 else body[:79] + "…"
-    if notifications_allowed(fid, user["id"]):
-        send_push(fid, f"💬 {user['name']}", preview,
-                  f"/messages/{user['id']}", tag=f"msg-{user['id']}")
+    _deliver_message(user, fid, body)
     return redir(f"/messages/{fid}")
 
 
@@ -4566,17 +4873,19 @@ async def call_request_decline(request: Request, rid: int):
 # ---------------- go live (WebRTC, DB-signaled) ----------------
 # Ken's Go Live: any user can stream from their phone; friends and the
 # public (minus blocks / private-profile rules) watch, comment live,
-# and one approved guest can join on camera. The architecture mirrors
+# and join on camera as part of a panel — the host plus up to 15
+# guests (live_members), with per-live admins, kicks/bans, mutes,
+# tile order, invites, and likes. The architecture mirrors
 # 1:1 calls exactly — media flows phone-to-phone via WebRTC, the DB
 # only carries room state, chat, presence, join requests, and the
 # small signaling messages (SDP/ICE) browsers poll for. No websockets,
 # nothing is recorded or stored server-side.
 #
-# Topology: the HOST sends to every watcher (one send peer per
-# watcher, host always offers). The GUEST (max one) is two-way with
-# the host (host offers) and sends to every watcher (guest offers).
-# Watchers are receive-only and answer. Fixed offerer roles per pair
-# mean there is never negotiation glare to resolve.
+# Topology: PANELISTS send to every watcher (one send peer per
+# watcher, the panelist always offers) and are two-way with each
+# other: for a panelist pair, whoever sits EARLIER in panel_order
+# offers. Watchers are receive-only and answer. Fixed offerer roles
+# per pair mean there is never negotiation glare to resolve.
 LIVE_STALE_SECONDS = 90        # host heartbeat gap that auto-ends a live
 LIVE_VIEWER_WINDOW = 45       # viewer counts if seen within this window
 LIVE_TITLE_MAX = 80
@@ -4584,6 +4893,7 @@ LIVE_COMMENT_MAX = 300
 LIVE_JOIN_COOLDOWN = 60       # seconds after a decline before re-asking
 LIVE_SIGNAL_TYPES = ("hello", "offer", "answer", "ice", "bye")
 LIVE_MAX_PAYLOAD = 65536      # same SDP headroom as calls
+LIVE_PANEL_MAX = 16           # host + up to 15 guests on camera
 
 
 def _sweep_lives(conn):
@@ -4617,6 +4927,15 @@ def _end_live_row(conn, live):
     conn.execute(
         "UPDATE live_join_requests SET status='left', decided_at=? "
         "WHERE live_id=? AND status='approved'", (stamp, live["id"]))
+    # The panel roster and the admin list die with the room: members
+    # are marked left and appointments revoked (the rows stay as the
+    # room's history, exactly like settled join requests do).
+    conn.execute(
+        "UPDATE live_members SET left_at=? WHERE live_id=? AND "
+        "left_at IS NULL", (stamp, live["id"]))
+    conn.execute(
+        "UPDATE live_admins SET revoked_at=? WHERE live_id=? AND "
+        "revoked_at IS NULL", (stamp, live["id"]))
 
 
 def _live_get(conn, lid):
@@ -4628,12 +4947,21 @@ def _live_get(conn, lid):
 def _live_can_watch(viewer, live, owner_on=False):
     """Who may watch/comment/join a live: the host always; the site
     owner context always; anyone logged in EXCEPT a pair blocked
-    either way with the host; and when the host's profile is private,
-    only the host's friends (the privacy suite's rule)."""
+    either way with the host; a viewer banned from THIS room never
+    (a room ban gives the ended-face page and drops the room from
+    the home strip, because both go through this gate); and when
+    the host's profile is private, only the host's friends (the
+    privacy suite's rule)."""
     if not viewer:
         return False
     if viewer["id"] == live["host_id"] or owner_on:
         return True
+    _bc = db()
+    try:
+        if _live_banned(_bc, live["id"], viewer["id"]):
+            return False
+    finally:
+        _bc.close()
     if blocked_either_way(viewer["id"], live["host_id"]):
         return False
     host = get_user(live["host_id"])
@@ -4643,11 +4971,210 @@ def _live_can_watch(viewer, live, owner_on=False):
 
 
 def _live_guest_req(conn, lid):
-    """The currently approved join request (the on-camera guest)."""
+    """Legacy helper: the most recently approved join request. The
+    panel roster (live_members) is the source of truth for who is
+    on camera now; this survives only for pre-upgrade rows and the
+    legacy guest-leave fallback paths."""
     r = conn.execute(
         "SELECT * FROM live_join_requests WHERE live_id=? AND "
         "status='approved' ORDER BY id DESC LIMIT 1", (lid,)).fetchone()
     return dict(r) if r else None
+
+
+# ---------------- live panel: roles, roster, bans ----------------
+def _live_banned(conn, lid, uid):
+    """True when uid carries a room ban for this live (a 'room'
+    kick). Bans are per-live only — they touch nothing site-wide."""
+    if not uid:
+        return False
+    r = conn.execute(
+        "SELECT 1 FROM live_bans WHERE live_id=? AND user_id=?",
+        (lid, uid)).fetchone()
+    return bool(r)
+
+
+def _live_member_row(conn, lid, uid):
+    """The user's ACTIVE panel-member row (left_at NULL), or None.
+    The host is never a member — the host is panelist #1 by role."""
+    r = conn.execute(
+        "SELECT * FROM live_members WHERE live_id=? AND user_id=? "
+        "AND left_at IS NULL", (lid, uid)).fetchone()
+    return dict(r) if r else None
+
+
+def _live_active_members(conn, lid):
+    """Active panel members (host excluded), in join order."""
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM live_members WHERE live_id=? AND "
+        "left_at IS NULL ORDER BY joined_at ASC, user_id ASC",
+        (lid,)).fetchall()]
+
+
+def _live_is_admin(conn, lid, uid):
+    """True when uid holds an ACTIVE admin appointment in this live
+    (live_admins row, not revoked). The host is not an "admin" by
+    this measure — the host outranks admins and is checked apart."""
+    if not uid:
+        return False
+    r = conn.execute(
+        "SELECT 1 FROM live_admins WHERE live_id=? AND user_id=? "
+        "AND revoked_at IS NULL", (lid, uid)).fetchone()
+    return bool(r)
+
+
+def _live_role(conn, live, uid):
+    """'host' | 'admin' | 'member' | 'watcher' for uid in this live.
+    A user can be both member and admin (on camera AND moderating);
+    admin is reported because it carries the wider powers, and the
+    host trumps everything."""
+    if not uid:
+        return "watcher"
+    if uid == live["host_id"]:
+        return "host"
+    if _live_is_admin(conn, live["id"], uid):
+        return "admin"
+    if _live_member_row(conn, live["id"], uid):
+        return "member"
+    return "watcher"
+
+
+def _live_stored_panel_order(conn, lid):
+    """panel_order as stored (a JSON list of user ids incl. the
+    host), or None when unset/unparseable."""
+    r = conn.execute(
+        "SELECT panel_order FROM live_sessions WHERE id=?",
+        (lid,)).fetchone()
+    if not r or not r["panel_order"]:
+        return None
+    try:
+        ids = json.loads(r["panel_order"])
+    except Exception:
+        return None
+    if not isinstance(ids, list):
+        return None
+    out = []
+    for v in ids:
+        try:
+            out.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _live_set_panel_order(conn, lid, ids):
+    conn.execute(
+        "UPDATE live_sessions SET panel_order=? WHERE id=?",
+        (json.dumps([int(i) for i in ids]), lid))
+
+
+def _live_panel_ids(conn, live):
+    """Ordered active panelist ids for tile rendering: panel_order
+    filtered to the host + active members (stale ids dropped),
+    with anyone missing appended at the end. When panel_order is
+    missing/stale the sensible order is host first, then members
+    by joined_at."""
+    lid = live["id"]
+    host_id = live["host_id"]
+    member_ids = [m["user_id"] for m in _live_active_members(conn, lid)]
+    allowed = [host_id] + [m for m in member_ids if m != host_id]
+    stored = _live_stored_panel_order(conn, lid)
+    if stored is None:
+        return allowed
+    out = []
+    for uid in stored:
+        if uid in allowed and uid not in out:
+            out.append(uid)
+    if host_id not in out:
+        out.insert(0, host_id)
+    for uid in allowed:
+        if uid not in out:
+            out.append(uid)
+    return out
+
+
+def _live_panel_size(conn, lid):
+    """Panel size = the host + active members."""
+    r = conn.execute(
+        "SELECT COUNT(*) c FROM live_members WHERE live_id=? AND "
+        "left_at IS NULL", (lid,)).fetchone()
+    return 1 + (r["c"] if r else 0)
+
+
+def _live_add_member(conn, live, uid):
+    """Put uid on the panel (no commit). Returns False when the
+    panel is already at the LIVE_PANEL_MAX cap; True when uid is
+    on the panel afterwards (the host trivially qualifies, and an
+    existing member is a no-op that also repairs panel_order)."""
+    lid = live["id"]
+    if uid == live["host_id"]:
+        return True
+    if _live_member_row(conn, lid, uid):
+        ids = _live_panel_ids(conn, live)
+        if uid not in ids:
+            ids.append(uid)
+            _live_set_panel_order(conn, lid, ids)
+        return True
+    if _live_panel_size(conn, lid) >= LIVE_PANEL_MAX:
+        return False
+    stamp = now_iso()
+    conn.execute(
+        "INSERT INTO live_members(live_id, user_id, muted, "
+        "joined_at, left_at) VALUES(?,?,0,?,NULL) "
+        "ON CONFLICT(live_id, user_id) DO UPDATE SET "
+        "left_at=NULL, joined_at=excluded.joined_at, muted=0",
+        (lid, uid, stamp))
+    ids = _live_panel_ids(conn, live)
+    if uid not in ids:
+        ids.append(uid)
+    _live_set_panel_order(conn, lid, ids)
+    return True
+
+
+def _live_signal_teardown(conn, live, target_id):
+    """Leave 'bye' signals between target_id and every other active
+    room participant (panelists + active watchers), in BOTH
+    directions, so every peer holding a connection to the target
+    tears it down at once — _drop_guest's loops, generalized."""
+    lid = live["id"]
+    others = []
+    for uid in _live_panel_ids(conn, live):
+        if uid != target_id and uid not in others:
+            others.append(uid)
+    for v in _live_viewer_rows(conn, lid):
+        if v["user_id"] != target_id and v["user_id"] not in others:
+            others.append(v["user_id"])
+    for other in others:
+        _live_signal(conn, lid, target_id, other, "bye")
+        _live_signal(conn, lid, other, target_id, "bye")
+
+
+def _live_remove_member(conn, live, target_id):
+    """Take target_id OFF the panel (no commit, no signals): the
+    member row is marked left, their approved join/invite rows
+    settle to 'left' (so my_join reads sensibly), and panel_order
+    drops them."""
+    lid = live["id"]
+    stamp = now_iso()
+    conn.execute(
+        "UPDATE live_members SET left_at=? WHERE live_id=? AND "
+        "user_id=? AND left_at IS NULL", (stamp, lid, target_id))
+    conn.execute(
+        "UPDATE live_join_requests SET status='left', decided_at=? "
+        "WHERE live_id=? AND user_id=? AND status='approved'",
+        (stamp, lid, target_id))
+    ids = [i for i in _live_panel_ids(conn, live) if i != target_id]
+    _live_set_panel_order(conn, lid, ids)
+
+
+def _live_parse_body(data):
+    return data if isinstance(data, dict) else {}
+
+
+def _live_body_int(data, key, default=0):
+    try:
+        return int(data.get(key) or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def _live_viewer_rows(conn, lid):
@@ -4674,19 +5201,11 @@ def _live_signal(conn, live_id, from_id, to_id, kind, payload=""):
 
 
 def _drop_guest(conn, live, guest_id):
-    """Drop the on-camera guest back to watcher (no commit): settle
-    the join request and leave 'bye' signals so the guest's client and
-    every peer holding a guest connection tears it down at once."""
-    stamp = now_iso()
-    conn.execute(
-        "UPDATE live_join_requests SET status='left', decided_at=? "
-        "WHERE live_id=? AND user_id=? AND status='approved'",
-        (stamp, live["id"], guest_id))
-    _live_signal(conn, live["id"], guest_id, live["host_id"], "bye")
-    _live_signal(conn, live["id"], live["host_id"], guest_id, "bye")
-    for v in _live_viewer_rows(conn, live["id"]):
-        if v["user_id"] not in (guest_id, live["host_id"]):
-            _live_signal(conn, live["id"], guest_id, v["user_id"], "bye")
+    """Drop an on-camera panelist back to watcher (no commit):
+    'bye' signals to every peer, then the roster settles. Kept
+    under its original name — the panel helpers generalize it."""
+    _live_signal_teardown(conn, live, guest_id)
+    _live_remove_member(conn, live, guest_id)
 
 
 def _live_access(request, lid, need_live=False):
@@ -4716,7 +5235,9 @@ def _live_access(request, lid, need_live=False):
     return user, live, None
 
 
-def _live_comment_json(row, viewer_id, host_id):
+def _live_comment_json(row, viewer_id, host_id, viewer_is_admin=False):
+    # can_delete: the author always; the host always; and any admin
+    # of THIS live (moderation mute/kick powers extend to chat).
     return {
         "id": row["id"], "user_id": row["user_id"],
         "name": row["name"] or "Deleted user",
@@ -4725,7 +5246,8 @@ def _live_comment_json(row, viewer_id, host_id):
         "mine": row["user_id"] == viewer_id,
         "from_host": row["user_id"] == host_id,
         "can_delete": row["user_id"] == viewer_id
-                      or viewer_id == host_id}
+                      or viewer_id == host_id
+                      or bool(viewer_is_admin)}
 
 
 def _live_person(uid):
@@ -4783,8 +5305,9 @@ async def live_start(request: Request):
     stamp = now_iso()
     cur = conn.execute(
         "INSERT INTO live_sessions(host_id, title, status, created_at, "
-        "host_seen_at) VALUES(?,?,'live',?,?)",
-        (user["id"], title, stamp, stamp))
+        "host_seen_at, like_count, panel_order) "
+        "VALUES(?,?,'live',?,?,0,?)",
+        (user["id"], title, stamp, stamp, json.dumps([user["id"]])))
     lid = cur.lastrowid
     conn.commit()
     conn.close()
@@ -4826,12 +5349,14 @@ async def live_page(request: Request, lid: int):
         return render(request, "live.html", {
             "mode": "unavailable", "live": live, "host": host,
             "hide_golive": True})
-    guest_req = _live_guest_req(conn, lid)
+    panel_ids = _live_panel_ids(conn, live)
     conn.close()
-    guest = _live_person(guest_req["user_id"]) if guest_req else None
+    # Boot compat: 'guest' stays the first non-host panelist (or
+    # None); the watch page's state poll carries the full panel.
+    guest = _live_person(panel_ids[1]) if len(panel_ids) > 1 else None
     if user["id"] == live["host_id"]:
         role = "host"
-    elif guest_req and guest_req["user_id"] == user["id"]:
+    elif user["id"] in panel_ids:
         role = "guest"
     else:
         role = "watcher"
@@ -4927,9 +5452,14 @@ async def live_leave(request: Request, lid: int):
     _sweep_lives(conn)
     live = _live_get(conn, lid)
     if live and user["id"] != live["host_id"]:
-        guest_req = _live_guest_req(conn, lid)
-        if guest_req and guest_req["user_id"] == user["id"]:
+        if _live_member_row(conn, lid, user["id"]):
+            # An on-camera panelist closing the page leaves the panel.
             _drop_guest(conn, live, user["id"])
+        else:
+            # Legacy fallback: an approved guest with no member row.
+            guest_req = _live_guest_req(conn, lid)
+            if guest_req and guest_req["user_id"] == user["id"]:
+                _drop_guest(conn, live, user["id"])
         conn.execute(
             "UPDATE live_viewers SET left_at=? WHERE live_id=? AND "
             "user_id=?", (now_iso(), lid, user["id"]))
@@ -4940,9 +5470,12 @@ async def live_leave(request: Request, lid: int):
 
 @app.get("/live/{lid}/state")
 async def live_state(request: Request, lid: int):
-    """The watch page's 3s poll: room status, viewer count, the guest,
-    new comments since ?since_comment=, the host's pending join
-    requests, and my own join-request standing."""
+    """The watch page's 3s poll: room status, viewer count, the
+    panel (ordered tiles), likes, new comments since ?since_comment=,
+    heart-burst like events since ?since_like=, pending requests
+    for the host/admins, and my own standing (my_panel, my_join,
+    pending_invites_for_me). Legacy keys (guest, viewer_list,
+    my_role) keep their shapes — guest is now the first panelist."""
     user = current_user(request)
     if not user:
         return JSONResponse({"ok": False, "error": "login"},
@@ -4968,35 +5501,97 @@ async def live_state(request: Request, lid: int):
         since = int(request.query_params.get("since_comment") or 0)
     except (TypeError, ValueError):
         since = 0
+    try:
+        since_like = int(request.query_params.get("since_like") or 0)
+    except (TypeError, ValueError):
+        since_like = 0
+    is_host = user["id"] == live["host_id"]
+    admin_ids = {r["user_id"] for r in conn.execute(
+        "SELECT user_id FROM live_admins WHERE live_id=? AND "
+        "revoked_at IS NULL", (lid,)).fetchall()}
+    viewer_is_admin = user["id"] in admin_ids
+    is_mod = is_host or viewer_is_admin
+    members = _live_active_members(conn, lid)
+    member_map = {m["user_id"]: m for m in members}
+    am_member = user["id"] in member_map
     rows = conn.execute(
         "SELECT lc.*, u.name, u.avatar FROM live_comments lc "
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.live_id=? AND "
         "lc.id>? ORDER BY lc.id ASC LIMIT 100", (lid, since)).fetchall()
-    comments = [_live_comment_json(dict(r), user["id"], live["host_id"])
+    comments = [_live_comment_json(dict(r), user["id"], live["host_id"],
+                                   viewer_is_admin=viewer_is_admin)
                 for r in rows]
-    guest_req = _live_guest_req(conn, lid)
-    guest = _live_person(guest_req["user_id"]) if guest_req else None
+    panel_ids = _live_panel_ids(conn, live)
+    panel = []
+    for pid in panel_ids:
+        person = _live_person(pid)
+        mrow = member_map.get(pid)
+        panel.append({
+            "user_id": pid, "name": person["name"],
+            "avatar": person["avatar"],
+            "role": "host" if pid == live["host_id"] else "guest",
+            "admin": pid in admin_ids,
+            "muted": bool(mrow["muted"]) if mrow else False})
+    # Compat: the single 'guest' of the old protocol is the first
+    # non-host panelist.
+    guest = _live_person(panel_ids[1]) if len(panel_ids) > 1 else None
     viewer_rows = _live_viewer_rows(conn, lid)
-    is_host = user["id"] == live["host_id"]
-    is_guest = bool(guest_req and guest_req["user_id"] == user["id"])
+    # Likes: count + cursor are read BEFORE the lazy prune, so a
+    # poll never loses a burst it has not seen yet; events older
+    # than ~2 minutes are heart-burst history and get pruned here.
+    like_max = conn.execute(
+        "SELECT COALESCE(MAX(id),0) m FROM live_like_events "
+        "WHERE live_id=?", (lid,)).fetchone()["m"]
+    new_like_count = conn.execute(
+        "SELECT COUNT(*) c FROM live_like_events WHERE live_id=? "
+        "AND id>?", (lid, since_like)).fetchone()["c"]
+    like_cursor = max(like_max, since_like)
+    prune_cutoff = (datetime.now(timezone.utc)
+                    - timedelta(minutes=2)).isoformat()
+    conn.execute(
+        "DELETE FROM live_like_events WHERE live_id=? AND "
+        "created_at<?", (lid, prune_cutoff))
+    conn.commit()
+    inv_rows = conn.execute(
+        "SELECT * FROM live_join_requests WHERE live_id=? AND "
+        "user_id=? AND kind='invite' AND status='pending' "
+        "ORDER BY id ASC", (lid, user["id"])).fetchall()
+    invites_for_me = []
+    for r in inv_rows:
+        inviter = dict(r).get("inviter_id")
+        invites_for_me.append({
+            "id": r["id"],
+            "from_name": _live_person(inviter)["name"] if inviter
+                         else host["name"]})
     out = {
         "ok": True, "status": "live", "title": live["title"],
         "host": host, "guest": guest,
         "created_at": live["created_at"],
         "viewers": len(viewer_rows),
         "comments": comments,
-        "my_role": "host" if is_host else ("guest" if is_guest
+        "my_role": "host" if is_host else ("guest" if am_member
                                            else "watcher"),
         "my_join": None, "pending_requests": [],
+        "panel": panel,
+        "like_count": live.get("like_count") or 0,
+        "new_likes": min(new_like_count, 20),
+        "like_cursor": like_cursor,
+        "my_panel": {
+            "am_member": am_member,
+            "muted": bool(member_map[user["id"]]["muted"])
+                     if am_member else False,
+            "is_admin": viewer_is_admin,
+            "is_host": is_host},
+        "pending_invites_for_me": invites_for_me,
     }
-    if is_host or is_guest:
+    if is_host or am_member:
         # The people sending video need to know who is watching so
         # they can open a peer to each new watcher.
         out["viewer_list"] = [
             {"id": v["user_id"], "name": v["name"] or "Deleted user",
              "avatar": avatar_url(v["avatar"] or "")}
             for v in viewer_rows]
-    if is_host:
+    if is_mod:
         prows = conn.execute(
             "SELECT jr.*, u.name, u.avatar FROM live_join_requests jr "
             "LEFT JOIN users u ON u.id=jr.user_id WHERE jr.live_id=? "
@@ -5006,7 +5601,19 @@ async def live_state(request: Request, lid: int):
             {"id": r["id"], "user_id": r["user_id"],
              "name": r["name"] or "Deleted user",
              "avatar": avatar_url(r["avatar"] or ""),
-             "created_at": r["created_at"]} for r in prows]
+             "created_at": r["created_at"],
+             "kind": dict(r).get("kind") or "request"} for r in prows]
+        # The full room roster, moderators only: who is watching,
+        # and which of them are on the panel / admins / muted.
+        out["watchers"] = [
+            {"user_id": v["user_id"],
+             "name": v["name"] or "Deleted user",
+             "avatar": avatar_url(v["avatar"] or ""),
+             "is_admin": v["user_id"] in admin_ids,
+             "is_member": v["user_id"] in member_map,
+             "muted": bool(member_map[v["user_id"]]["muted"])
+                      if v["user_id"] in member_map else False}
+            for v in viewer_rows]
     mine = conn.execute(
         "SELECT * FROM live_join_requests WHERE live_id=? AND "
         "user_id=? ORDER BY id DESC LIMIT 1",
@@ -5047,16 +5654,18 @@ async def live_comment(request: Request, lid: int):
         "SELECT lc.*, u.name, u.avatar FROM live_comments lc "
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.id=?",
         (cid,)).fetchone()
+    viewer_admin = _live_is_admin(conn, lid, user["id"])
     conn.close()
     flag_item("live_comment", cid, user["id"], user["name"], body)
     return JSONResponse({"ok": True, "comment": _live_comment_json(
-        dict(row), user["id"], live["host_id"])})
+        dict(row), user["id"], live["host_id"],
+        viewer_is_admin=viewer_admin)})
 
 
 @app.post("/live/{lid}/comment/{cid}/delete")
 async def live_comment_delete(request: Request, lid: int, cid: int):
-    """The comment's author can delete it; so can the live's host —
-    hosts moderate their own live chat."""
+    """The comment's author can delete it; so can the live's host
+    and any admin of this live — they moderate the room's chat."""
     user, live, err = _live_access(request, lid)
     if err:
         return err
@@ -5068,11 +5677,13 @@ async def live_comment_delete(request: Request, lid: int, cid: int):
         conn.close()
         return JSONResponse({"ok": False, "error": "not found"},
                             status_code=404)
-    if row["user_id"] != user["id"] and live["host_id"] != user["id"]:
+    if row["user_id"] != user["id"] and live["host_id"] != user["id"] \
+            and not _live_is_admin(conn, lid, user["id"]):
         conn.close()
         return JSONResponse(
             {"ok": False,
-             "error": "Only the author or the host can delete this."},
+             "error": "Only the author, the host, or an admin can "
+                      "delete this."},
             status_code=403)
     conn.execute("DELETE FROM live_comments WHERE id=?", (cid,))
     conn.commit()
@@ -5104,11 +5715,14 @@ async def live_signal_send(request: Request, lid: int):
         return JSONResponse({"ok": False, "error": "Signal too big."},
                             status_code=400)
     # Signals only travel between people in this room: the host, the
-    # on-camera guest, current watchers, and people with a join
-    # request in flight — never to an outsider, and never across a
-    # block. (The sender already passed _live_can_watch.)
+    # on-camera panelists, current watchers, and people with a join
+    # request in flight — never to an outsider, never to a banned
+    # user, and never across a block. (The sender already passed
+    # _live_can_watch, which refuses banned senders with a 403.)
     conn = db()
     allowed = {live["host_id"]}
+    for m in _live_active_members(conn, lid):
+        allowed.add(m["user_id"])
     guest_req = _live_guest_req(conn, lid)
     if guest_req:
         allowed.add(guest_req["user_id"])
@@ -5120,7 +5734,8 @@ async def live_signal_send(request: Request, lid: int):
             "SELECT user_id FROM live_join_requests WHERE live_id=? "
             "AND status IN ('pending','approved')", (lid,)).fetchall():
         allowed.add(v["user_id"])
-    if to_id == user["id"] or to_id not in allowed:
+    if to_id == user["id"] or to_id not in allowed \
+            or _live_banned(conn, lid, to_id):
         conn.close()
         return JSONResponse(
             {"ok": False, "error": "That person isn't in this live."},
@@ -5192,12 +5807,14 @@ async def live_join_request(request: Request, lid: int):
             status_code=400)
     conn = db()
     guest_req = _live_guest_req(conn, lid)
-    if guest_req and guest_req["user_id"] == user["id"]:
+    if _live_member_row(conn, lid, user["id"]) or (
+            guest_req and guest_req["user_id"] == user["id"]):
         conn.close()
         return JSONResponse({"ok": True, "already_guest": True})
     pending = conn.execute(
         "SELECT * FROM live_join_requests WHERE live_id=? AND "
-        "user_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+        "user_id=? AND status='pending' AND kind='request' "
+        "ORDER BY id DESC LIMIT 1",
         (lid, user["id"])).fetchone()
     if pending:
         conn.close()
@@ -5205,7 +5822,7 @@ async def live_join_request(request: Request, lid: int):
             "id": pending["id"], "status": "pending"}})
     last = conn.execute(
         "SELECT * FROM live_join_requests WHERE live_id=? AND "
-        "user_id=? ORDER BY id DESC LIMIT 1",
+        "user_id=? AND kind='request' ORDER BY id DESC LIMIT 1",
         (lid, user["id"])).fetchone()
     if last and last["status"] == "declined" and last["decided_at"]:
         decided = _parse_ts(last["decided_at"])
@@ -5220,7 +5837,7 @@ async def live_join_request(request: Request, lid: int):
                               f"in {left}s."}, status_code=429)
     cur = conn.execute(
         "INSERT INTO live_join_requests(live_id, user_id, status, "
-        "created_at) VALUES(?,?,'pending',?)",
+        "created_at, kind) VALUES(?,?,'pending',?,'request')",
         (lid, user["id"], now_iso()))
     rid = cur.lastrowid
     conn.commit()
@@ -5231,24 +5848,27 @@ async def live_join_request(request: Request, lid: int):
 
 @app.post("/live/{lid}/join-decide")
 async def live_join_decide(request: Request, lid: int):
+    """Host OR an admin of this live settles a kind='request' join
+    request. Approving puts the requester on the panel (live_members
+    + panel_order) unless the panel is already at the 16 cap."""
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
-    if live["host_id"] != user["id"]:
+    conn = db()
+    if live["host_id"] != user["id"] \
+            and not _live_is_admin(conn, lid, user["id"]):
+        conn.close()
         return JSONResponse(
-            {"ok": False, "error": "Only the host can decide."},
+            {"ok": False,
+             "error": "Only the host or an admin can decide."},
             status_code=403)
     try:
         data = await request.json()
     except Exception:
         data = {}
-    try:
-        rid = int(data.get("request_id") or 0)
-    except (TypeError, ValueError):
-        rid = 0
-    approve = bool(data.get("approve")) if isinstance(data, dict) \
-        else False
-    conn = db()
+    data = _live_parse_body(data)
+    rid = _live_body_int(data, "request_id")
+    approve = bool(data.get("approve"))
     req = conn.execute(
         "SELECT * FROM live_join_requests WHERE id=? AND live_id=?",
         (rid, lid)).fetchone()
@@ -5257,12 +5877,17 @@ async def live_join_decide(request: Request, lid: int):
         return JSONResponse(
             {"ok": False, "error": "That request is already settled."},
             status_code=409)
-    if approve and _live_guest_req(conn, lid):
+    if (dict(req).get("kind") or "request") != "request":
         conn.close()
         return JSONResponse(
             {"ok": False,
-             "error": "Someone is already on camera — only one guest "
-                      "at a time."}, status_code=409)
+             "error": "That's an invite, not a join request."},
+            status_code=400)
+    if approve and not _live_add_member(conn, live, req["user_id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "Panel is full (16 max)."},
+            status_code=409)
     conn.execute(
         "UPDATE live_join_requests SET status=?, decided_at=? "
         "WHERE id=?",
@@ -5274,8 +5899,12 @@ async def live_join_decide(request: Request, lid: int):
 
 @app.post("/live/{lid}/guest-leave")
 async def live_guest_leave(request: Request, lid: int):
-    """The guest steps down (or the host removes them): the slot
-    frees, peers tear the guest down via 'bye' signals."""
+    """A panelist steps down (their tile frees, peers tear down via
+    'bye' signals). Generalized from the single-guest flow: ANY
+    active member may leave, and the host may still remove one
+    panelist by naming user_id (the legacy host-removes-guest
+    call). The host calling it bare is a no-op — the host ends
+    the live instead of leaving the panel."""
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
@@ -5283,36 +5912,461 @@ async def live_guest_leave(request: Request, lid: int):
         data = await request.json()
     except Exception:
         data = {}
+    data = _live_parse_body(data)
+    target = _live_body_int(data, "user_id") or None
     conn = db()
-    guest_req = _live_guest_req(conn, lid)
-    if not guest_req:
-        conn.close()
-        return JSONResponse({"ok": False,
-                             "error": "Nobody is on camera right now."},
-                            status_code=409)
-    guest_id = guest_req["user_id"]
     if user["id"] == live["host_id"]:
-        try:
-            want = int(data.get("user_id") or guest_id) \
-                if isinstance(data, dict) else guest_id
-        except (TypeError, ValueError):
-            want = guest_id
-        if want != guest_id:
+        if target is None or target == user["id"]:
             conn.close()
-            return JSONResponse(
-                {"ok": False,
-                 "error": "That person isn't the guest."},
-                status_code=400)
-    elif user["id"] != guest_id:
+            return JSONResponse({"ok": True})
+        if _live_member_row(conn, lid, target):
+            _drop_guest(conn, live, target)
+            conn.commit()
+            conn.close()
+            return JSONResponse({"ok": True})
+        guest_req = _live_guest_req(conn, lid)
+        if guest_req and guest_req["user_id"] == target:
+            _drop_guest(conn, live, target)
+            conn.commit()
+            conn.close()
+            return JSONResponse({"ok": True})
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't on the panel."},
+            status_code=400)
+    if target is not None and target != user["id"]:
         conn.close()
         return JSONResponse(
             {"ok": False,
-             "error": "Only the guest or the host can do that."},
+             "error": "You can only step down yourself."},
             status_code=403)
-    _drop_guest(conn, live, guest_id)
+    if _live_member_row(conn, lid, user["id"]):
+        _drop_guest(conn, live, user["id"])
+        conn.commit()
+        conn.close()
+        return JSONResponse({"ok": True})
+    guest_req = _live_guest_req(conn, lid)
+    if guest_req and guest_req["user_id"] == user["id"]:
+        _drop_guest(conn, live, user["id"])
+        conn.commit()
+        conn.close()
+        return JSONResponse({"ok": True})
+    panel_empty = not _live_active_members(conn, lid)
+    conn.close()
+    return JSONResponse(
+        {"ok": False,
+         "error": "Nobody is on camera right now." if panel_empty
+                  else "You're not on the panel."},
+        status_code=409)
+
+
+# ---------------- live panel: admins, invites, moderation, likes ----
+@app.post("/live/{lid}/appoint-admin")
+async def live_appoint_admin(request: Request, lid: int):
+    """Host only: appoint a person IN the room (active watcher or
+    panel member) as an admin of this live. Admins can decide join
+    requests, invite, kick non-admins, mute members, reorder
+    tiles, and delete comments in this room only."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False, "error": "Only the host can appoint admins."},
+            status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    target = _live_body_int(_live_parse_body(data), "user_id")
+    if not target or target == live["host_id"]:
+        return JSONResponse(
+            {"ok": False, "error": "The host runs this live already."},
+            status_code=400)
+    conn = db()
+    if _live_is_admin(conn, lid, target):
+        conn.close()
+        return JSONResponse({"ok": True, "already_admin": True})
+    watcher_ids = {v["user_id"] for v in _live_viewer_rows(conn, lid)}
+    if target not in watcher_ids \
+            and not _live_member_row(conn, lid, target):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't in this live."},
+            status_code=400)
+    stamp = now_iso()
+    existing = conn.execute(
+        "SELECT * FROM live_admins WHERE live_id=? AND user_id=?",
+        (lid, target)).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE live_admins SET revoked_at=NULL, appointed_by=?, "
+            "created_at=? WHERE live_id=? AND user_id=?",
+            (user["id"], stamp, lid, target))
+    else:
+        conn.execute(
+            "INSERT INTO live_admins(live_id, user_id, appointed_by, "
+            "created_at) VALUES(?,?,?,?)",
+            (lid, target, user["id"], stamp))
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/remove-admin")
+async def live_remove_admin(request: Request, lid: int):
+    """Host only: revoke a live admin appointment."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False, "error": "Only the host can remove admins."},
+            status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    target = _live_body_int(_live_parse_body(data), "user_id")
+    conn = db()
+    cur = conn.execute(
+        "UPDATE live_admins SET revoked_at=? WHERE live_id=? AND "
+        "user_id=? AND revoked_at IS NULL", (now_iso(), lid, target))
+    changed = cur.rowcount
+    conn.commit()
+    conn.close()
+    if not changed:
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't an admin."},
+            status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/invite")
+async def live_invite(request: Request, lid: int):
+    """Host or admin invites a current watcher onto the panel. The
+    invite is a live_join_requests row with kind='invite' whose
+    user_id is the INVITEE and inviter_id the caller (kind is how
+    invite-decide tells it apart from a watcher-initiated request).
+    One pending invite per target per live."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    target = _live_body_int(_live_parse_body(data), "user_id")
+    conn = db()
+    if live["host_id"] != user["id"] \
+            and not _live_is_admin(conn, lid, user["id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host or an admin can invite."},
+            status_code=403)
+    if not target or target == live["host_id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't invite the host."},
+            status_code=400)
+    if _live_banned(conn, lid, target):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "That person is banned from this live."},
+            status_code=400)
+    if _live_member_row(conn, lid, target):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "They're already on the panel."},
+            status_code=400)
+    watcher_ids = {v["user_id"] for v in _live_viewer_rows(conn, lid)}
+    if target not in watcher_ids:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "That person isn't watching right now."},
+            status_code=400)
+    existing = conn.execute(
+        "SELECT * FROM live_join_requests WHERE live_id=? AND "
+        "user_id=? AND kind='invite' AND status='pending' "
+        "ORDER BY id DESC LIMIT 1", (lid, target)).fetchone()
+    if existing:
+        eid = existing["id"]
+        conn.close()
+        return JSONResponse({"ok": True, "invite": {
+            "id": eid, "status": "pending"}})
+    cur = conn.execute(
+        "INSERT INTO live_join_requests(live_id, user_id, status, "
+        "created_at, kind, inviter_id) "
+        "VALUES(?,?,'pending',?,'invite',?)",
+        (lid, target, now_iso(), user["id"]))
+    rid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    notify(target, "live_invite",
+           f"🔴 {user['name']} invited you to join a live panel",
+           f"/live/{lid}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "invite": {"id": rid,
+                                                 "status": "pending"}})
+
+
+@app.post("/live/{lid}/invite-decide")
+async def live_invite_decide(request: Request, lid: int):
+    """The INVITEE settles their own kind='invite' row: accept puts
+    them on the panel (16 cap, same message as join-decide);
+    decline just settles the row."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    rid = _live_body_int(data, "request_id")
+    accept = bool(data.get("accept"))
+    conn = db()
+    req = conn.execute(
+        "SELECT * FROM live_join_requests WHERE id=? AND live_id=?",
+        (rid, lid)).fetchone()
+    if not req:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if req["user_id"] != user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That invite isn't for you."},
+            status_code=403)
+    if (dict(req).get("kind") or "request") != "invite":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That's not an invite."},
+            status_code=400)
+    if req["status"] != "pending":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That invite is already settled."},
+            status_code=409)
+    if accept and not _live_add_member(conn, live, user["id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "Panel is full (16 max)."},
+            status_code=409)
+    conn.execute(
+        "UPDATE live_join_requests SET status=?, decided_at=? "
+        "WHERE id=?",
+        ("approved" if accept else "declined", now_iso(), rid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/kick")
+async def live_kick(request: Request, lid: int):
+    """Remove someone from the panel ('panel') or from the room
+    entirely ('room' = panel effects + a live_bans row + their
+    viewer row closed). Hierarchy: the host may kick anyone but
+    themselves; an admin may kick panel guests (non-admin members)
+    and watchers only — never the host, never another admin."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    target = _live_body_int(data, "user_id")
+    scope = str(data.get("scope") or "panel")
+    if scope not in ("panel", "room"):
+        return JSONResponse({"ok": False, "error": "Bad scope."},
+                            status_code=400)
+    if not target:
+        return JSONResponse(
+            {"ok": False, "error": "Missing user_id."},
+            status_code=400)
+    conn = db()
+    is_host = user["id"] == live["host_id"]
+    caller_admin = _live_is_admin(conn, lid, user["id"])
+    if not is_host and not caller_admin:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host or an admin can kick."},
+            status_code=403)
+    if target == user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't kick yourself."},
+            status_code=400)
+    if not is_host:
+        if target == live["host_id"]:
+            conn.close()
+            return JSONResponse(
+                {"ok": False, "error": "Admins can't kick the host."},
+                status_code=403)
+        if _live_is_admin(conn, lid, target):
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "Admins can't kick other admins."},
+                status_code=403)
+    member = _live_member_row(conn, lid, target)
+    watcher_ids = {v["user_id"] for v in _live_viewer_rows(conn, lid)}
+    target_admin = _live_is_admin(conn, lid, target)
+    if not member and target not in watcher_ids and not target_admin:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't in this live."},
+            status_code=400)
+    # Teardown first, while the roster still names the target, so
+    # every peer drops the target's connection at once.
+    _live_signal_teardown(conn, live, target)
+    if member:
+        _live_remove_member(conn, live, target)
+    if target_admin:
+        # Losing your seat loses the badge too: a kicked admin's
+        # appointment is revoked in the same pass.
+        conn.execute(
+            "UPDATE live_admins SET revoked_at=? WHERE live_id=? "
+            "AND user_id=? AND revoked_at IS NULL",
+            (now_iso(), lid, target))
+    if scope == "room":
+        conn.execute(
+            "INSERT OR IGNORE INTO live_bans(live_id, user_id, "
+            "by_id, created_at) VALUES(?,?,?,?)",
+            (lid, target, user["id"], now_iso()))
+        conn.execute(
+            "UPDATE live_viewers SET left_at=? WHERE live_id=? AND "
+            "user_id=?", (now_iso(), lid, target))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/mute")
+async def live_mute(request: Request, lid: int):
+    """Moderation mute for a panel member's mic (a roster flag —
+    the member's client honors it, and the tile shows it). Host:
+    any member. Admin: only members who are not admins and not
+    the host. Nobody can mute themselves, not even to unmute —
+    a muted member asks a moderator."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    target = _live_body_int(data, "user_id")
+    mute_val = 1 if data.get("mute") else 0
+    conn = db()
+    is_host = user["id"] == live["host_id"]
+    caller_admin = _live_is_admin(conn, lid, user["id"])
+    if not is_host and not caller_admin:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host or an admin can mute."},
+            status_code=403)
+    if target == user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't mute yourself."},
+            status_code=403)
+    if target == live["host_id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "The host can't be muted."},
+            status_code=403)
+    if caller_admin and not is_host \
+            and _live_is_admin(conn, lid, target):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Admins can't mute other admins."},
+            status_code=403)
+    if not _live_member_row(conn, lid, target):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't on the panel."},
+            status_code=400)
+    conn.execute(
+        "UPDATE live_members SET muted=? WHERE live_id=? AND "
+        "user_id=? AND left_at IS NULL", (mute_val, lid, target))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "muted": mute_val})
+
+
+@app.post("/live/{lid}/move")
+async def live_move(request: Request, lid: int):
+    """Host or admin reorders a tile: swap user_id with its neighbor
+    in panel_order (dir -1 = earlier, +1 = later). Out-of-range is
+    a no-op that still returns the current order."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    target = _live_body_int(data, "user_id")
+    step_raw = _live_body_int(data, "dir")
+    step = 1 if step_raw > 0 else (-1 if step_raw < 0 else 0)
+    conn = db()
+    if live["host_id"] != user["id"] \
+            and not _live_is_admin(conn, lid, user["id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host or an admin can reorder tiles."},
+            status_code=403)
+    ids = _live_panel_ids(conn, live)
+    if target not in ids:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't on the panel."},
+            status_code=400)
+    i = ids.index(target)
+    j = i + step
+    if step != 0 and 0 <= j < len(ids):
+        ids[i], ids[j] = ids[j], ids[i]
+        _live_set_panel_order(conn, lid, ids)
+        conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "panel_order": ids})
+
+
+@app.post("/live/{lid}/like")
+async def live_like(request: Request, lid: int):
+    """A heart: one tap = one like_count tick plus one like EVENT
+    row — the event stream is what other clients turn into heart
+    bursts off the state poll's new_likes/since_like cursor (the
+    count alone would only ever show a number going up)."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    conn = db()
+    conn.execute(
+        "INSERT INTO live_like_events(live_id, user_id, created_at) "
+        "VALUES(?,?,?)", (lid, user["id"], now_iso()))
+    conn.execute(
+        "UPDATE live_sessions SET like_count=COALESCE(like_count,0)+1 "
+        "WHERE id=?", (lid,))
+    row = conn.execute(
+        "SELECT like_count FROM live_sessions WHERE id=?",
+        (lid,)).fetchone()
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True,
+                         "like_count": row["like_count"] if row else 0})
+
 
 
 # ---------------- notifications ----------------
