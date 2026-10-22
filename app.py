@@ -314,18 +314,23 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL, file_path TEXT NOT NULL DEFAULT '',
         title TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
-    # Seed the catalog once, and only with files that actually shipped in
-    # static/music/ (see MUSIC_SEED below init_db). Re-running never
-    # duplicates: seed only when the table is empty.
-    if c.execute("SELECT COUNT(*) AS n FROM music_tracks").fetchone()["n"] == 0:
-        for _t in MUSIC_SEED:
-            if os.path.isfile(os.path.join(BASE, "static", _t["file_path"])):
-                c.execute(
-                    "INSERT INTO music_tracks(title, artist, genre, file_path, "
-                    "license_note, attribution, use_count, created_at) "
-                    "VALUES(?,?,?,?,?,?,0,?)",
-                    (_t["title"], _t["artist"], _t["genre"], _t["file_path"],
-                     _t["license"], _t["attribution"], now_iso()))
+    # Seed the catalog per track: insert any MUSIC_SEED track whose file
+    # actually shipped in static/music/ and that has no row yet (matched
+    # by file_path). Safe to re-run on every boot — it tops up tracks
+    # whose files landed after the first boot, never duplicates an
+    # existing file_path, and never touches existing rows.
+    for _t in MUSIC_SEED:
+        if not os.path.isfile(os.path.join(BASE, "static", _t["file_path"])):
+            continue
+        if c.execute("SELECT 1 FROM music_tracks WHERE file_path=?",
+                     (_t["file_path"],)).fetchone():
+            continue
+        c.execute(
+            "INSERT INTO music_tracks(title, artist, genre, file_path, "
+            "license_note, attribution, use_count, created_at) "
+            "VALUES(?,?,?,?,?,?,0,?)",
+            (_t["title"], _t["artist"], _t["genre"], _t["file_path"],
+             _t["license"], _t["attribution"], now_iso()))
     # --- reactions: likes.kind (safe on existing DBs) ---
     _like_cols = [r["name"] for r in c.execute("PRAGMA table_info(likes)").fetchall()]
     if "kind" not in _like_cols:
