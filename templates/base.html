@@ -398,6 +398,27 @@ body .spot-scope.spot-has-text .card .with-line{color:var(--spot-text);opacity:.
 .cmenu-item:hover{background:var(--red-soft)}
 .cmenu-item.danger{color:var(--red-dark)}
 
+/* ===== message delete-for-me: shared sheet + ⋯ buttons =====
+   Same body-level fixed-sheet pattern as the comment menu (menus
+   inside cards get trapped by backdrop-filter stacking). One sheet
+   serves every message/conversation delete: JS fills it from the
+   tapped button's data-* attributes (form action, labels, and the
+   for-me confirm wording). */
+#dmenu-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
+#dmenu-backdrop[hidden]{display:none}
+#dmenu-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(92vw,340px);background:#fff;border:1px solid var(--border);border-radius:12px;
+  padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left}
+#dmenu-sheet[hidden]{display:none}
+#dmenu-confirm[hidden]{display:none}
+.mmenu-btn{background:none;border:none;color:var(--muted);font-size:19px;font-weight:800;
+  line-height:1;cursor:pointer;border-radius:50%;width:36px;height:36px;flex-shrink:0;
+  display:inline-flex;align-items:center;justify-content:center;padding:0}
+.mmenu-btn:hover{color:var(--red);background:#e4e6eb}
+.msg-time .mmenu-btn{width:26px;height:26px;font-size:15px;margin-left:2px}
+.conv-link{display:flex;align-items:center;gap:12px;flex:1;min-width:0;
+  color:inherit;text-decoration:none}
+
 /* ===== generic lists / forms ===== */
 .row-item{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
 .row-item:last-child{border-bottom:none}
@@ -699,6 +720,23 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <button type="button" class="cmenu-item" id="cmenu-confirm-cancel">Cancel</button>
   </div>
 </div>
+
+<!-- ===== message delete-for-me ⋯ sheet: one shared fixed sheet ===== -->
+<div id="dmenu-backdrop" hidden></div>
+<div id="dmenu-sheet" hidden>
+  <div class="aud-title" id="dmenu-title">Options</div>
+  <div id="dmenu-main">
+    <button type="button" class="cmenu-item danger" id="dmenu-act-btn">🗑 Delete</button>
+    <button type="button" class="cmenu-item" id="dmenu-cancel">Cancel</button>
+  </div>
+  <div id="dmenu-confirm" hidden>
+    <p id="dmenu-confirm-text" style="font-size:15px;margin:4px 0 10px"></p>
+    <form id="dmenu-form" method="post" action="">
+      <button type="submit" class="cmenu-item danger">🗑 Delete</button>
+    </form>
+    <button type="button" class="cmenu-item" id="dmenu-confirm-cancel">Cancel</button>
+  </div>
+</div>
 {% endif %}
 
 <script>
@@ -848,6 +886,47 @@ document.addEventListener('click', function(ev){
       var p2 = cc.closest('.aud-popup');
       if (p2) closeAudPopup(p2);
     }
+  });
+})();
+</script>
+<script>
+/* ===== Message delete-for-me: ⋯ buttons + shared sheet =====
+   Every message bubble, inbox conversation row and the thread header
+   carry a .mmenu-btn whose data-* attributes describe ONE delete:
+   data-daction (POST URL), data-dtitle / data-dlabel (sheet text) and
+   data-dconfirm (the for-me wording shown on the confirm step). The
+   sheet itself is the shared #dmenu-sheet in base.html. Deleting is
+   always for the tapper only — the server hides, never removes. */
+(function(){
+  var sheet = document.getElementById('dmenu-sheet');
+  if (!sheet) return; /* guests get no message UI */
+  var bd = document.getElementById('dmenu-backdrop'),
+      main = document.getElementById('dmenu-main'),
+      confirmBox = document.getElementById('dmenu-confirm'),
+      title = document.getElementById('dmenu-title'),
+      actBtn = document.getElementById('dmenu-act-btn'),
+      form = document.getElementById('dmenu-form'),
+      ctext = document.getElementById('dmenu-confirm-text');
+  function closeSheet(){ sheet.hidden = true; bd.hidden = true; }
+  function openSheet(){
+    main.hidden = false; confirmBox.hidden = true;
+    sheet.hidden = false; bd.hidden = false;
+  }
+  bd.addEventListener('click', closeSheet);
+  document.getElementById('dmenu-cancel').addEventListener('click', closeSheet);
+  document.getElementById('dmenu-confirm-cancel').addEventListener('click', closeSheet);
+  actBtn.addEventListener('click', function(){
+    main.hidden = true; confirmBox.hidden = false;
+  });
+  document.addEventListener('click', function(ev){
+    var t = ev.target.closest ? ev.target.closest('.mmenu-btn') : null;
+    if (!t) return;
+    title.textContent = t.getAttribute('data-dtitle') || 'Options';
+    actBtn.textContent = t.getAttribute('data-dlabel') || '🗑 Delete';
+    ctext.textContent = t.getAttribute('data-dconfirm') ||
+      'Delete? This only changes what YOU see.';
+    form.action = t.getAttribute('data-daction');
+    openSheet();
   });
 })();
 </script>

@@ -31,6 +31,12 @@
     </span>
     {% endif %}
     <a class="btn-ghost btn-sm" href="/messages">← All messages</a>
+    {% if msgs %}
+    <button type="button" class="mmenu-btn" title="Conversation options" aria-label="Conversation options"
+      data-dtitle="Conversation options" data-dlabel="🗑 Delete this conversation"
+      data-dconfirm="Delete this conversation? It only leaves YOUR inbox — {{ friend.name|e }} keeps their copy. If they message you again, it comes back showing just the new messages."
+      data-daction="/messages/{{ friend.id }}/delete-thread">⋯</button>
+    {% endif %}
   </div>
 
   {% if not is_friend %}
@@ -53,7 +59,10 @@
     <div class="msg-row" style="{% if m.mine %}justify-content:flex-end{% else %}justify-content:flex-start{% endif %}">
       <div style="{% if m.mine %}text-align:right{% endif %}">
         <div class="msg-bub {% if m.mine %}msg-mine{% else %}msg-theirs{% endif %}">{{ m.body|e }}</div>
-        <div class="msg-time">{{ m.created_at|e }}</div>
+        <div class="msg-time">{{ m.created_at|e }}<button type="button" class="mmenu-btn" title="Message options" aria-label="Message options"
+          data-dtitle="Message options" data-dlabel="🗑 Delete this message"
+          data-dconfirm="Delete this message? It disappears only for you — the other person keeps their copy."
+          data-daction="/messages/{{ m.id }}/delete">⋯</button></div>
       </div>
     </div>
     {% else %}

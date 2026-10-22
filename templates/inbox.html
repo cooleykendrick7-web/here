@@ -11,30 +11,42 @@
   {% if box == 'sent' %}
   <div class="section-title">📤 Sent Messages</div>
   {% for m in sent %}
-  <a class="row-item" href="/messages/{{ m.friend_id }}" style="border-radius:8px;padding-left:8px;padding-right:8px">
-    {% if m.friend_avatar %}<img class="avatar av-40" src="{{ m.friend_avatar|e }}" alt="">
-    {% else %}<span class="av-ph av-40">{{ m.friend_name[:1]|upper|e }}</span>{% endif %}
-    <div class="grow">
-      <div class="nm">To: {{ m.friend_name|e }} {% set pres = m.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
-      <div class="sub">{{ m.body|e }}</div>
-    </div>
-    <div class="sub">{{ m.created_at|e }}</div>
-  </a>
+  <div class="row-item" style="border-radius:8px;padding-left:8px;padding-right:8px">
+    <a class="conv-link" href="/messages/{{ m.friend_id }}">
+      {% if m.friend_avatar %}<img class="avatar av-40" src="{{ m.friend_avatar|e }}" alt="">
+      {% else %}<span class="av-ph av-40">{{ m.friend_name[:1]|upper|e }}</span>{% endif %}
+      <div class="grow">
+        <div class="nm">To: {{ m.friend_name|e }} {% set pres = m.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
+        <div class="sub">{{ m.body|e }}</div>
+      </div>
+      <div class="sub">{{ m.created_at|e }}</div>
+    </a>
+    <button type="button" class="mmenu-btn" title="Conversation options" aria-label="Conversation options"
+      data-dtitle="Conversation options" data-dlabel="🗑 Delete this conversation"
+      data-dconfirm="Delete this conversation? It only leaves YOUR inbox — {{ m.friend_name|e }} keeps their copy. If they message you again, it comes back showing just the new messages."
+      data-daction="/messages/{{ m.friend_id }}/delete-thread">⋯</button>
+  </div>
   {% else %}
   <p style="color:var(--muted);font-size:14px">No sent messages yet.</p>
   {% endfor %}
   {% else %}
   <div class="section-title">💬 Messages</div>
   {% for t in threads %}
-  <a class="row-item{% if t.unread %} unread-hl{% endif %}" href="/messages/{{ t.friend_id }}" style="border-radius:8px;padding-left:8px;padding-right:8px">
-    {% if t.friend_avatar %}<img class="avatar av-40" src="{{ t.friend_avatar|e }}" alt="">
-    {% else %}<span class="av-ph av-40">{{ t.friend_name[:1]|upper|e }}</span>{% endif %}
-    <div class="grow">
-      <div class="nm">{{ t.friend_name|e }} {% set pres = t.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}{% if t.unread %} <span class="badge" style="position:static;border:none">{{ t.unread }}</span>{% endif %}</div>
-      <div class="sub">{{ t.last_body|e }}</div>
-    </div>
-    <div class="sub">{{ t.last_at|e }}</div>
-  </a>
+  <div class="row-item{% if t.unread %} unread-hl{% endif %}" style="border-radius:8px;padding-left:8px;padding-right:8px">
+    <a class="conv-link" href="/messages/{{ t.friend_id }}">
+      {% if t.friend_avatar %}<img class="avatar av-40" src="{{ t.friend_avatar|e }}" alt="">
+      {% else %}<span class="av-ph av-40">{{ t.friend_name[:1]|upper|e }}</span>{% endif %}
+      <div class="grow">
+        <div class="nm">{{ t.friend_name|e }} {% set pres = t.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}{% if t.unread %} <span class="badge" style="position:static;border:none">{{ t.unread }}</span>{% endif %}</div>
+        <div class="sub">{{ t.last_body|e }}</div>
+      </div>
+      <div class="sub">{{ t.last_at|e }}</div>
+    </a>
+    <button type="button" class="mmenu-btn" title="Conversation options" aria-label="Conversation options"
+      data-dtitle="Conversation options" data-dlabel="🗑 Delete this conversation"
+      data-dconfirm="Delete this conversation? It only leaves YOUR inbox — {{ t.friend_name|e }} keeps their copy. If they message you again, it comes back showing just the new messages."
+      data-daction="/messages/{{ t.friend_id }}/delete-thread">⋯</button>
+  </div>
   {% else %}
   <p style="color:var(--muted);font-size:14px">No conversations yet. Add a friend and say hi!</p>
   {% endfor %}
