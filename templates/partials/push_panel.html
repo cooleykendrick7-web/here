@@ -1,0 +1,174 @@
+{# Push notifications panel — included by Settings (profile_edit.html) and
+   the Get-the-app page (app.html). Needs the signed-in session only; all
+   state is worked out client-side from the browser + /push/* endpoints.
+   Honest limits, said right in the copy: iPhone push works only inside
+   the home-screen-installed app (Apple's rule, iOS 16.4+), and the
+   native wrapper apps can't receive Web Push. #}
+<div class="card">
+  <div class="section-title">🔔 Notifications</div>
+  <p style="margin-top:8px;color:var(--muted)">Get buzzed on your phone for new messages, incoming calls and friend requests — <strong>even when HERE is closed</strong>. Nothing runs in the background: your phone's own notification service wakes HERE for a second to show the alert, like any regular app.</p>
+  <p style="margin-top:8px;color:var(--muted)">🍎 <strong>iPhone:</strong> notifications only work when you open HERE from its <strong>home-screen icon</strong> (that's Apple's rule). In a normal Safari tab they don't exist. Our Android/iPhone wrapper apps can't receive them either — the browser or home-screen app is the way.</p>
+  <p id="push-status" style="margin-top:10px">Checking this device…</p>
+  <div style="margin-top:10px">
+    <button type="button" class="btn" id="push-on" style="display:none">Turn on notifications</button>
+    <button type="button" class="btn-ghost" id="push-off" style="display:none">Turn off</button>
+    <button type="button" class="btn-ghost" id="push-test" style="display:none">Send myself a test notification</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var statusEl = document.getElementById("push-status");
+  if (!statusEl) return;
+  var btnOn = document.getElementById("push-on");
+  var btnOff = document.getElementById("push-off");
+  var btnTest = document.getElementById("push-test");
+
+  function show(el, on) { if (el) el.style.display = on ? "" : "none"; }
+  function say(t) { statusEl.textContent = t; }
+
+  function urlB64ToUint8Array(s) {
+    var pad = "=".repeat((4 - (s.length % 4)) % 4);
+    var b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
+    var raw = window.atob(b64);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  var ua = navigator.userAgent || "";
+  var isIOS = /iPhone|iPad|iPod/.test(ua) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  var standalone = window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true;
+  var supported = ("serviceWorker" in navigator) &&
+    ("PushManager" in window) && ("Notification" in window);
+
+  function serverDevices() {
+    return fetch("/push/status", { headers: { "Accept": "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { return (d && d.devices) || 0; })
+      .catch(function () { return 0; });
+  }
+
+  function refresh() {
+    if (!supported) {
+      show(btnOn, false); show(btnOff, false); show(btnTest, false);
+      if (isIOS && !standalone) {
+        say("On iPhone, HERE can only send notifications from the home-screen app. Add HERE to your Home Screen (Share button → “Add to Home Screen”), open it from the new icon, come back to this page and turn notifications on.");
+      } else {
+        say("This browser or app can't receive HERE notifications. Open HERE in Chrome on Android, or from the home-screen icon on iPhone, then turn them on here.");
+      }
+      return;
+    }
+    if (Notification.permission === "denied") {
+      show(btnOn, false); show(btnOff, false); show(btnTest, false);
+      say("Notifications are blocked for HERE in this browser. To allow them — iPhone: Settings app → Notifications → HERE → turn on Allow Notifications. Android/Chrome: tap the lock or tune icon next to the address → Site settings → Notifications → Allow. Then reopen this page.");
+      return;
+    }
+    navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.getSubscription();
+    }).then(function (sub) {
+      return serverDevices().then(function (n) {
+        if (sub) {
+          say("Notifications are ON for this device." + (n > 1 ? " They're also on for " + (n - 1) + " other device(s) of yours." : ""));
+          show(btnOn, false); show(btnOff, true); show(btnTest, true);
+        } else {
+          say(n > 0
+            ? "Notifications are on for " + n + " of your other device(s) — but not this one yet."
+            : "Notifications are off. Turn them on and HERE will buzz this phone for messages, calls and friend requests.");
+          show(btnOn, true); show(btnOff, false); show(btnTest, n > 0);
+        }
+      });
+    }).catch(function () {
+      say("Couldn't check notifications on this device — reload the page and try again.");
+      show(btnOn, true); show(btnOff, false); show(btnTest, false);
+    });
+  }
+
+  btnOn.addEventListener("click", function () {
+    btnOn.disabled = true;
+    Notification.requestPermission().then(function (perm) {
+      if (perm !== "granted") {
+        btnOn.disabled = false;
+        refresh();
+        if (perm === "default") say("No answer given — tap “Turn on notifications” and choose Allow.");
+        return null;
+      }
+      return navigator.serviceWorker.ready.then(function (reg) {
+        return fetch("/push/vapid-public-key")
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d || !d.public_key) throw new Error("HERE's notification key didn't load.");
+            return reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlB64ToUint8Array(d.public_key)
+            });
+          })
+          .then(function (sub) {
+            var j = sub.toJSON();
+            return fetch("/push/subscribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                endpoint: j.endpoint,
+                keys: { p256dh: j.keys.p256dh, auth: j.keys.auth }
+              })
+            });
+          });
+      }).then(function (resp) {
+        btnOn.disabled = false;
+        if (resp && !resp.ok) { say("HERE's server didn't accept the subscription — try again in a moment."); return; }
+        say("Notifications are ON — send yourself a test to see one land.");
+        refresh();
+      });
+    }).catch(function (e) {
+      btnOn.disabled = false;
+      say("Something went wrong turning notifications on" + (e && e.message ? ": " + e.message : "."));
+      refresh();
+    });
+  });
+
+  btnOff.addEventListener("click", function () {
+    btnOff.disabled = true;
+    navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.getSubscription();
+    }).then(function (sub) {
+      if (!sub) return null;
+      var endpoint = sub.endpoint;
+      return sub.unsubscribe().then(function () {
+        return fetch("/push/unsubscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint: endpoint })
+        });
+      });
+    }).then(function () {
+      btnOff.disabled = false;
+      say("Notifications are off for this device.");
+      refresh();
+    }).catch(function () {
+      btnOff.disabled = false;
+      say("Couldn't turn notifications off cleanly — try again.");
+      refresh();
+    });
+  });
+
+  btnTest.addEventListener("click", function () {
+    btnTest.disabled = true;
+    fetch("/push/test", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        btnTest.disabled = false;
+        if (d && d.devices > 0) say("Test sent — it should buzz this phone in a moment. (Lock the phone or close HERE and it still arrives.)");
+        else say("No subscribed devices yet — turn notifications on first.");
+      })
+      .catch(function () {
+        btnTest.disabled = false;
+        say("The test couldn't be sent — try again in a moment.");
+      });
+  });
+
+  refresh();
+})();
+</script>
