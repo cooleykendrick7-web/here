@@ -256,7 +256,13 @@ def init_db():
         caller_id INTEGER NOT NULL, callee_id INTEGER NOT NULL,
         kind TEXT NOT NULL DEFAULT 'voice',
         status TEXT NOT NULL DEFAULT 'ringing',
-        created_at TEXT NOT NULL, answered_at TEXT, ended_at TEXT)""")
+        created_at TEXT NOT NULL, answered_at TEXT, ended_at TEXT,
+        decline_note TEXT DEFAULT '')""")
+    # decline-with-a-message: the callee's reply text rides on the call
+    # row so the caller's overlay can show it the moment the call drops.
+    _call_cols = [r["name"] for r in c.execute("PRAGMA table_info(calls)").fetchall()]
+    if "decline_note" not in _call_cols:
+        c.execute("ALTER TABLE calls ADD COLUMN decline_note TEXT DEFAULT ''")
     c.execute("""CREATE TABLE IF NOT EXISTS call_signals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         call_id INTEGER NOT NULL, sender_id INTEGER NOT NULL,
@@ -2344,6 +2350,7 @@ def _call_json(call, viewer_id):
         "i_am_caller": call["caller_id"] == viewer_id,
         "created_at": call["created_at"],
         "answered_at": call["answered_at"], "ended_at": call["ended_at"],
+        "decline_note": call.get("decline_note") or "",
         "other": {"id": other_id,
                   "name": other.get("name", "Deleted user"),
                   "avatar": avatar_url(other.get("avatar", ""))},
@@ -2478,6 +2485,12 @@ async def call_answer(request: Request, cid: int):
 
 @app.post("/calls/{cid}/decline")
 async def call_decline(request: Request, cid: int):
+    """Decline a ringing call — callee only. An optional JSON body
+    {message: "..."} is the iPhone-style 'reply with text': the text
+    lands in the thread as a normal message from the callee AND on the
+    call row (decline_note), so the caller's overlay can show
+    'Declined · "I'll call you later"' as the call drops. No/empty
+    message = the plain decline it has always been."""
     user, call, err = _participant_call(request, cid)
     if err:
         return err
@@ -2485,10 +2498,32 @@ async def call_decline(request: Request, cid: int):
         return JSONResponse(
             {"ok": False, "error": "This call can't be declined."},
             status_code=409)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    note = (data.get("message") or "").strip()[:300] \
+        if isinstance(data, dict) else ""
     conn = db()
+    mid = None
+    if note:
+        conn.execute("UPDATE calls SET decline_note=? WHERE id=?",
+                     (note, cid))
+        cur = conn.execute(
+            "INSERT INTO messages(sender_id, receiver_id, body, "
+            "created_at) VALUES(?,?,?,?)",
+            (user["id"], call["caller_id"], note, now_iso()))
+        mid = cur.lastrowid
     _finish_call(conn, call, "declined", actor_id=user["id"])
     conn.commit()
     conn.close()
+    if mid is not None:
+        # Same post-send handling a normal message gets (moderation
+        # scan + the caller's bell), now that our writes are committed.
+        flag_item("message", mid, user["id"], user["name"], note)
+        notify(call["caller_id"], "message",
+               f"New message from {user['name']}.",
+               f"/messages/{user['id']}")
     return JSONResponse({"ok": True})
 
 
@@ -2567,7 +2602,7 @@ async def call_signals_poll(request: Request, cid: int):
         "SELECT * FROM call_signals WHERE call_id=? AND id>? AND "
         "sender_id!=? ORDER BY id ASC LIMIT 200",
         (cid, since, user["id"])).fetchall()
-    fresh = conn.execute("SELECT status FROM calls WHERE id=?",
+    fresh = conn.execute("SELECT status, decline_note FROM calls WHERE id=?",
                          (cid,)).fetchone()
     conn.close()
     sigs = []
@@ -2582,6 +2617,8 @@ async def call_signals_poll(request: Request, cid: int):
     return JSONResponse({
         "ok": True,
         "status": fresh["status"] if fresh else call["status"],
+        "decline_note": (fresh["decline_note"] or "") if fresh
+                        else (call.get("decline_note") or ""),
         "signals": sigs})
 
 
