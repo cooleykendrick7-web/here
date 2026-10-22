@@ -262,6 +262,18 @@ def init_db():
         c.execute("ALTER TABLE users ADD COLUMN inbox_status INTEGER DEFAULT 1")
     c.execute("UPDATE users SET status_mode='auto' WHERE status_mode IS NULL")
     c.execute("UPDATE users SET inbox_status=1 WHERE inbox_status IS NULL")
+    # --- "Your Spot": per-profile name + theme (safe on existing DBs) ---
+    # spot_name is the owner's own title for their profile ("Robert's
+    # House", "The Trap"); the three style columns drive the CSS vars
+    # emitted on /user/{id} pages only. NULL = not set = default look.
+    if "spot_name" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN spot_name TEXT")
+    if "spot_text_color" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN spot_text_color TEXT")
+    if "spot_card_color" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN spot_card_color TEXT")
+    if "spot_card_opacity" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN spot_card_opacity INTEGER")
     # --- hide-from-specific-people + post tags (safe on existing DBs) ---
     c.execute("""CREATE TABLE IF NOT EXISTS post_hidden_from (
         post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
@@ -2458,6 +2470,54 @@ async def audience_save(request: Request, pid: int):
     return redir(dest, "Audience updated.")
 
 
+# ---------------- "Your Spot" (per-profile name + theme) ----------------
+SPOT_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+SPOT_NAME_MAX = 60
+SPOT_OPACITY_MIN, SPOT_OPACITY_MAX = 30, 100
+
+
+def _spot_hex_ok(v):
+    return bool(v) and bool(SPOT_HEX_RE.match(str(v).strip()))
+
+
+def _hex_to_rgb(h):
+    h = str(h).strip().lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def spot_style_for(u):
+    """CSS vars + scope classes for the profile owner's "Your Spot" look.
+
+    Returns (style_attr, classes). Only SET values are emitted; with
+    nothing set both are empty and the profile renders exactly as the
+    default theme. The vars are consumed by the .spot-scope rules in
+    base.html, which exist only on /user/{id} pages — a user's spot
+    never leaks into the home feed or anyone else's pages.
+    """
+    parts, classes = [], []
+    text = (u.get("spot_text_color") or "").strip()
+    if _spot_hex_ok(text):
+        parts.append(f"--spot-text:{text.lower()}")
+        classes.append("spot-has-text")
+    card = (u.get("spot_card_color") or "").strip()
+    card_ok = _spot_hex_ok(card)
+    if card_ok:
+        r, g, b = _hex_to_rgb(card)
+        parts.append(f"--spot-card-rgb:{r},{g},{b}")
+    op = u.get("spot_card_opacity")
+    if op is not None:
+        try:
+            op = max(SPOT_OPACITY_MIN, min(SPOT_OPACITY_MAX, int(op)))
+        except (TypeError, ValueError):
+            op = None
+    if op is not None:
+        alpha = f"{op / 100:.2f}".rstrip("0").rstrip(".")
+        parts.append(f"--spot-card-alpha:{alpha}")
+    if card_ok or op is not None:
+        classes.append("spot-has-card")
+    return ";".join(parts), " ".join(classes)
+
+
 # ---------------- profile / settings ----------------
 @app.get("/user/{uid}", response_class=HTMLResponse)
 async def profile(request: Request, uid: int):
@@ -2490,6 +2550,7 @@ async def profile(request: Request, uid: int):
     hidden = {r["post_id"] for r in conn.execute(
         "SELECT post_id FROM hidden_posts WHERE user_id=?", (user["id"],)).fetchall()}
     conn.close()
+    spot_style, spot_classes = spot_style_for(prof)
     profile_ctx = {
         "id": prof["id"], "name": prof["name"], "bio": prof.get("bio", ""),
         "avatar": avatar_url(prof.get("avatar", "")),
@@ -2502,6 +2563,9 @@ async def profile(request: Request, uid: int):
         "verification_status": prof.get("verification_status") or "none",
         "background": avatar_url(prof.get("background", "")),
         "presence": presence_of(prof),
+        "spot_name": (prof.get("spot_name") or "").strip(),
+        "spot_style": spot_style,
+        "spot_classes": spot_classes,
     }
     posts = []
     for r in prows:
@@ -2539,7 +2603,11 @@ async def profile_edit_page(request: Request):
                     "status_mode": mode,
                     "inbox_status": 1 if user.get("inbox_status") is None
                     else (1 if user.get("inbox_status") else 0),
-                    "status_label": status_label}})
+                    "status_label": status_label,
+                    "spot_name": user.get("spot_name") or "",
+                    "spot_text_color": user.get("spot_text_color") or "",
+                    "spot_card_color": user.get("spot_card_color") or "",
+                    "spot_card_opacity": user.get("spot_card_opacity")}})
 
 
 @app.post("/settings/status")
@@ -2558,6 +2626,61 @@ async def settings_status(request: Request):
     conn.commit()
     conn.close()
     return redir("/settings/profile", "Your status settings were saved.")
+
+
+@app.post("/settings/spot")
+async def settings_spot(request: Request):
+    """Save (or reset) the logged-in user's own "Your Spot" look.
+
+    Only ever touches the caller's own row. Colors that aren't valid
+    #rrggbb are stored as unset; opacity clamps to 30-100; an empty
+    spot name clears the title. The name is moderation-scanned like
+    any other content — a hit files a flag for the owner and the name
+    still saves (flags never block on this platform).
+    """
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    conn = db()
+    if (form.get("reset") or "") == "1":
+        conn.execute(
+            "UPDATE users SET spot_name=NULL, spot_text_color=NULL, "
+            "spot_card_color=NULL, spot_card_opacity=NULL WHERE id=?",
+            (user["id"],))
+        conn.commit()
+        conn.close()
+        return redir("/settings/profile",
+                     "Your spot is back to the default HERE look.")
+    name = (form.get("spot_name") or "").strip()
+    if len(name) > SPOT_NAME_MAX:
+        conn.close()
+        return redir("/settings/profile",
+                     f"Spot name is too long — {SPOT_NAME_MAX} characters max.")
+    text_color = (form.get("spot_text_color") or "").strip().lower()
+    if not _spot_hex_ok(text_color):
+        text_color = None
+    card_color = (form.get("spot_card_color") or "").strip().lower()
+    if not _spot_hex_ok(card_color):
+        card_color = None
+    opacity = None
+    raw_op = (form.get("spot_card_opacity") or "").strip()
+    if raw_op:
+        try:
+            opacity = max(SPOT_OPACITY_MIN,
+                          min(SPOT_OPACITY_MAX, int(raw_op)))
+        except ValueError:
+            opacity = None
+    conn.execute(
+        "UPDATE users SET spot_name=?, spot_text_color=?, "
+        "spot_card_color=?, spot_card_opacity=? WHERE id=?",
+        (name or None, text_color, card_color, opacity, user["id"]))
+    conn.commit()
+    conn.close()
+    if name:
+        flag_item("spot_name", user["id"], user["id"], user["name"], name)
+    return redir("/settings/profile",
+                 "Your spot was saved — that's how your profile looks now.")
 
 
 def _delete_upload(rel_path):
