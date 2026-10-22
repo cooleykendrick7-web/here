@@ -77,6 +77,49 @@ REACTION_LABEL = {k: l for k, e, l in REACTIONS}
 # Stories: 24-hour photo/short-video posts, friends-only
 STORY_EXTS = IMG_EXTS | {"mp4", "mov", "webm"}
 STORY_TTL_HOURS = 24
+# Story lifetimes: the composer offers fixed choices plus a custom-hours
+# value; the server always clamps the total into [5, 1440] minutes.
+STORY_LIFETIME_PRESETS = {"5m": 5, "10m": 10, "15m": 15, "1h": 60,
+                          "24h": 24 * 60}
+STORY_MIN_MINUTES = 5
+STORY_MAX_MINUTES = 24 * 60
+STORY_MUSIC_MAX_MB = 10
+STORY_MUSIC_LENS = (5, 10, 15, 30)
+# Built-in story-music catalog seed. Every track is CC0, public domain,
+# or CC-BY with the attribution stored alongside; files live in
+# static/music/ and a track is only seeded when its file is present.
+# Kevin MacLeod tracks: CC BY 4.0 (incompetech.com).
+_KM_ATTR = ("Kevin MacLeod (incompetech.com) — Licensed under Creative "
+            "Commons: By Attribution 4.0 License "
+            "http://creativecommons.org/licenses/by/4.0/")
+MUSIC_SEED = [
+    {"file_path": "music/carefree.mp3", "title": "Carefree",
+     "artist": "Kevin MacLeod", "genre": "Happy",
+     "license": "CC BY 4.0", "attribution": _KM_ATTR},
+    {"file_path": "music/investigations.mp3", "title": "Investigations",
+     "artist": "Kevin MacLeod", "genre": "Mystery",
+     "license": "CC BY 4.0", "attribution": _KM_ATTR},
+    {"file_path": "music/lobby-time.mp3", "title": "Lobby Time",
+     "artist": "Kevin MacLeod", "genre": "Jazz",
+     "license": "CC BY 4.0", "attribution": _KM_ATTR},
+    {"file_path": "music/monkeys-spinning-monkeys.mp3",
+     "title": "Monkeys Spinning Monkeys",
+     "artist": "Kevin MacLeod", "genre": "Comedy",
+     "license": "CC BY 4.0", "attribution": _KM_ATTR},
+    {"file_path": "music/sneaky-snitch.mp3", "title": "Sneaky Snitch",
+     "artist": "Kevin MacLeod", "genre": "Comedy",
+     "license": "CC BY 4.0", "attribution": _KM_ATTR},
+    {"file_path": "music/merry-go.mp3", "title": "Merry Go",
+     "artist": "Kevin MacLeod", "genre": "Happy",
+     "license": "CC BY 4.0", "attribution": _KM_ATTR},
+    {"file_path": "music/quirky-dog.mp3", "title": "Quirky Dog",
+     "artist": "Kevin MacLeod", "genre": "Comedy",
+     "license": "CC BY 4.0", "attribution": _KM_ATTR},
+    {"file_path": "music/local-forecast-elevator.mp3",
+     "title": "Local Forecast – Elevator",
+     "artist": "Kevin MacLeod", "genre": "Chill",
+     "license": "CC BY 4.0", "attribution": _KM_ATTR},
+]
 ONLINE_MINUTES = 5
 
 for _d in ("avatars", "posts", "pages", "backgrounds"):
@@ -226,6 +269,63 @@ def init_db():
         viewed_at TEXT NOT NULL, UNIQUE(story_id, user_id))""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_stories_user_exp "
               "ON stories(user_id, expires_at)")
+    # --- stories v2: overlay text, music, per-story lifetime (safe) ---
+    # expires_at already exists on any DB this code created; the column
+    # add + backfill below only fire on a DB that predates it.
+    _story_cols = [r["name"] for r in
+                   c.execute("PRAGMA table_info(stories)").fetchall()]
+    if "expires_at" not in _story_cols:
+        c.execute("ALTER TABLE stories ADD COLUMN expires_at TEXT DEFAULT ''")
+        _story_cols.append("expires_at")
+    for _col, _ddl in (
+            ("overlay_text", "ALTER TABLE stories ADD COLUMN overlay_text TEXT DEFAULT ''"),
+            ("overlay_color", "ALTER TABLE stories ADD COLUMN overlay_color TEXT DEFAULT ''"),
+            ("overlay_pos", "ALTER TABLE stories ADD COLUMN overlay_pos TEXT DEFAULT 'bottom'"),
+            ("music_kind", "ALTER TABLE stories ADD COLUMN music_kind TEXT"),
+            ("music_ref", "ALTER TABLE stories ADD COLUMN music_ref TEXT DEFAULT ''"),
+            ("music_title", "ALTER TABLE stories ADD COLUMN music_title TEXT DEFAULT ''"),
+            ("music_artist", "ALTER TABLE stories ADD COLUMN music_artist TEXT DEFAULT ''"),
+            ("music_start", "ALTER TABLE stories ADD COLUMN music_start INTEGER DEFAULT 0"),
+            ("music_len", "ALTER TABLE stories ADD COLUMN music_len INTEGER DEFAULT 15"),
+            ("music_volume", "ALTER TABLE stories ADD COLUMN music_volume INTEGER DEFAULT 80"),
+            ("music_mute_orig", "ALTER TABLE stories ADD COLUMN music_mute_orig INTEGER DEFAULT 0")):
+        if _col not in _story_cols:
+            c.execute(_ddl)
+    # Backfill: any story with no expiry gets created_at + 24h (the old
+    # fixed TTL), computed in Python so ISO offsets parse exactly.
+    for _r in c.execute(
+            "SELECT id, created_at FROM stories "
+            "WHERE expires_at IS NULL OR expires_at=''").fetchall():
+        try:
+            _exp = (datetime.fromisoformat(_r["created_at"])
+                    + timedelta(hours=24)).isoformat()
+        except Exception:
+            _exp = now_iso()
+        c.execute("UPDATE stories SET expires_at=? WHERE id=?",
+                  (_exp, _r["id"]))
+    # --- story music catalog + user music uploads (safe) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS music_tracks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL, artist TEXT NOT NULL DEFAULT '',
+        genre TEXT NOT NULL DEFAULT '', file_path TEXT NOT NULL DEFAULT '',
+        license_note TEXT NOT NULL DEFAULT '', attribution TEXT NOT NULL DEFAULT '',
+        use_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS story_music_uploads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, file_path TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
+    # Seed the catalog once, and only with files that actually shipped in
+    # static/music/ (see MUSIC_SEED below init_db). Re-running never
+    # duplicates: seed only when the table is empty.
+    if c.execute("SELECT COUNT(*) AS n FROM music_tracks").fetchone()["n"] == 0:
+        for _t in MUSIC_SEED:
+            if os.path.isfile(os.path.join(BASE, "static", _t["file_path"])):
+                c.execute(
+                    "INSERT INTO music_tracks(title, artist, genre, file_path, "
+                    "license_note, attribution, use_count, created_at) "
+                    "VALUES(?,?,?,?,?,?,0,?)",
+                    (_t["title"], _t["artist"], _t["genre"], _t["file_path"],
+                     _t["license"], _t["attribution"], now_iso()))
     # --- reactions: likes.kind (safe on existing DBs) ---
     _like_cols = [r["name"] for r in c.execute("PRAGMA table_info(likes)").fetchall()]
     if "kind" not in _like_cols:
@@ -2225,9 +2325,10 @@ async def react_post(request: Request, pid: int):
                          "kind": my_kind, "top": top})
 
 
-# ---------------- stories (24-hour, friends-only) ----------------
-def story_expires_at():
-    return (datetime.now(timezone.utc) + timedelta(hours=STORY_TTL_HOURS)).isoformat()
+# ---------------- stories (friends-only, custom lifetimes) ----------------
+def story_expires_at(minutes=STORY_TTL_HOURS * 60):
+    return (datetime.now(timezone.utc)
+            + timedelta(minutes=minutes)).isoformat()
 
 
 def prune_stories():
@@ -2263,7 +2364,7 @@ def stories_tray(viewer_id):
             "user_id": u["id"], "name": u["name"],
             "avatar": avatar_url(u["avatar"]),
             "is_self": fid == viewer_id,
-            "first_id": ss[0]["id"], "count": len(ss),
+            "first_id": ss[-1]["id"], "count": len(ss),
             "all_viewed": all(s in seen for s in sids),
             "latest": ss[0]["created_at"] or "",
         }
@@ -2288,12 +2389,183 @@ def _can_view_story(user, s):
     return s["user_id"] in friend_id_set(user["id"])
 
 
+# ---- story music helpers ----
+def _music_catalog():
+    """Built-in licensed catalog, trending first (most used, then A-Z)."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM music_tracks ORDER BY use_count DESC, title ASC").fetchall()
+    conn.close()
+    return [{"id": r["id"], "title": r["title"], "artist": r["artist"],
+             "genre": r["genre"], "url": "/static/" + r["file_path"],
+             "attribution": r["attribution"],
+             "license": r["license_note"]} for r in rows]
+
+
+def _my_music(user_id):
+    """Music a user may attach: their story-music uploads plus the audio
+    files from their own audio posts. Each: {ref, title, url} where ref
+    is the uploads-relative path stored on the story."""
+    conn = db()
+    out, seen = [], set()
+    for r in conn.execute(
+            "SELECT file_path, title FROM story_music_uploads "
+            "WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall():
+        if r["file_path"] in seen:
+            continue
+        seen.add(r["file_path"])
+        out.append({"ref": r["file_path"], "title": r["title"] or "My music",
+                    "url": "/uploads/" + r["file_path"]})
+    for r in conn.execute(
+            "SELECT media, body FROM posts WHERE user_id=? AND kind='audio' "
+            "AND media != '' ORDER BY created_at DESC", (user_id,)).fetchall():
+        if r["media"] in seen:
+            continue
+        seen.add(r["media"])
+        out.append({"ref": r["media"],
+                    "title": (r["body"] or "").strip()[:40] or "Audio post",
+                    "url": "/uploads/" + r["media"]})
+    conn.close()
+    return out
+
+
+def _owned_music_title(user_id, ref):
+    """Title snapshot when ref is a music file user_id owns, else None.
+    This is the server-side ownership gate for music_kind='upload': a
+    story can never point at another user's file or an arbitrary path."""
+    if not ref or ".." in ref:
+        return None
+    conn = db()
+    r = conn.execute(
+        "SELECT title FROM story_music_uploads WHERE user_id=? AND file_path=?",
+        (user_id, ref)).fetchone()
+    if r:
+        conn.close()
+        return r["title"] or "My music"
+    r = conn.execute(
+        "SELECT body FROM posts WHERE user_id=? AND kind='audio' AND media=?",
+        (user_id, ref)).fetchone()
+    conn.close()
+    if r:
+        return (r["body"] or "").strip()[:40] or "Audio post"
+    return None
+
+
+def _story_music_url(conn, s):
+    if s["music_kind"] == "catalog":
+        try:
+            tid = int(s["music_ref"])
+        except (TypeError, ValueError):
+            return ""
+        t = conn.execute("SELECT file_path FROM music_tracks WHERE id=?",
+                         (tid,)).fetchone()
+        return "/static/" + t["file_path"] if t else ""
+    if s["music_kind"] == "upload" and s["music_ref"]:
+        return "/uploads/" + s["music_ref"]
+    return ""
+
+
+def _story_payload(conn, s, viewer_id, seen):
+    media_url = "/uploads/" + s["media"] if s["media"] else ""
+    overlay = None
+    if (s["overlay_text"] or "").strip():
+        overlay = {"text": s["overlay_text"],
+                   "color": s["overlay_color"] or "#ffffff",
+                   "pos": s["overlay_pos"] or "bottom"}
+    music = None
+    murl = _story_music_url(conn, s)
+    if murl:
+        music = {"kind": s["music_kind"], "url": murl,
+                 "title": s["music_title"] or "",
+                 "artist": s["music_artist"] or "",
+                 "start": s["music_start"] or 0,
+                 "len": s["music_len"] or 15,
+                 "volume": s["music_volume"] if s["music_volume"] is not None else 80,
+                 "mute_orig": bool(s["music_mute_orig"])}
+    return {
+        "id": s["id"], "media": media_url,
+        "is_video": (s["media"] or "").lower().endswith((".mp4", ".mov", ".webm")),
+        "caption": s["caption"] or "",
+        "created_at": s["created_at"], "expires_at": s["expires_at"],
+        "mine": s["user_id"] == viewer_id, "seen": bool(seen),
+        "overlay": overlay, "music": music,
+    }
+
+
+def _story_queue(viewer_id):
+    """Full ordered queue for the full-screen viewer: the viewer's own
+    group first, then friends by most recent story (same order as the
+    tray); stories inside a group run oldest -> newest. Only stories
+    the viewer may see (own + friends', unexpired) are ever included."""
+    prune_stories()
+    conn = db()
+    now = now_iso()
+    groups = []
+    for fid in friend_id_set(viewer_id) | {viewer_id}:
+        u = conn.execute("SELECT id,name,avatar FROM users WHERE id=?",
+                         (fid,)).fetchone()
+        if not u:
+            continue
+        ss = conn.execute(
+            "SELECT * FROM stories WHERE user_id=? AND expires_at > ? "
+            "ORDER BY created_at ASC", (fid, now)).fetchall()
+        if not ss:
+            continue
+        sids = [s["id"] for s in ss]
+        ph = ",".join("?" * len(sids))
+        seen = {r["story_id"] for r in conn.execute(
+            f"SELECT story_id FROM story_views WHERE user_id=? AND story_id IN ({ph})",
+            (viewer_id, *sids)).fetchall()}
+        groups.append({
+            "user_id": u["id"], "name": u["name"],
+            "avatar": avatar_url(u["avatar"]),
+            "is_self": fid == viewer_id,
+            "latest": ss[-1]["created_at"] or "",
+            "stories": [_story_payload(conn, s, viewer_id, s["id"] in seen)
+                        for s in ss],
+        })
+    conn.close()
+    mine = [g for g in groups if g["is_self"]]
+    rest = sorted((g for g in groups if not g["is_self"]),
+                  key=lambda g: g["latest"], reverse=True)
+    return mine + rest
+
+
+def _story_lifetime_minutes(form):
+    """Composer lifetime -> minutes, always clamped to [5, 1440]."""
+    choice = (form.get("lifetime") or "24h").strip()
+    if choice in STORY_LIFETIME_PRESETS:
+        mins = STORY_LIFETIME_PRESETS[choice]
+    elif choice == "custom":
+        try:
+            hours = float(form.get("custom_hours") or 24)
+        except (TypeError, ValueError):
+            hours = 24
+        mins = int(round(hours * 60))
+    else:
+        mins = STORY_TTL_HOURS * 60
+    return max(STORY_MIN_MINUTES, min(STORY_MAX_MINUTES, mins))
+
+
+def _lifetime_flash(mins):
+    if mins < 60:
+        return f"Story posted — it disappears in {mins} minutes."
+    if mins == 60:
+        return "Story posted — it disappears in 1 hour."
+    if mins < STORY_MAX_MINUTES:
+        return f"Story posted — it disappears in {mins // 60} hours."
+    return "Story posted — it disappears in 24 hours."
+
+
 @app.get("/stories/new", response_class=HTMLResponse)
 async def story_new_page(request: Request):
     user, err = require_login(request)
     if err:
         return err
-    return render(request, "story_new.html", {})
+    return render(request, "story_new.html", {
+        "catalog": _music_catalog(),
+        "my_music": _my_music(user["id"]),
+    })
 
 
 @app.post("/stories/new")
@@ -2303,22 +2575,105 @@ async def story_create(request: Request):
         return err
     form = await request.form()
     caption = (form.get("caption") or "").strip()[:280]
+    # --- write-on-story overlay (validated; bad values fall back) ---
+    overlay_text = (form.get("overlay_text") or "").strip()[:80]
+    overlay_color = (form.get("overlay_color") or "").strip()
+    if not _spot_hex_ok(overlay_color):
+        overlay_color = "#ffffff" if overlay_text else ""
+    overlay_pos = (form.get("overlay_pos") or "bottom").strip()
+    if overlay_pos not in ("top", "middle", "bottom"):
+        overlay_pos = "bottom"
+    if not overlay_text:
+        overlay_color, overlay_pos = "", "bottom"
+    # --- music trim/volume controls (clamped no matter what posts) ---
+    def _int_field(name, lo, hi, default):
+        try:
+            v = int(form.get(name))
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, v))
+    music_start = _int_field("music_start", 0, 3600, 0)
+    music_len = _int_field("music_len", 5, 30, 15)
+    music_volume = _int_field("music_volume", 0, 100, 80)
+    music_mute_orig = 1 if (form.get("music_mute_orig") or "") == "1" else 0
+    # --- media first; a bad story file rejects the whole post ---
     try:
         media = save_upload(form.get("media"), "stories", STORY_EXTS)
     except ValueError as e:
         return redir("/stories/new", str(e))
     if not media:
         return redir("/stories/new", "Choose a photo or short video.")
+    # --- music selection: a fresh upload beats a picked track ---
+    music_kind = music_ref = music_title = music_artist = None
+    up = form.get("music_file")
+    if up is not None and getattr(up, "filename", ""):
+        try:
+            ref = save_upload(up, "story_music", AUD_EXTS,
+                              max_mb=STORY_MUSIC_MAX_MB)
+        except ValueError as e:
+            return redir("/stories/new", str(e))
+        if ref:
+            title = os.path.splitext(os.path.basename(up.filename))[0]
+            title = re.sub(r"\s+", " ", title).strip()[:80] or "My music"
+            conn = db()
+            conn.execute(
+                "INSERT INTO story_music_uploads(user_id, file_path, title, "
+                "created_at) VALUES(?,?,?,?)",
+                (user["id"], ref, title, now_iso()))
+            conn.commit()
+            conn.close()
+            music_kind, music_ref = "upload", ref
+            music_title, music_artist = title, user["name"]
+    if music_kind is None:
+        want = (form.get("music_kind") or "").strip()
+        ref = (form.get("music_ref") or "").strip()
+        if want == "catalog" and ref:
+            try:
+                tid = int(ref)
+            except ValueError:
+                tid = None
+            if tid is not None:
+                conn = db()
+                t = conn.execute("SELECT * FROM music_tracks WHERE id=?",
+                                 (tid,)).fetchone()
+                conn.close()
+                if t:
+                    music_kind, music_ref = "catalog", str(tid)
+                    music_title, music_artist = t["title"], t["artist"]
+        elif want == "upload" and ref:
+            owned = _owned_music_title(user["id"], ref)
+            if owned is not None:
+                music_kind, music_ref = "upload", ref
+                music_title, music_artist = owned, user["name"]
+    mins = _story_lifetime_minutes(form)
     conn = db()
     cur = conn.execute(
-        "INSERT INTO stories(user_id, media, caption, created_at, expires_at) "
-        "VALUES(?,?,?,?,?)",
-        (user["id"], media, caption, now_iso(), story_expires_at()))
+        "INSERT INTO stories(user_id, media, caption, created_at, expires_at, "
+        "overlay_text, overlay_color, overlay_pos, music_kind, music_ref, "
+        "music_title, music_artist, music_start, music_len, music_volume, "
+        "music_mute_orig) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (user["id"], media, caption, now_iso(), story_expires_at(mins),
+         overlay_text, overlay_color, overlay_pos, music_kind, music_ref or "",
+         music_title or "", music_artist or "", music_start, music_len,
+         music_volume, music_mute_orig))
     sid = cur.lastrowid
+    if music_kind == "catalog":
+        conn.execute("UPDATE music_tracks SET use_count=use_count+1 WHERE id=?",
+                     (int(music_ref),))
     conn.commit()
     conn.close()
-    flag_item("story", sid, user["id"], user["name"], caption)
-    return redir("/home", "Story posted — it disappears in 24 hours.")
+    flag_item("story", sid, user["id"], user["name"],
+              " ".join(x for x in (caption, overlay_text) if x))
+    return redir("/home", _lifetime_flash(mins))
+
+
+@app.get("/stories/queue")
+async def stories_queue(request: Request):
+    """JSON queue for the full-screen viewer (own + friends' stories)."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    return JSONResponse({"ok": True, "groups": _story_queue(user["id"])})
 
 
 @app.get("/story/{sid}", response_class=HTMLResponse)
@@ -2330,33 +2685,54 @@ async def story_view(request: Request, sid: int):
     if not _can_view_story(user, s):
         return render(request, "post_gone.html",
                       {"message": "This story isn't available."})
+    # Entering a story marks it viewed (same as the old viewer); the
+    # full-screen viewer also posts /story/{id}/view as it advances.
     conn = db()
-    author = conn.execute("SELECT id,name,avatar FROM users WHERE id=?",
-                          (s["user_id"],)).fetchone()
-    mine = conn.execute(
-        "SELECT id, media, caption, created_at FROM stories "
-        "WHERE user_id=? AND expires_at > ? ORDER BY created_at DESC",
-        (s["user_id"], now_iso())).fetchall()
-    ids = [r["id"] for r in mine]
-    idx = ids.index(sid)
-    prev_id = ids[idx - 1] if idx > 0 else 0
-    next_id = ids[idx + 1] if idx < len(ids) - 1 else 0
     conn.execute("INSERT OR IGNORE INTO story_views(story_id, user_id, viewed_at) "
                  "VALUES(?,?,?)", (sid, user["id"], now_iso()))
     conn.commit()
     conn.close()
-    media_url = "/uploads/" + s["media"] if s["media"] else ""
-    is_video = media_url.lower().endswith((".mp4", ".mov", ".webm"))
-    return render(request, "story.html", {
-        "story": {"id": s["id"], "media": media_url, "is_video": is_video,
-                  "caption": s["caption"] or "",
-                  "created_at": fancy_time(s["created_at"]),
-                  "pos": idx + 1, "total": len(ids)},
-        "author": {"id": author["id"], "name": author["name"],
-                   "avatar": avatar_url(author["avatar"])} if author else None,
-        "is_own": s["user_id"] == user["id"],
-        "prev_id": prev_id, "next_id": next_id,
-    })
+    return render(request, "story.html", {"start_id": sid})
+
+
+@app.post("/story/{sid}/view")
+async def story_mark_view(request: Request, sid: int):
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    s = _get_story(sid)
+    if not _can_view_story(user, s):
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    conn = db()
+    conn.execute("INSERT OR IGNORE INTO story_views(story_id, user_id, viewed_at) "
+                 "VALUES(?,?,?)", (sid, user["id"], now_iso()))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/story/{sid}/viewers")
+async def story_viewers(request: Request, sid: int):
+    """Who viewed my story — the story's owner only."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    s = _get_story(sid)
+    if not s or s["user_id"] != user["id"]:
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    conn = db()
+    rows = conn.execute(
+        "SELECT u.id, u.name, u.avatar, v.viewed_at FROM story_views v "
+        "JOIN users u ON u.id = v.user_id "
+        "WHERE v.story_id=? AND v.user_id != ? ORDER BY v.viewed_at ASC",
+        (sid, s["user_id"])).fetchall()
+    conn.close()
+    return JSONResponse({"ok": True, "viewers": [
+        {"id": r["id"], "name": r["name"], "avatar": avatar_url(r["avatar"]),
+         "viewed_at": r["viewed_at"], "when": fancy_time(r["viewed_at"])}
+        for r in rows]})
 
 
 @app.post("/story/{sid}/delete")
@@ -2374,7 +2750,6 @@ async def story_delete(request: Request, sid: int):
     conn.commit()
     conn.close()
     return redir("/home", "Story deleted.")
-
 
 def _delete_post(pid):
     conn = db()
