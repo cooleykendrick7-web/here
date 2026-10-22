@@ -42,53 +42,39 @@
       <input type="hidden" name="overlay_pos" id="ov-pos" value="bottom">
     </div>
 
-    <!-- 🎵 music -->
+    <!-- 🎵 music: YouTube only — streamed via YouTube's own player -->
     <div class="cmp-sec">
       <h4>🎵 Add music</h4>
-      <input type="hidden" name="music_kind" id="mus-kind" value="">
-      <input type="hidden" name="music_ref" id="mus-ref" value="">
-      <div class="mus-tabs">
-        <button type="button" class="mus-tab on" id="tab-catalog">⭐ HERE Music</button>
-        <button type="button" class="mus-tab" id="tab-mine">🎤 My Music</button>
-      </div>
-
-      <div id="pane-catalog">
-        <input type="text" id="mus-q" placeholder="Search title, artist, genre…" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
-        <p style="color:var(--muted);font-size:12.5px;margin:2px 0 6px">🔥 Trending first. Every track is licensed for use here (CC0 / public domain / CC-BY) — the artist is credited on your story.</p>
-        <div id="catalog-list">
-          {% for t in catalog %}
-          <div class="mus-row" data-kind="catalog" data-ref="{{ t.id }}" data-search="{{ (t.title ~ ' ' ~ t.artist ~ ' ' ~ t.genre)|lower|e }}">
-            <button type="button" class="mus-play" data-url="{{ t.url|e }}" aria-label="Preview">▶</button>
-            <div><div class="t">{{ t.title|e }}</div><div class="a">{{ t.artist|e }}</div></div>
-            <span class="mus-genre">{{ t.genre|e }}</span>
-          </div>
-          {% else %}
-          <p style="color:var(--muted);font-size:13.5px">The catalog is empty right now — use My Music instead.</p>
-          {% endfor %}
+      <div class="music-picker" id="story-music-picker">
+        <input type="hidden" name="music_video_id" class="mp-vid" value="">
+        <input type="hidden" name="music_url" class="mp-urlhidden" value="">
+        <p style="color:var(--muted);font-size:13px;margin:0 0 8px">Songs stream from YouTube — the artist's official upload, played right on your story.</p>
+        <div style="display:flex;gap:8px">
+          <input type="text" class="mp-url" placeholder="Paste a YouTube link to the song" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+          <button type="button" class="btn-ghost mp-check" style="font-weight:700">Check</button>
         </div>
-      </div>
-
-      <div id="pane-mine" hidden>
-        <div id="mine-list">
-          {% for m in my_music %}
-          <div class="mus-row" data-kind="upload" data-ref="{{ m.ref|e }}" data-search="{{ m.title|lower|e }}">
-            <button type="button" class="mus-play" data-url="{{ m.url|e }}" aria-label="Preview">▶</button>
-            <div><div class="t">{{ m.title|e }}</div><div class="a">Your upload</div></div>
-          </div>
-          {% else %}
-          <p style="color:var(--muted);font-size:13.5px">Nothing here yet — upload an MP3 below or post an audio post and it will show up.</p>
-          {% endfor %}
+        <p class="mp-msg"></p>
+        <p style="margin:8px 0 2px"><a class="mp-find" href="https://www.youtube.com/results?search_query=" target="_blank" rel="noopener" style="font-weight:700">🔎 Find a song on YouTube ↗</a></p>
+        <p style="color:var(--muted);font-size:12.5px;margin:0">Find the official song, copy its link, paste it here.</p>
+        <div class="mp-card" hidden>
+          <img class="mp-thumb" alt="">
+          <div style="flex:1;min-width:0"><div class="mp-title"></div><div class="mp-artist"></div></div>
+          <button type="button" class="chip mp-remove">Remove</button>
         </div>
-        <label class="fld" style="margin-top:10px" for="mus-file">Upload an MP3 (max 10MB)</label>
-        <input type="file" name="music_file" id="mus-file" accept="audio/*,.mp3,.wav,.ogg,.m4a">
-        <p style="color:var(--muted);font-size:12.5px;margin-top:4px">Only upload music you own or have the rights to use.</p>
+        <label class="fld" style="margin-top:12px">🔥 Popular on HERE</label>
+        <div class="mp-popular"></div>
       </div>
 
       <div class="mus-ctl" id="mus-ctl" hidden>
-        <p style="font-size:14px;margin:0 0 4px">🎵 <strong id="mus-name">No music selected</strong>
-          <button type="button" class="chip" id="mus-remove" style="margin-left:8px">Remove music</button></p>
-        <label class="fld" for="mus-start">Start the song at <span id="mus-start-label">0s</span></label>
-        <input type="range" name="music_start" id="mus-start" min="0" max="120" step="1" value="0" style="width:100%">
+        <p style="font-size:14px;margin:0 0 4px">🎵 <strong id="mus-name">No music selected</strong></p>
+        <div class="mp-yt-preview" id="mus-yt-preview"></div>
+        <button type="button" class="chip" id="mus-preview-btn">▶ Preview this part</button>
+        <label class="fld" for="mus-start-num">Start the song at <span id="mus-start-label">0s</span></label>
+        <input type="range" id="mus-start" min="0" max="120" step="1" value="0" style="width:100%">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" name="music_start" id="mus-start-num" min="0" max="3600" step="1" value="0" style="width:110px;padding:7px 10px;border:1px solid var(--border);border-radius:8px">
+          <span style="color:var(--muted);font-size:13px">seconds in</span>
+        </div>
         <label class="fld">Clip length</label>
         <div class="chiprow" id="mus-lens">
           <button type="button" class="chip" data-len="5">5s</button>
@@ -104,7 +90,6 @@
           Mute my video's own sound (video stories)
         </label>
       </div>
-      <audio id="mus-preview" preload="metadata"></audio>
     </div>
 
     <!-- ⏱ lifetime -->
@@ -188,97 +173,83 @@
     });
   });
 
-  // ---- music: tabs, search, select, preview, trim ----
-  var tabC = $('tab-catalog'), tabM = $('tab-mine'),
-      paneC = $('pane-catalog'), paneM = $('pane-mine'),
-      kindIn = $('mus-kind'), refIn = $('mus-ref'), ctl = $('mus-ctl'),
-      nameEl = $('mus-name'), startIn = $('mus-start'),
+  // ---- music: YouTube picker + trim controls + segment preview ----
+  var ctl = $('mus-ctl'), nameEl = $('mus-name'),
+      startRange = $('mus-start'), startNum = $('mus-start-num'),
       startLbl = $('mus-start-label'), lenIn = $('mus-len'),
       volIn = $('mus-vol'), volLbl = $('mus-vol-label'),
-      preview = $('mus-preview');
-  var previewUrl = '', previewTitle = '';
+      ytSlot = $('mus-yt-preview'), prevBtn = $('mus-preview-btn');
+  var ytPlayer = null, ytInfo = null, segTimer = null;
 
-  function showTab(which) {
-    tabC.classList.toggle('on', which === 'catalog');
-    tabM.classList.toggle('on', which === 'mine');
-    paneC.hidden = which !== 'catalog';
-    paneM.hidden = which !== 'mine';
+  function segStop() {
+    if (segTimer) { clearInterval(segTimer); segTimer = null; }
   }
-  tabC.addEventListener('click', function () { showTab('catalog'); });
-  tabM.addEventListener('click', function () { showTab('mine'); });
-
-  $('mus-q').addEventListener('input', function () {
-    var q = this.value.trim().toLowerCase();
-    document.querySelectorAll('#catalog-list .mus-row').forEach(function (row) {
-      row.style.display = !q || row.getAttribute('data-search').indexOf(q) >= 0 ? '' : 'none';
-    });
-  });
-
-  function stopPreview() {
-    preview.pause();
-    document.querySelectorAll('.mus-play').forEach(function (b) { b.textContent = '▶'; });
+  function destroyPreview() {
+    segStop();
+    if (ytPlayer) { try { ytPlayer.destroy(); } catch (e) {} ytPlayer = null; }
+    ytSlot.innerHTML = '';
   }
-  function selectRow(row) {
-    document.querySelectorAll('.mus-row').forEach(function (x) {
-      x.classList.toggle('on', x === row);
-    });
-    var mf = $('mus-file'); if (mf) mf.value = ''; // a pick beats a stale file
-    kindIn.value = row.getAttribute('data-kind');
-    refIn.value = row.getAttribute('data-ref');
-    var t = row.querySelector('.t') ? row.querySelector('.t').textContent : 'Music';
-    nameEl.textContent = t;
-    ctl.hidden = false;
+  function segWatch() {
+    segStop();
+    segTimer = setInterval(function () {
+      if (!ytPlayer) return;
+      var start = parseInt(startNum.value, 10) || 0;
+      var len = parseInt(lenIn.value, 10) || 15;
+      var t = 0;
+      try { t = ytPlayer.getCurrentTime(); } catch (e) { return; }
+      if (t >= start + len) {
+        try { ytPlayer.pauseVideo(); } catch (e) {}
+        segStop();
+      }
+    }, 250);
   }
-  document.querySelectorAll('.mus-row').forEach(function (row) {
-    row.addEventListener('click', function (e) {
-      if (e.target.classList.contains('mus-play')) return;
-      selectRow(row);
-    });
-  });
-  document.querySelectorAll('.mus-play').forEach(function (btn) {
-    btn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      var url = btn.getAttribute('data-url');
-      var row = btn.closest('.mus-row');
-      if (row) selectRow(row);
-      if (previewUrl === url && !preview.paused) { stopPreview(); return; }
-      stopPreview();
-      previewUrl = url;
-      previewTitle = row && row.querySelector('.t') ? row.querySelector('.t').textContent : '';
-      preview.src = url;
-      preview.volume = parseInt(volIn.value, 10) / 100;
-      var begin = function () {
-        var start = parseInt(startIn.value, 10) || 0;
-        var dur = isFinite(preview.duration) ? preview.duration : 0;
-        if (dur > 0) {
-          var maxStart = Math.max(0, Math.floor(dur - parseInt(lenIn.value, 10)));
-          startIn.max = Math.max(0, Math.floor(dur) - 5);
-          if (start > maxStart) { start = maxStart; startIn.value = start; startLbl.textContent = start + 's'; }
+  function setStart(v) {
+    v = Math.max(0, Math.min(3600, parseInt(v, 10) || 0));
+    startNum.value = v;
+    var mx = parseInt(startRange.max, 10) || 120;
+    startRange.value = Math.min(v, mx);
+    startLbl.textContent = v + 's';
+  }
+  function buildPreview(info) {
+    destroyPreview();
+    ytInfo = info;
+    var slot = document.createElement('div');
+    ytSlot.appendChild(slot);
+    window.hereLoadYT(function () {
+      if (ytInfo !== info) return;  // selection changed while loading
+      ytPlayer = new YT.Player(slot, {
+        width: '100%', height: '100%', videoId: info.video_id,
+        playerVars: { rel: 0, playsinline: 1, modestbranding: 1 },
+        events: {
+          onReady: function (ev) {
+            var d = 0;
+            try { d = ev.target.getDuration(); } catch (e) {}
+            if (d > 0) {
+              // the start slider can now reach (almost) the whole song
+              startRange.max = Math.max(5, Math.floor(d) - 5);
+              if ((parseInt(startNum.value, 10) || 0) >
+                  parseInt(startRange.max, 10)) {
+                setStart(parseInt(startRange.max, 10));
+              }
+            }
+            try { ev.target.setVolume(parseInt(volIn.value, 10) || 80); }
+            catch (e) {}
+          },
+          onStateChange: function (ev) {
+            if (ev.data === YT.PlayerState.PLAYING) segWatch();
+            else segStop();
+          }
         }
-        try { preview.currentTime = start; } catch (err) {}
-        preview.play().catch(function () {});
-        btn.textContent = '⏸';
-      };
-      if (preview.readyState >= 1) begin();
-      else preview.addEventListener('loadedmetadata', begin, { once: true });
+      });
     });
-  });
-  preview.addEventListener('timeupdate', function () {
-    if (!previewUrl) return;
-    var start = parseInt(startIn.value, 10) || 0;
-    var len = parseInt(lenIn.value, 10) || 15;
-    if (preview.currentTime >= start + len) stopPreview();
-  });
-  preview.addEventListener('ended', stopPreview);
-  startIn.addEventListener('input', function () {
-    startLbl.textContent = startIn.value + 's';
-    if (previewUrl && !preview.paused) {
-      try { preview.currentTime = parseInt(startIn.value, 10) || 0; } catch (e) {}
-    }
-  });
+  }
+  startRange.addEventListener('input', function () { setStart(startRange.value); });
+  startNum.addEventListener('input', function () { setStart(startNum.value); });
   volIn.addEventListener('input', function () {
     volLbl.textContent = volIn.value + '%';
-    preview.volume = parseInt(volIn.value, 10) / 100;
+    if (ytPlayer) {
+      try { ytPlayer.setVolume(parseInt(volIn.value, 10)); } catch (e) {}
+    }
   });
   document.querySelectorAll('#mus-lens .chip').forEach(function (b) {
     b.addEventListener('click', function () {
@@ -288,20 +259,27 @@
       });
     });
   });
-  $('mus-remove').addEventListener('click', function () {
-    kindIn.value = ''; refIn.value = '';
-    document.querySelectorAll('.mus-row').forEach(function (x) { x.classList.remove('on'); });
-    nameEl.textContent = 'No music selected';
-    ctl.hidden = true;
-    stopPreview(); previewUrl = '';
-    var mf = $('mus-file'); if (mf) mf.value = '';
+  prevBtn.addEventListener('click', function () {
+    if (!ytPlayer) return;
+    try {
+      ytPlayer.seekTo(parseInt(startNum.value, 10) || 0, true);
+      ytPlayer.setVolume(parseInt(volIn.value, 10) || 80);
+      ytPlayer.playVideo();
+    } catch (e) {}
   });
-  // a freshly chosen upload counts as the selection (server agrees)
-  var musFile = $('mus-file');
-  musFile.addEventListener('change', function () {
-    if (musFile.files && musFile.files[0]) {
-      nameEl.textContent = musFile.files[0].name + ' (will upload)';
-      ctl.hidden = false;
+  window.hereMusicPicker($('story-music-picker'), {
+    onSelect: function (info) {
+      if (info) {
+        nameEl.textContent = (info.title || 'Song') +
+          (info.artist ? ' — ' + info.artist : '');
+        ctl.hidden = false;
+        buildPreview(info);
+      } else {
+        nameEl.textContent = 'No music selected';
+        ctl.hidden = true;
+        ytInfo = null;
+        destroyPreview();
+      }
     }
   });
 

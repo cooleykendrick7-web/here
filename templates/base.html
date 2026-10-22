@@ -387,8 +387,8 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
   display:flex;flex-direction:column;color:#fff;overflow:hidden}
 .sv-top{padding:10px 12px 4px;background:linear-gradient(rgba(0,0,0,.55),transparent)}
 .sv-bars{display:flex;gap:4px;margin-bottom:8px}
-.sv-seg{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.35);overflow:hidden}
-.sv-seg>i{display:block;height:100%;width:0;background:#fff}
+.sv-seg{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.35);overflow:hidden;cursor:pointer}
+.sv-seg>i{display:block;height:100%;width:0;background:#fff;pointer-events:none}
 .sv-seg.done>i{width:100%}
 .sv-head{display:flex;align-items:center;gap:9px}
 .sv-head .avatar,.sv-head .av-ph{border:2px solid rgba(255,255,255,.6)}
@@ -410,6 +410,13 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .sv-music{position:absolute;left:12px;bottom:52px;background:rgba(0,0,0,.55);color:#fff;
   padding:5px 11px;border-radius:999px;font-size:13px;font-weight:600;max-width:78%;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
+/* story viewer's YouTube mini player: visible on purpose (YouTube's
+   terms) — sits bottom-left, above the viewers bar */
+#sv-yt-wrap{position:absolute;left:12px;bottom:76px;z-index:5;width:200px}
+#sv-yt-wrap .sv-yt-frame{width:200px;height:113px;border-radius:12px;overflow:hidden;
+  background:#000;box-shadow:0 4px 18px rgba(0,0,0,.5)}
+#sv-yt-wrap .sv-yt-frame iframe{width:100%;height:100%;display:block;border:0}
+#sv-yt-wrap .sv-music{position:static;display:inline-block;margin-top:6px;max-width:100%}
 .sv-bottom{display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));
   background:linear-gradient(transparent,rgba(0,0,0,.55))}
 .sv-chipbtn{background:rgba(255,255,255,.14);color:#fff;border:none;border-radius:999px;
@@ -442,21 +449,39 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 #cmp-ov.pos-top{top:8%}
 #cmp-ov.pos-middle{top:50%;transform:translateY(-50%)}
 #cmp-ov.pos-bottom{bottom:12%}
-.mus-tabs{display:flex;gap:8px;margin-bottom:10px}
-.mus-tab{flex:1;border:1.5px solid var(--border);background:#fff;border-radius:10px;
-  padding:8px;font-weight:700;font-size:14px;cursor:pointer;color:#222}
-.mus-tab.on{border-color:var(--red);background:var(--red);color:#fff}
 .mus-row{display:flex;align-items:center;gap:9px;padding:8px 6px;border-radius:9px;cursor:pointer}
 .mus-row:hover{background:#f5f5f7}
 .mus-row.on{background:#fdeef0;outline:1.5px solid var(--red)}
 .mus-row .t{font-weight:700;font-size:14.5px}
 .mus-row .a{color:var(--muted);font-size:12.5px}
-.mus-genre{margin-left:auto;background:#eee;border-radius:999px;padding:2px 9px;
-  font-size:11.5px;font-weight:700;color:#555;flex-shrink:0}
-.mus-play{background:#222;color:#fff;border:none;border-radius:50%;width:34px;height:34px;
-  font-size:13px;cursor:pointer;flex-shrink:0}
 .mus-ctl{margin-top:10px;border-top:1px dashed var(--border);padding-top:10px}
 .mus-ctl label.fld{margin-top:8px}
+/* ===== YouTube music picker (story + wall composers) ===== */
+.mp-card{display:flex;align-items:center;gap:10px;margin-top:10px;background:#f5f5f7;
+  border-radius:10px;padding:8px 10px}
+.mp-card[hidden]{display:none}
+.mp-thumb{width:64px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0;background:#000}
+.mp-title{font-weight:700;font-size:14.5px;line-height:1.2}
+.mp-artist{color:var(--muted);font-size:12.5px}
+.mp-msg{font-size:13px;margin:6px 0 0;min-height:16px;color:var(--muted)}
+.mp-pop-thumb{width:56px;height:32px;object-fit:cover;border-radius:5px;flex-shrink:0;background:#000}
+.mp-uses{margin-left:auto;color:var(--muted);font-size:12px;font-weight:700;flex-shrink:0}
+.mp-yt-preview{width:264px;max-width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;
+  background:#000;margin:8px 0}
+.mp-yt-preview iframe{width:100%;height:100%;display:block;border:0}
+/* ===== post-wall music bar ===== */
+.post-music{margin-top:10px;border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.post-music-bar{display:flex;align-items:center;gap:10px;padding:8px 10px;background:#f7f7f9}
+.post-music-thumb{width:64px;height:36px;object-fit:cover;border-radius:6px;flex-shrink:0;background:#000}
+.post-music-info{min-width:0;flex:1}
+.post-music-info .t{font-weight:700;font-size:14.5px;line-height:1.25;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.post-music-info .a{color:var(--muted);font-size:12.5px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.post-music-play{background:var(--red);color:#fff;border:none;border-radius:50%;
+  width:38px;height:38px;font-size:15px;cursor:pointer;flex-shrink:0}
+.post-music-player{background:#000}
+.post-music-player iframe{width:100%;height:200px;display:block;border:0}
 /* ===== reaction picker ===== */
 .react-wrap{position:relative;display:inline-block}
 .react-picker{position:absolute;bottom:135%;left:0;background:#fff;border:1px solid var(--border);
@@ -2041,6 +2066,206 @@ document.addEventListener('click', function(ev){
 })();
 </script>
 {% endif %}
+<script>
+/* ===== YouTube music: shared loader + picker + post-wall player =====
+   Songs stream ONLY through YouTube's official embedded player; the
+   server stores just the 11-char video id + a title/artist snapshot. */
+(function () {
+  var ytCbs = [], ytLoading = false;
+  window.hereLoadYT = function (cb) {
+    if (window.YT && YT.Player) { cb(); return; }
+    ytCbs.push(cb);
+    if (ytLoading) return;
+    ytLoading = true;
+    var prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = function () {
+      if (prev) try { prev(); } catch (e) {}
+      var cbs = ytCbs; ytCbs = [];
+      cbs.forEach(function (f) { try { f(); } catch (e) {} });
+    };
+    var tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(tag);
+  };
+
+  /* Music picker used by the story composer and the wall composer.
+     Markup contract (class hooks inside the root element):
+       .mp-url (paste box), .mp-check, .mp-find, .mp-msg, .mp-card,
+       .mp-thumb, .mp-title, .mp-artist, .mp-remove, .mp-popular,
+       .mp-vid + .mp-urlhidden (hidden form fields it maintains).
+     opts.onSelect(info|null) fires whenever the selection changes. */
+  window.hereMusicPicker = function (root, opts) {
+    if (!root) return null;
+    opts = opts || {};
+    function q(sel) { return root.querySelector(sel); }
+    var urlIn = q('.mp-url'), msg = q('.mp-msg'), card = q('.mp-card'),
+        vidIn = q('.mp-vid'), urlHidden = q('.mp-urlhidden'),
+        findLink = q('.mp-find'), popBox = q('.mp-popular');
+    var selected = null;
+
+    function setMsg(t, isErr) {
+      if (!msg) return;
+      msg.textContent = t || '';
+      msg.style.color = isErr ? 'var(--red)' : 'var(--muted)';
+    }
+    function select(info, pastedUrl) {
+      selected = info;
+      if (info) {
+        vidIn.value = info.video_id;
+        urlHidden.value = pastedUrl || '';
+        var th = q('.mp-thumb'); if (th) th.src = info.thumb || '';
+        var ti = q('.mp-title'); if (ti) ti.textContent = info.title || 'Song';
+        var ar = q('.mp-artist'); if (ar) ar.textContent = info.artist || '';
+        if (card) card.hidden = false;
+        setMsg('');
+      } else {
+        vidIn.value = ''; urlHidden.value = '';
+        if (card) card.hidden = true;
+      }
+      if (opts.onSelect) opts.onSelect(info);
+    }
+    function check() {
+      var url = (urlIn.value || '').trim();
+      if (!url) { setMsg('Paste a YouTube link first.', true); return; }
+      setMsg('Checking…');
+      fetch('/music/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+      }).then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d && d.ok) {
+            select({ video_id: d.video_id, title: d.title,
+                     artist: d.artist, thumb: d.thumb }, url);
+          } else {
+            setMsg((d && d.error) || "That video can't be played inside HERE.", true);
+          }
+        })
+        .catch(function () { setMsg('Could not check that link — try again.', true); });
+    }
+    var checkBtn = q('.mp-check');
+    if (checkBtn) checkBtn.addEventListener('click', check);
+    if (urlIn) {
+      urlIn.addEventListener('input', function () {
+        if (findLink) {
+          findLink.href = 'https://www.youtube.com/results?search_query=' +
+            encodeURIComponent(urlIn.value.trim());
+        }
+        // Editing the link after a successful check drops the pick.
+        if (selected && urlHidden.value &&
+            urlIn.value.trim() !== urlHidden.value) select(null);
+      });
+      urlIn.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); check(); }
+      });
+    }
+    var removeBtn = q('.mp-remove');
+    if (removeBtn) removeBtn.addEventListener('click', function () {
+      if (urlIn) urlIn.value = '';
+      select(null);
+    });
+    if (popBox) {
+      fetch('/music/popular')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var songs = (d && d.songs) || [];
+          popBox.innerHTML = '';
+          if (!songs.length) {
+            var p = document.createElement('p');
+            p.className = 'aud-hint';
+            p.textContent = 'No songs on HERE yet — yours could be the first.';
+            popBox.appendChild(p);
+            return;
+          }
+          songs.forEach(function (sg) {
+            var row = document.createElement('div');
+            row.className = 'mus-row';
+            if (sg.thumb) {
+              var im = document.createElement('img');
+              im.className = 'mp-pop-thumb'; im.src = sg.thumb; im.alt = '';
+              row.appendChild(im);
+            }
+            var mid = document.createElement('div');
+            var t = document.createElement('div');
+            t.className = 't'; t.textContent = sg.title || 'Song';
+            var a = document.createElement('div');
+            a.className = 'a'; a.textContent = sg.artist || '';
+            mid.appendChild(t); mid.appendChild(a);
+            row.appendChild(mid);
+            var uses = document.createElement('span');
+            uses.className = 'mp-uses';
+            uses.textContent = '🎵 × ' + sg.uses;
+            row.appendChild(uses);
+            row.addEventListener('click', function () {
+              select({ video_id: sg.video_id, title: sg.title,
+                       artist: sg.artist, thumb: sg.thumb }, '');
+            });
+            popBox.appendChild(row);
+          });
+        })
+        .catch(function () {});
+    }
+    return { select: select,
+             getSelected: function () { return selected; } };
+  };
+
+  /* Post-wall music: first tap builds the (visible) YouTube player in
+     the card and plays from the saved start second; only one post's
+     song plays at a time — starting another pauses/destroys the old. */
+  var pmPlayer = null, pmBtn = null, pmBox = null;
+  function pmReset() {
+    if (pmPlayer) { try { pmPlayer.destroy(); } catch (e) {} pmPlayer = null; }
+    if (pmBtn) pmBtn.textContent = '▶';
+    if (pmBox) { pmBox.hidden = true; pmBox.innerHTML = ''; }
+    pmBtn = null; pmBox = null;
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ?
+      e.target.closest('.post-music-play') : null;
+    if (!btn) return;
+    var wrap = btn.closest('.post-music');
+    if (!wrap) return;
+    if (pmBtn === btn && pmPlayer) {
+      try {
+        if (pmPlayer.getPlayerState() === 1) {
+          pmPlayer.pauseVideo(); btn.textContent = '▶';
+        } else {
+          pmPlayer.playVideo(); btn.textContent = '⏸';
+        }
+      } catch (err) {}
+      return;
+    }
+    pmReset();
+    var box = wrap.querySelector('.post-music-player');
+    var vid = wrap.getAttribute('data-vid');
+    var start = parseInt(wrap.getAttribute('data-start') || '0', 10) || 0;
+    if (!box || !vid) return;
+    pmBtn = btn; pmBox = box;
+    box.hidden = false;
+    var slot = document.createElement('div');
+    box.appendChild(slot);
+    window.hereLoadYT(function () {
+      if (pmBtn !== btn) return;  // superseded while the API loaded
+      pmPlayer = new YT.Player(slot, {
+        width: '100%', height: '200', videoId: vid,
+        playerVars: { start: start, rel: 0, playsinline: 1,
+                      modestbranding: 1 },
+        events: {
+          onReady: function (ev) {
+            ev.target.playVideo();
+            btn.textContent = '⏸';
+          },
+          onStateChange: function (ev) {
+            if (ev.data === YT.PlayerState.PLAYING) btn.textContent = '⏸';
+            else if (ev.data === YT.PlayerState.PAUSED ||
+                     ev.data === YT.PlayerState.ENDED) btn.textContent = '▶';
+          }
+        }
+      });
+    });
+  });
+})();
+</script>
 {% block scripts %}{% endblock %}
 <script>
 if ("serviceWorker" in navigator) {

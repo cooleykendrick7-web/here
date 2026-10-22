@@ -67,6 +67,33 @@
       <input type="file" name="media" id="media-file" accept="image/*">
     </div>
 
+    <div class="composer-music" style="margin-top:10px">
+      <button type="button" class="btn-ghost btn-sm" id="wall-music-toggle">🎵 Add music</button>
+      <div class="music-picker" id="wall-music-picker" hidden style="margin-top:10px">
+        <input type="hidden" name="music_video_id" class="mp-vid" value="">
+        <input type="hidden" name="music_url" class="mp-urlhidden" value="">
+        <p style="color:var(--muted);font-size:13px;margin:0 0 8px">Songs stream from YouTube — the artist's official upload, played right on your post.</p>
+        <div style="display:flex;gap:8px">
+          <input type="text" class="mp-url" placeholder="Paste a YouTube link to the song" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+          <button type="button" class="btn-ghost mp-check" style="font-weight:700">Check</button>
+        </div>
+        <p class="mp-msg"></p>
+        <p style="margin:8px 0 2px"><a class="mp-find" href="https://www.youtube.com/results?search_query=" target="_blank" rel="noopener" style="font-weight:700">🔎 Find a song on YouTube ↗</a></p>
+        <p style="color:var(--muted);font-size:12.5px;margin:0">Find the official song, copy its link, paste it here.</p>
+        <div class="mp-card" hidden>
+          <img class="mp-thumb" alt="">
+          <div style="flex:1;min-width:0"><div class="mp-title"></div><div class="mp-artist"></div></div>
+          <button type="button" class="chip mp-remove">Remove</button>
+        </div>
+        <div style="margin-top:10px">
+          <label class="fld" for="wall-music-start">Start the song at (seconds)</label>
+          <input type="number" name="music_start" id="wall-music-start" min="0" max="3600" step="1" value="0" style="width:110px;padding:7px 10px;border:1px solid var(--border);border-radius:8px">
+        </div>
+        <label class="fld" style="margin-top:12px">🔥 Popular on HERE</label>
+        <div class="mp-popular"></div>
+      </div>
+    </div>
+
     {% if composer_friends %}
     <div class="composer-aud">
       <button type="button" class="btn-ghost btn-sm" id="composer-aud-toggle">👁 Hide from…</button>
@@ -136,6 +163,20 @@
   }
   tabs.forEach(function(t){ t.addEventListener('click', function(){ setKind(t.dataset.kind); }); });
   setKind('text');
+
+  // 🎵 music picker (shared wiring lives in base.html)
+  var mToggle = document.getElementById('wall-music-toggle');
+  var mPicker = document.getElementById('wall-music-picker');
+  if (mToggle && mPicker && window.hereMusicPicker) {
+    var mWired = false;
+    mToggle.addEventListener('click', function(){
+      mPicker.hidden = !mPicker.hidden;
+      if (!mPicker.hidden && !mWired) {
+        mWired = true;
+        window.hereMusicPicker(mPicker, {});
+      }
+    });
+  }
 })();
 </script>
 {% endblock %}

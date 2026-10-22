@@ -18,8 +18,12 @@
     <img id="sv-img" alt="story" hidden>
     <video id="sv-vid" playsinline hidden></video>
     <div class="sv-overlay" id="sv-overlay" hidden></div>
-    <div class="sv-music" id="sv-music" hidden></div>
     <div class="sv-caption" id="sv-caption" hidden></div>
+  </div>
+
+  <div id="sv-yt-wrap" hidden>
+    <div class="sv-yt-frame" id="sv-yt-slot"></div>
+    <div class="sv-music" id="sv-music" hidden></div>
   </div>
 
   <div class="sv-bottom" id="sv-ownbar" hidden>
@@ -41,10 +45,9 @@
 
   <div id="sv-end" hidden>
     <div>You're all caught up 🎉</div>
+    <button class="sv-chipbtn" id="sv-again" type="button" style="font-size:16px;padding:10px 22px">↻ Watch again</button>
     <button class="sv-chipbtn" id="sv-end-close" type="button" style="font-size:16px;padding:10px 22px">Close</button>
   </div>
-
-  <audio id="sv-audio" preload="auto"></audio>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -72,7 +75,9 @@
   var delForm = document.getElementById('sv-del-form');
   var endCard = document.getElementById('sv-end');
   var novol = document.getElementById('sv-novol');
-  var audio = document.getElementById('sv-audio');
+  var ytWrap = document.getElementById('sv-yt-wrap');
+  var ytSlot = document.getElementById('sv-yt-slot');
+  var ytPlayer = null;
 
   var flat = [];        // [{g, s, gname...}] flattened queue
   var idx = -1;
@@ -110,11 +115,19 @@
       location.href = '/home';
     }
   }
+  function destroyYT() {
+    if (ytPlayer) { try { ytPlayer.destroy(); } catch (e) {} ytPlayer = null; }
+    ytSlot.innerHTML = '';
+  }
+  function ytPause() {
+    if (ytPlayer) { try { ytPlayer.pauseVideo(); } catch (e) {} }
+  }
   function stopAll() {
     running = false;
     if (ticker) { clearInterval(ticker); ticker = null; }
     try { vid.pause(); } catch (e) {}
-    try { audio.pause(); } catch (e) {}
+    ytPause();
+    destroyYT();
   }
   function elapsed() {
     return accum + (running ? (performance.now() - startedAt) : 0);
@@ -125,7 +138,7 @@
   function pauseClock() {
     if (running) { accum += performance.now() - startedAt; running = false; }
     try { vid.pause(); } catch (e) {}
-    try { audio.pause(); } catch (e) {}
+    ytPause();
   }
   function resumeClock() {
     if (!running) { startedAt = performance.now(); running = true; }
@@ -133,8 +146,8 @@
     if (item && item.s.is_video && !vidEnded) {
       var p = vid.play(); if (p) p.catch(function () {});
     }
-    if (curMusic) {
-      var p2 = audio.play(); if (p2) p2.catch(function () {});
+    if (curMusic && ytPlayer) {
+      try { ytPlayer.playVideo(); } catch (e) {}
     }
   }
 
@@ -143,9 +156,15 @@
     item.g.stories.forEach(function (s, i) {
       var seg = document.createElement('div');
       seg.className = 'sv-seg' + (i < item.si ? ' done' : '');
+      seg.title = 'Jump to this story';
       var fill = document.createElement('i');
       if (i < item.si) fill.style.width = '100%';
       seg.appendChild(fill);
+      // Segments are controls: tapping one jumps straight to it.
+      seg.addEventListener('click', function () {
+        var target = flat.findIndex(function (x) { return x.s.id === s.id; });
+        if (target >= 0 && target !== idx) show(target);
+      });
       barsEl.appendChild(seg);
     });
   }
@@ -162,14 +181,16 @@
     var e = elapsed();
     if (fill) fill.style.width = Math.min(100, (e / durationMs) * 100) + '%';
     // enforce the music clip window: loop it under long videos, else stop
-    if (curMusic && !audio.paused) {
-      var end = (curMusic.start || 0) + (curMusic.len || 15);
-      if (audio.currentTime >= end) {
+    if (curMusic && ytPlayer) {
+      var mt = -1;
+      try { mt = ytPlayer.getCurrentTime(); } catch (err) {}
+      var mend = (curMusic.start || 0) + (curMusic.len || 15);
+      if (mt >= 0 && mt >= mend) {
         var item = flat[idx];
         if (item && item.s.is_video && !vidEnded && e < durationMs - 250) {
-          try { audio.currentTime = curMusic.start || 0; } catch (err) {}
+          try { ytPlayer.seekTo(curMusic.start || 0, true); } catch (err2) {}
         } else {
-          audio.pause();
+          ytPause();
         }
       }
     }
@@ -177,23 +198,43 @@
   }
 
   function setupMusic(s) {
-    curMusic = s.music || null;
-    audio.pause();
-    audio.removeAttribute('src');
+    // Only YouTube music plays; legacy catalog/upload stories arrive
+    // with music=null from the server and simply stay silent.
+    curMusic = (s.music && s.music.kind === 'youtube') ? s.music : null;
     novol.hidden = true;
-    if (!curMusic) { musicEl.hidden = true; return; }
+    if (!curMusic) { ytWrap.hidden = true; musicEl.hidden = true; return; }
+    ytWrap.hidden = false;
     musicEl.hidden = false;
     musicEl.textContent = '🎵 ' + (curMusic.title || 'Music') +
       (curMusic.artist ? ' — ' + curMusic.artist : '');
-    audio.src = curMusic.url;
-    audio.volume = Math.max(0, Math.min(1, (curMusic.volume == null ? 80 : curMusic.volume) / 100));
-    var begin = function () {
-      try { audio.currentTime = curMusic.start || 0; } catch (e) {}
-      var p = audio.play();
-      if (p) p.catch(function () { novol.hidden = false; });
-    };
-    if (audio.readyState >= 1) begin();
-    else audio.addEventListener('loadedmetadata', begin, { once: true });
+    var m = curMusic;
+    var slot = document.createElement('div');
+    ytSlot.appendChild(slot);
+    window.hereLoadYT(function () {
+      if (curMusic !== m) return;  // moved on while the API loaded
+      ytPlayer = new YT.Player(slot, {
+        width: '200', height: '113', videoId: m.video_id,
+        playerVars: { start: m.start || 0, rel: 0, playsinline: 1,
+                      modestbranding: 1 },
+        events: {
+          onReady: function (ev) {
+            try {
+              ev.target.setVolume(Math.max(0, Math.min(100,
+                m.volume == null ? 80 : m.volume)));
+              ev.target.playVideo();
+            } catch (e) {}
+            // If audible autoplay got blocked anyway, surface the
+            // tap-for-sound chip; tapping it plays + unmutes.
+            setTimeout(function () {
+              if (curMusic !== m || !ytPlayer) return;
+              var st = -1;
+              try { st = ytPlayer.getPlayerState(); } catch (e) {}
+              if (st !== 1 && st !== 3) novol.hidden = false;
+            }, 1600);
+          }
+        }
+      });
+    });
   }
 
   function loadViewers(sid) {
@@ -321,6 +362,10 @@
 
   document.getElementById('sv-close').addEventListener('click', closeViewer);
   document.getElementById('sv-end-close').addEventListener('click', closeViewer);
+  document.getElementById('sv-again').addEventListener('click', function () {
+    // Stories are rewatchable without limit: restart the whole queue.
+    if (flat.length) show(0);
+  });
   novol.addEventListener('click', function () {
     novol.hidden = true;
     var item = flat[idx];
@@ -329,7 +374,13 @@
       vid.volume = item.s.music ? 0.25 : 1;
       vid.play().catch(function () {});
     }
-    if (curMusic) audio.play().catch(function () {});
+    if (curMusic && ytPlayer) {
+      try {
+        ytPlayer.setVolume(Math.max(0, Math.min(100,
+          curMusic.volume == null ? 80 : curMusic.volume)));
+        ytPlayer.playVideo();
+      } catch (e) {}
+    }
   });
   viewersBtn.addEventListener('click', function () {
     var item = flat[idx];
