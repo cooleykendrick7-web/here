@@ -20,12 +20,38 @@
 
 {% else %}
 <style>
+/* ===== stage: square-tile panel grid (TikTok-style) ===== */
 .live-stage{position:relative;background:#000;border-radius:14px;overflow:hidden;
-  height:54vh;min-height:330px;box-shadow:0 8px 28px rgba(0,0,0,.35)}
-.live-stage video.main{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
-.live-stage video.guestvid{position:absolute;right:10px;bottom:10px;width:27%;max-width:170px;
-  aspect-ratio:3/4;object-fit:cover;border-radius:10px;border:2px solid rgba(255,255,255,.75);
-  background:#181818;z-index:3}
+  box-shadow:0 8px 28px rgba(0,0,0,.35)}
+.live-grid{display:grid;gap:6px;padding:6px;background:#000;min-height:330px}
+.live-grid.cols-1{grid-template-columns:1fr;max-width:min(100%,60vh);margin:0 auto;width:100%}
+.live-grid.cols-2{grid-template-columns:repeat(2,1fr)}
+.live-grid.cols-3{grid-template-columns:repeat(3,1fr)}
+.live-grid.cols-4{grid-template-columns:repeat(4,1fr)}
+@media (max-width:600px) and (orientation:portrait){
+  .live-grid.cols-4{grid-template-columns:repeat(3,1fr)}
+}
+.live-tile{position:relative;aspect-ratio:1/1;background:#181818;border-radius:10px;
+  overflow:hidden}
+.live-tile video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  background:#181818}
+.live-tile video.localvid{transform:scaleX(-1)}
+.live-tile .tile-ph{position:absolute;inset:0;display:flex;flex-direction:column;gap:8px;
+  align-items:center;justify-content:center;color:#fff;background:#242526}
+.live-tile .tile-ph img{width:64px;height:64px;border-radius:50%;object-fit:cover}
+.live-tile .tile-ph .ph-init{width:64px;height:64px;border-radius:50%;background:#3a3b3d;
+  display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800}
+.live-tile .tile-ph .ph-name{font-size:13px;color:#ddd;font-weight:600}
+.live-tile.has-video .tile-ph{display:none}
+.live-tile .tile-label{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;
+  align-items:center;gap:5px;padding:16px 8px 6px;color:#fff;font-size:12.5px;
+  font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,.9);
+  background:linear-gradient(transparent,rgba(0,0,0,.65))}
+.live-tile .tile-label .tname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-tile .tile-menu{position:absolute;top:6px;right:6px;z-index:3;width:30px;height:30px;
+  border-radius:50%;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:16px;
+  font-weight:800;cursor:pointer;line-height:1}
+.live-tile .tile-menu:hover{background:rgba(0,0,0,.8)}
 .live-topbar{position:absolute;top:0;left:0;right:0;z-index:4;display:flex;gap:8px;
   align-items:flex-start;padding:10px;background:linear-gradient(rgba(0,0,0,.65),transparent)}
 .live-pill{background:var(--red);color:#fff;font-weight:800;font-size:12px;
@@ -41,13 +67,22 @@
 .live-statusline{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
   z-index:5;background:rgba(0,0,0,.72);color:#fff;border-radius:10px;
   padding:10px 16px;font-size:14px;font-weight:600;text-align:center;max-width:86%}
-.live-guest-tag{position:absolute;right:10px;top:64px;z-index:4}
-.live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.live-hearts{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:6}
+.live-heart{position:absolute;opacity:0;animation:heartfloat 2.4s ease-out forwards;
+  text-shadow:0 2px 8px rgba(0,0,0,.4);will-change:transform,opacity}
+@keyframes heartfloat{0%{opacity:0;transform:translate(0,0) scale(.6)}
+  12%{opacity:1}100%{opacity:0;transform:translate(var(--dx,0px),-44vh) scale(1.15)}}
+/* ===== controls / action bar ===== */
+.live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
 .live-ctl{background:#1c1e21;color:#fff;border:1px solid #3a3b3d;border-radius:999px;
   padding:9px 14px;font-size:14px;font-weight:700;cursor:pointer}
 .live-ctl.off{background:var(--red);border-color:var(--red-dark)}
 .live-ctl.danger{background:var(--red);border-color:var(--red-dark)}
 .live-ctl:disabled{opacity:.45;cursor:default}
+.live-like-btn{background:var(--red);border:1px solid var(--red-dark);color:#fff;
+  border-radius:999px;padding:12px 26px;font-size:19px;font-weight:800;cursor:pointer;
+  box-shadow:0 4px 14px rgba(212,31,46,.4)}
+.live-like-btn:active{transform:scale(1.12)}
 .live-panel{background:var(--card);border:1px solid var(--border);border-radius:12px;
   padding:12px;margin-bottom:12px}
 .live-comments{max-height:38vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
@@ -65,13 +100,35 @@
   padding:10px 14px;font-size:14px;min-width:0}
 .live-req{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}
 .live-req:last-child{border-bottom:none}
+.live-req .av-32{width:32px;height:32px;border-radius:50%;object-fit:cover;flex:none}
+.live-req .ph-32{width:32px;height:32px;border-radius:50%;background:#3a3b3d;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:800;flex:none}
+.live-req .kind{font-size:12px;color:var(--muted)}
+.live-req .mini-btn{background:#e4e6eb;border:none;border-radius:999px;padding:6px 11px;
+  font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
+.live-req .mini-btn:hover{background:#d5d8de}
 .live-err{background:#3d0a0e;color:#ffd7da;border:1px solid #7a1620;border-radius:12px;
   padding:12px 14px;margin-bottom:12px;font-size:14px}
+.live-muted-note{background:#3d2f04;color:#ffe9a8;border:1px solid #7a6416;border-radius:12px;
+  padding:10px 14px;margin-bottom:12px;font-size:14px;font-weight:600}
+/* ===== manage sheet (portaled to <body> by JS; same z pattern as
+   base.html's cmenu/dmenu sheets: backdrop 1990, sheet 2000) ===== */
+#live-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
+#live-sheet-backdrop[hidden]{display:none}
+#live-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(92vw,340px);max-height:84vh;overflow-y:auto;background:#fff;
+  border:1px solid var(--border);border-radius:12px;padding:14px;
+  box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left}
+#live-sheet[hidden]{display:none}
+#live-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:2100;
+  width:min(88vw,380px);background:rgba(28,28,30,.96);color:#fff;border:1px solid var(--red);
+  border-radius:10px;padding:10px 14px;font-size:14px;text-align:center;
+  box-shadow:0 8px 24px rgba(0,0,0,.4)}
+#live-toast[hidden]{display:none}
 </style>
 
 <div class="live-stage" id="live-stage">
-  <video class="main" id="live-main" autoplay playsinline></video>
-  <video class="guestvid" id="live-guest" autoplay playsinline hidden></video>
+  <div class="live-grid cols-1" id="live-grid"></div>
   <div class="live-topbar">
     <span class="live-pill"><span class="dot">●</span> LIVE</span>
     <div class="live-meta">
@@ -79,16 +136,12 @@
       {% if live.title %}<div class="live-title">{{ live.title|e }}</div>{% endif %}
     </div>
     <div class="live-stats">
-      <div>👁 <span id="live-viewers">0</span></div>
+      <div>👁 <span id="live-viewers">0</span> · ❤️ <span id="live-likes">0</span></div>
       <div>⏱ <span id="live-timer">0:00</span></div>
     </div>
   </div>
   <div class="live-statusline" id="live-status">Connecting…</div>
-  <div class="live-guest-tag" id="live-guest-tag" hidden>
-    <span class="live-pill" style="background:#1c1e21">🎥 <span id="live-guest-name"></span></span>
-    <button type="button" class="live-ctl danger" id="live-guest-remove" hidden
-      style="padding:4px 10px;font-size:12px;margin-left:6px">Remove</button>
-  </div>
+  <div class="live-hearts" id="live-hearts"></div>
 </div>
 
 <div class="live-err" id="live-error" hidden>
@@ -96,27 +149,42 @@
   <button type="button" class="live-ctl" id="live-error-retry" style="margin-top:8px">🔁 Try again</button>
 </div>
 
+<div id="live-invite-banner" class="live-panel" hidden style="background:var(--red-soft);border-color:#f3c2c7">
+  <span id="live-invite-text"></span>
+  <span style="display:inline-flex;gap:6px;margin-left:8px">
+    <button type="button" class="btn btn-sm" id="live-invite-join">Join</button>
+    <button type="button" class="btn-ghost btn-sm" id="live-invite-no">No thanks</button>
+  </span>
+</div>
+
 <div class="live-controls" id="live-controls">
-  <!-- host -->
+  <button type="button" class="live-like-btn" id="ctl-like">❤️ <span id="live-like-count">0</span></button>
+  <!-- panel members -->
   <button type="button" class="live-ctl" id="ctl-mute" hidden>🎤 Mute</button>
   <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
   <button type="button" class="live-ctl" id="ctl-flip" hidden>🔄 Flip</button>
+  <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>🚪 Leave panel</button>
+  <!-- host -->
   <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
-  <!-- guest -->
-  <button type="button" class="live-ctl" id="ctl-guest-leave" hidden>🚪 Leave guest spot</button>
   <!-- watcher -->
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔇 Sound off</button>
   <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
   <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
 </div>
 <div id="live-join-msg" style="font-size:13px;color:var(--muted);margin:-6px 0 10px" hidden></div>
-<div id="live-guest-banner" class="live-panel" hidden style="background:var(--red-soft);border-color:#f3c2c7">
-  🎥 <strong>You're on camera!</strong> Everyone watching can see and hear you.
+<div id="live-muted-note" class="live-muted-note" hidden>🔇 You were muted by the host/admin — your mic is off for everyone until they unmute you.</div>
+<div id="live-member-banner" class="live-panel" hidden style="background:var(--red-soft);border-color:#f3c2c7">
+  🎥 <strong>You're on the panel!</strong> Everyone watching can see and hear you.
 </div>
 
 <div class="live-panel" id="live-requests-panel" hidden>
-  <div style="font-weight:800;margin-bottom:4px">✋ Want to join your live</div>
+  <div style="font-weight:800;margin-bottom:4px">✋ Panel requests &amp; invites</div>
   <div id="live-requests"></div>
+</div>
+
+<div class="live-panel" id="live-people-panel" hidden>
+  <div style="font-weight:800;margin-bottom:4px">👥 In this live</div>
+  <div id="live-watchers"></div>
 </div>
 
 <div class="live-panel">
@@ -128,6 +196,16 @@
     <button type="submit" class="btn">Send</button>
   </form>
 </div>
+
+<!-- Manage sheet: moved to <body> by JS on init (body-level sheet
+     pattern — sheets inside cards get trapped by stacking contexts). -->
+<div id="live-sheet-backdrop" hidden></div>
+<div id="live-sheet" hidden>
+  <div class="aud-title" id="live-sheet-title">Manage</div>
+  <div id="live-sheet-actions"></div>
+  <button type="button" class="cmenu-item" id="live-sheet-cancel">Cancel</button>
+</div>
+<div id="live-toast" hidden></div>
 
 <script>
 var LIVE_BOOT = {{ boot|safe }};
@@ -145,23 +223,35 @@ var LIVE_BOOT = {{ boot|safe }};
     {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'}
   ]};
   var $ = function(id){ return document.getElementById(id); };
-  var mainVideo = $('live-main'), guestVideo = $('live-guest'),
-      statusEl = $('live-status'), errBox = $('live-error'),
-      errText = $('live-error-text'), viewersEl = $('live-viewers'),
-      timerEl = $('live-timer'), commentsEl = $('live-comments'),
-      guestTag = $('live-guest-tag'), guestNameEl = $('live-guest-name'),
-      guestRemoveBtn = $('live-guest-remove');
+  var stageEl = $('live-stage'), gridEl = $('live-grid'),
+      heartsEl = $('live-hearts'), statusEl = $('live-status'),
+      errBox = $('live-error'), errText = $('live-error-text'),
+      viewersEl = $('live-viewers'), likesEl = $('live-likes'),
+      likeCountEl = $('live-like-count'), timerEl = $('live-timer'),
+      commentsEl = $('live-comments');
 
-  var myRole = B.role;                 /* host | guest | watcher */
-  var guestId = B.guest ? B.guest.id : null;
-  var peers = {};                      /* uid -> {pc, iceQ, offered} */
+  /* ---- panel / roster state (panel[] order IS the tile order) ---- */
+  var panel = [];                 /* [{user_id,name,avatar,role,admin,muted}] */
+  var panelById = {};             /* user_id -> panel row */
+  var watchersList = [];          /* host/admin only: room people rows */
+  var audienceIds = [];           /* viewer ids I publish to (viewer_list) */
+  var myPanel = null;             /* {am_member,muted,is_admin,is_host} */
+  var amMember = (B.role === 'host' || B.role === 'guest');
+  var membershipKnown = false;    /* true after the first state poll */
+  var isHost = (B.me === (B.host && B.host.id));
+  var likeCount = 0, lastLikeCursor = 0, ownLikesPending = 0;
+  var pendingInvites = [];
+
+  var peers = {};   /* uid -> {pc, iceQ, offered, helloSent, remoteKind, videoEl} */
+  var tiles = {};   /* uid -> {el, video, ph, labelName, badges, menuBtn, member} */
   var myStream = null, mediaReady = false, facing = 'user';
+  var myMicOn = true, myCamOn = true, forcedMuted = false;
+  var soundOff = false;
   var lastSignal = 0, lastComment = 0, renderedComments = {};
-  var lastViewerList = [];
-  var ended = false, helloSent = false, startedAt = Date.now();
+  var ended = false, startedAt = Date.now();
   try {
-    var t = Date.parse(B.created_at);
-    if (!isNaN(t)) startedAt = t;
+    var t0 = Date.parse(B.created_at);
+    if (!isNaN(t0)) startedAt = t0;
   } catch (e) {}
   var timers = [];
 
@@ -187,7 +277,150 @@ var LIVE_BOOT = {{ boot|safe }};
   }
   function every(ms, fn){ timers.push(setInterval(fn, ms)); }
 
-  /* ---------------- local media (host + guest) ---------------- */
+  /* ---- toast (the old page had none; small inline helper) ---- */
+  var toastEl = $('live-toast'), toastTimer = null;
+  function toast(msg){
+    if (!msg) return;
+    toastEl.textContent = msg;
+    toastEl.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toastEl.hidden = true; }, 3200);
+  }
+  /* Action helper: POST, toast the server's error (or a success
+     note), then refresh state so rosters/sheets stay honest. */
+  function act(path, body, okMsg){
+    return post(path, body).then(function(d){
+      if (d && d.ok){ if (okMsg) toast(okMsg); }
+      else toast((d && d.error) || 'That did not work.');
+      pollState();
+      return d;
+    }).catch(function(){ toast('That did not work.'); });
+  }
+
+  /* ---- role helpers ---- */
+  function myIndex(){ return panelIndexOf(B.me); }
+  function panelIndexOf(uid){
+    for (var i = 0; i < panel.length; i++)
+      if (panel[i].user_id === uid) return i;
+    return -1;
+  }
+  function iAmHost(){ return !!(myPanel && myPanel.is_host) || isHost; }
+  function iAmAdmin(){ return !!(myPanel && myPanel.is_admin); }
+  function canManage(){ return iAmHost() || iAmAdmin(); }
+  /* Hierarchy for showing actions: the host sees actions on everyone;
+     an admin sees none on the host or on other admins. The server
+     still enforces everything — this only keeps the UI honest. */
+  function canActOn(target){
+    if (!target || target.user_id === B.me) return false;
+    if (iAmHost()) return true;
+    if (iAmAdmin()) return !(target.role === 'host' || target.admin);
+    return false;
+  }
+
+  /* ---------------- tiles ---------------- */
+  function gridCols(n){
+    if (n <= 1) return 1;
+    if (n === 2) return 2;
+    if (n <= 4) return 2;
+    if (n <= 9) return 3;
+    return 4;
+  }
+  function ensureTile(member){
+    var uid = member.user_id;
+    if (tiles[uid]){ updateTile(member); return tiles[uid]; }
+    var el = document.createElement('div');
+    el.className = 'live-tile';
+    var ph = document.createElement('div');
+    ph.className = 'tile-ph';
+    if (member.avatar){
+      var img = document.createElement('img');
+      img.src = member.avatar; img.alt = '';
+      ph.appendChild(img);
+    } else {
+      var ini = document.createElement('span');
+      ini.className = 'ph-init';
+      ini.textContent = (member.name || '?').charAt(0).toUpperCase();
+      ph.appendChild(ini);
+    }
+    var phName = document.createElement('span');
+    phName.className = 'ph-name';
+    phName.textContent = member.name || '';
+    ph.appendChild(phName);
+    var video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    if (uid === B.me){
+      video.className = 'localvid';
+      video.muted = true;
+    }
+    var label = document.createElement('div');
+    label.className = 'tile-label';
+    var tname = document.createElement('span');
+    tname.className = 'tname';
+    var badges = document.createElement('span');
+    badges.className = 'tile-badges';
+    label.appendChild(tname);
+    label.appendChild(badges);
+    var menuBtn = document.createElement('button');
+    menuBtn.type = 'button';
+    menuBtn.className = 'tile-menu';
+    menuBtn.textContent = '⋯';
+    menuBtn.title = 'Manage';
+    menuBtn.hidden = true;
+    (function(targetId){
+      menuBtn.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        openManageSheet(targetId);
+      });
+    })(uid);
+    el.appendChild(ph);
+    el.appendChild(video);
+    el.appendChild(label);
+    el.appendChild(menuBtn);
+    gridEl.appendChild(el);
+    tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
+                  badges: badges, menuBtn: menuBtn, member: member};
+    updateTile(member);
+    var P = peers[uid];
+    if (P) P.videoEl = video;
+    return tiles[uid];
+  }
+  function updateTile(member){
+    var T = tiles[member.user_id];
+    if (!T) return;
+    T.member = member;
+    T.labelName.textContent =
+      (member.user_id === B.me ? 'You' : (member.name || ''));
+    var b = '';
+    if (member.role === 'host') b += '👑 ';
+    if (member.admin) b += '🛡 ';
+    if (member.muted) b += '🔇';
+    T.badges.textContent = b;
+    T.menuBtn.hidden = !(canManage() && canActOn(member));
+  }
+  function removeTile(uid){
+    var T = tiles[uid];
+    if (!T) return;
+    delete tiles[uid];
+    try { T.video.srcObject = null; } catch (e) {}
+    if (T.el.parentNode) T.el.parentNode.removeChild(T.el);
+  }
+  /* Re-render = move the EXISTING tile nodes into panel order
+     (appendChild on a node already in the grid just moves it — the
+     <video> elements and their streams are never recreated). */
+  function renderTiles(){
+    panel.forEach(function(m){
+      var T = ensureTile(m);
+      gridEl.appendChild(T.el);
+      updateTile(m);
+    });
+    Object.keys(tiles).forEach(function(uid){
+      if (!panelById[uid]) removeTile(+uid);
+    });
+    gridEl.className = 'live-grid cols-' + gridCols(panel.length);
+  }
+
+  /* ---------------- local media (panel members) ---------------- */
   function acquireMedia(){
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       return Promise.reject(new Error('nomedia'));
@@ -201,6 +434,33 @@ var LIVE_BOOT = {{ boot|safe }};
       + 'app and it still will not work, open HERE in your phone\u2019s '
       + 'browser instead.';
     errBox.hidden = false;
+  }
+  function applyLocalTrackStates(){
+    if (!myStream) return;
+    var micWanted = myMicOn && !forcedMuted;
+    myStream.getAudioTracks().forEach(function(tr){ tr.enabled = micWanted; });
+    myStream.getVideoTracks().forEach(function(tr){ tr.enabled = myCamOn; });
+    var micBtn = $('ctl-mute');
+    micBtn.disabled = forcedMuted;
+    micBtn.classList.toggle('off', !micWanted);
+    micBtn.textContent = forcedMuted ? '🔇 Muted for you'
+      : (myMicOn ? '🎤 Mute' : '🔇 Unmute');
+    var camBtn = $('ctl-cam');
+    camBtn.classList.toggle('off', !myCamOn);
+    camBtn.textContent = myCamOn ? '📷 Camera on' : '🚫 Camera off';
+    $('live-muted-note').hidden = !forcedMuted;
+  }
+  function bindLocalTile(){
+    if (!myStream) return;
+    var me = panelById[B.me];
+    if (!me) return;
+    var T = ensureTile(me);
+    if (T.video.srcObject !== myStream){
+      T.video.srcObject = myStream;
+      T.video.muted = true;
+    }
+    T.el.classList.add('has-video');
+    T.video.play().catch(function(){});
   }
   function setupLocalMedia(){
     return acquireMedia().then(function(stream){
@@ -217,40 +477,31 @@ var LIVE_BOOT = {{ boot|safe }};
           });
         });
         if (oldVideo) oldVideo.stop();
-        stream.getAudioTracks().forEach(function(t){ t.stop(); });
+        stream.getAudioTracks().forEach(function(tr){ tr.stop(); });
         myStream = new MediaStream([audio, newVideo].filter(Boolean));
       } else {
         myStream = stream;
       }
       mediaReady = true;
-      if (myRole === 'host'){
-        mainVideo.srcObject = myStream;
-        mainVideo.muted = true;
-        mainVideo.play().catch(function(){});
-        setStatus(null);
-        /* A watcher may have said hello before the camera was
-           ready: put my tracks on those early peers and re-offer. */
-        Object.keys(peers).forEach(function(uid){
-          var P = peers[uid];
-          addLocalTracks(P);
-          if (P.offered && P.pc.signalingState === 'stable')
-            makeOffer(uid);
-        });
-      } else if (myRole === 'guest'){
-        guestVideo.srcObject = myStream;
-        guestVideo.muted = true;
-        guestVideo.hidden = false;
-        /* If the host peer already exists, make sure my tracks are
-           on it, then nudge the host to (re)offer so my video lands. */
-        var hp = peers[B.host.id];
-        if (hp) addLocalTracks(hp);
-        signal(B.host.id, 'hello', {guest: 1});
-        offerToWatchers();
-      }
+      applyLocalTrackStates();
+      bindLocalTile();
+      setStatus(null);
+      /* Peers created before the camera was ready get my tracks now;
+         pairs I drive get a (re)offer, pairs driven at me get a
+         fresh hello so the earlier panelist re-offers with my
+         tracks riding the answer. */
+      Object.keys(peers).forEach(function(uid){
+        var P = peers[uid];
+        addLocalTracks(P);
+        if (P.offered && P.pc.signalingState === 'stable') makeOffer(+uid);
+        else if (!P.offered) sayHelloTo(+uid); /* nudge a fresh offer
+          now that my tracks can ride the answer (old guest trick) */
+      });
+      reconcilePeers();
     }).catch(function(){
       mediaReady = false;
       showMediaError();
-      if (myRole === 'host')
+      if (iAmHost())
         setStatus('Your live is on air, but HERE can\u2019t reach your camera yet.');
     });
   }
@@ -259,21 +510,44 @@ var LIVE_BOOT = {{ boot|safe }};
     setupLocalMedia();
   });
 
-  /* ---------------- peers ---------------- */
+  /* ---------------- peers (keyed by user_id) ----------------
+     remoteKind: 'panelist' (they publish; tile + video) or 'watcher'
+     (receive-only from me; no tile). Offer rule (glare-free):
+       panelist -> watcher : the PANELIST offers; the watcher hellos
+                             a panelist when it needs their stream.
+       panelist <-> panelist: whoever is EARLIER in panel order
+                             offers; the later one hellos once its
+                             camera is ready / a new earlier
+                             panelist appears. Receivers answer. */
   function addLocalTracks(P){
-    if (!myStream) return;
+    if (!myStream || !amMember) return;
     var have = {};
     P.pc.getSenders().forEach(function(s){
       if (s.track) have[s.track.kind] = 1;
     });
-    myStream.getTracks().forEach(function(t){
-      if (!have[t.kind]){ try { P.pc.addTrack(t, myStream); } catch (e) {} }
+    myStream.getTracks().forEach(function(tr){
+      if (!have[tr.kind]){ try { P.pc.addTrack(tr, myStream); } catch (e) {} }
     });
+  }
+  function isPanelist(uid){ return !!panelById[uid]; }
+  function shouldOfferTo(uid){
+    if (!amMember) return false;             /* watchers never offer */
+    if (isPanelist(uid)) return myIndex() !== -1 && panelIndexOf(uid) !== -1
+      && myIndex() < panelIndexOf(uid);
+    return true;                             /* panelist -> watcher */
+  }
+  function sayHelloTo(uid){
+    var P = peers[uid];
+    if (P) P.helloSent = true;
+    signal(uid, 'hello', {watch: 1});
   }
   function ensurePeer(uid, offerer){
     if (peers[uid]) return peers[uid];
     var pc = new RTCPeerConnection(ICE_CONFIG);
-    var P = {pc: pc, iceQ: [], offered: false};
+    var T = tiles[uid];
+    var P = {pc: pc, iceQ: [], offered: false, helloSent: false,
+             remoteKind: isPanelist(uid) ? 'panelist' : 'watcher',
+             videoEl: T ? T.video : null};
     peers[uid] = P;
     pc.onicecandidate = function(ev){
       if (ev.candidate) signal(uid, 'ice', ev.candidate.toJSON());
@@ -291,13 +565,13 @@ var LIVE_BOOT = {{ boot|safe }};
         if (P.offered){ /* I drive this pair: restart ICE + re-offer */
           try { pc.restartIce(); } catch (e) {}
           makeOffer(uid);
-        } else { /* the other side drives: ask for a fresh offer */
+        } else { /* the other side drives: drop it and re-hello */
           closePeer(uid);
-          if (uid === B.host.id){ helloSent = false; sayHello(); }
+          if (desiredPeers()[uid]) sayHelloTo(uid);
         }
       }
     };
-    if (myStream && myRole !== 'watcher') addLocalTracks(P);
+    if (myStream && amMember) addLocalTracks(P);
     if (offerer) makeOffer(uid);
     return P;
   }
@@ -323,40 +597,68 @@ var LIVE_BOOT = {{ boot|safe }};
     if (!P) return;
     delete peers[uid];
     try { P.pc.close(); } catch (e) {}
-    if (uid === guestId && myRole !== 'guest'){
-      guestVideo.srcObject = null;
-      guestVideo.hidden = true;
-    }
   }
   function attachRemote(uid, stream){
-    if (uid === B.host.id){
-      mainVideo.srcObject = stream;
-      if (myRole !== 'host'){
-        mainVideo.muted = false;
-        mainVideo.play().catch(function(){
-          /* Autoplay with sound blocked: start muted, offer the
-             sound button — one tap fixes it. */
-          mainVideo.muted = true;
-          $('ctl-sound').textContent = '🔊 Tap for sound';
-          mainVideo.play().catch(function(){});
-        });
-      }
-      setStatus(null);
-    } else {
-      guestVideo.srcObject = stream;
-      guestVideo.muted = false;
-      guestVideo.hidden = false;
-      showGuestTag();
+    if (!isPanelist(uid)) return; /* watchers have no tile to fill */
+    var m = panelById[uid];
+    if (!m) return;
+    var T = ensureTile(m);
+    var P = peers[uid];
+    if (P) P.videoEl = T.video;
+    if (T.video.srcObject !== stream) T.video.srcObject = stream;
+    T.el.classList.add('has-video');
+    T.video.muted = soundOff;
+    T.video.play().catch(function(){
+      /* Autoplay with sound blocked: start muted, offer the sound
+         button — one tap fixes every tile. */
+      T.video.muted = true;
+      soundOff = true;
+      $('ctl-sound').textContent = '🔊 Tap for sound';
+      T.video.play().catch(function(){});
+    });
+    setStatus(null);
+  }
+  /* Who should I have a peer with right now? Panelists always (they
+     publish to me / we publish to each other); plus, if I publish,
+     every watcher in the audience list. */
+  function desiredPeers(){
+    var want = {};
+    panel.forEach(function(m){
+      if (m.user_id !== B.me) want[m.user_id] = 'panelist';
+    });
+    if (amMember){
+      audienceIds.forEach(function(uid){
+        if (uid !== B.me && !want[uid]) want[uid] = 'watcher';
+      });
+      watchersList.forEach(function(w){
+        if (w.user_id !== B.me && !want[w.user_id]) want[w.user_id] = 'watcher';
+      });
     }
+    return want;
   }
-  function showGuestTag(){
-    if (!guestId) return;
-    guestTag.hidden = false;
-    var g = lastGuestInfo || {};
-    guestNameEl.textContent = (guestId === B.me) ? 'You' : (g.name || 'Guest');
-    guestRemoveBtn.hidden = !(myRole === 'host');
+  function reconcilePeers(){
+    if (ended) return;
+    var want = desiredPeers();
+    Object.keys(want).forEach(function(uidStr){
+      var uid = +uidStr;
+      var offer = shouldOfferTo(uid);
+      var P = peers[uid];
+      if (!P){
+        P = ensurePeer(uid, offer);
+        if (!offer && !P.helloSent) sayHelloTo(uid);
+      } else {
+        P.remoteKind = want[uidStr];
+        if (offer && !P.offered && P.pc.signalingState === 'stable')
+          makeOffer(uid);
+        else if (!offer && !P.offered && !P.helloSent
+                 && P.pc.signalingState === 'stable')
+          sayHelloTo(uid);
+      }
+    });
+    Object.keys(peers).forEach(function(uidStr){
+      if (!want[uidStr]) closePeer(+uidStr);
+    });
   }
-  var lastGuestInfo = B.guest || null;
 
   function handleSignal(sig){
     if (ended) return;
@@ -364,17 +666,20 @@ var LIVE_BOOT = {{ boot|safe }};
     if (from === B.me) return;
     var pc, P;
     if (sig.kind === 'hello'){
-      /* A watcher (or the guest) wants me to send to them. Only the
-         host and the guest ever send. */
-      if (myRole === 'host' || myRole === 'guest'){
-        P = ensurePeer(from, true);
-        if (P.pc.signalingState === 'stable' && P.offered)
-          makeOffer(from); /* re-offer (guest just got their camera) */
-      }
+      /* Someone wants my stream. Only panel members ever send. A
+         hello from a LATER panelist is expected (I offer); a hello
+         from an EARLIER panelist would break the rule — ignore it,
+         they will offer and I will answer. */
+      if (!amMember) return;
+      if (isPanelist(from) && panelIndexOf(from) !== -1
+          && myIndex() !== -1 && panelIndexOf(from) < myIndex()) return;
+      P = ensurePeer(from, true);
+      if (P.pc.signalingState === 'stable' && P.offered)
+        makeOffer(from); /* re-offer (their camera just got ready) */
     } else if (sig.kind === 'offer'){
       P = ensurePeer(from, false);
       pc = P.pc;
-      if (myRole === 'guest') addLocalTracks(P);
+      if (amMember) addLocalTracks(P);
       pc.setRemoteDescription(new RTCSessionDescription(sig.payload || {}))
         .then(function(){
           flushIce(P);
@@ -404,12 +709,7 @@ var LIVE_BOOT = {{ boot|safe }};
         P.iceQ.push(cand);
       }
     } else if (sig.kind === 'bye'){
-      closePeer(from);
-      if (from === guestId){
-        guestId = null;
-        lastGuestInfo = null;
-        guestTag.hidden = true;
-      }
+      closePeer(from); /* tile removal rides the next panel diff */
     }
   }
   function pollSignals(){
@@ -426,82 +726,365 @@ var LIVE_BOOT = {{ boot|safe }};
       .catch(function(){});
   }
 
-  /* ---------------- guest flows ---------------- */
-  function sayHello(){
-    if (helloSent || ended) return;
-    helloSent = true;
-    signal(B.host.id, 'hello', {watch: 1});
+  /* ---------------- membership transitions ----------------
+     Flipping watcher <-> panelist tears down every peer and rebuilds
+     from the roster: simplest correct mesh reset, and it is what the
+     old guest flow did for the single-guest case. */
+  function teardownPeers(){
+    Object.keys(peers).forEach(function(uid){ closePeer(+uid); });
   }
-  function offerToWatchers(){
-    if (myRole !== 'guest' || !mediaReady) return;
-    lastViewerList.forEach(function(v){
-      if (v.id !== B.me && v.id !== B.host.id) ensurePeer(v.id, true);
-    });
-  }
-  function becomeGuest(){
-    if (myRole === 'guest') return;
-    myRole = 'guest';
-    guestId = B.me;
-    lastGuestInfo = {id: B.me, name: 'You'};
-    $('live-guest-banner').hidden = false;
-    $('ctl-join').hidden = true;
-    $('live-join-msg').hidden = true;
-    $('ctl-guest-leave').hidden = false;
-    $('ctl-mute').hidden = false;
-    $('ctl-cam').hidden = false;
-    showGuestTag();
+  function enterPanelMode(){
+    teardownPeers();
+    $('live-member-banner').hidden = false;
+    post('/heartbeat').catch(function(){});
     setupLocalMedia();
+    updateControls();
+    reconcilePeers(); /* hellos/offers resume once media lands too */
   }
-  function stepDownFromGuest(){
-    /* The live ended for me as guest (host removed me / I left):
-       drop the camera and go back to being a plain watcher. */
-    myRole = 'watcher';
+  function enterWatcherMode(){
+    teardownPeers();
     if (myStream){
-      myStream.getTracks().forEach(function(t){ t.stop(); });
+      myStream.getTracks().forEach(function(tr){ tr.stop(); });
       myStream = null;
     }
     mediaReady = false;
-    Object.keys(peers).forEach(function(uid){ closePeer(+uid); });
-    guestVideo.srcObject = null;
-    guestVideo.hidden = true;
-    guestTag.hidden = true;
-    $('live-guest-banner').hidden = true;
-    $('ctl-guest-leave').hidden = true;
-    $('ctl-join').hidden = false;
+    forcedMuted = false;
+    var myTile = tiles[B.me];
+    if (myTile) myTile.el.classList.remove('has-video');
+    $('live-member-banner').hidden = true;
+    $('live-muted-note').hidden = true;
     post('/heartbeat').catch(function(){});
-    helloSent = false;
-    sayHello();
+    updateControls();
+    reconcilePeers(); /* as a watcher: hello every panelist */
+  }
+  function syncMembership(){
+    if (!myPanel) return;
+    var member = !!myPanel.am_member;
+    forcedMuted = !!(member && myPanel.muted);
+    if (member === amMember){
+      membershipKnown = true;
+      if (amMember) applyLocalTrackStates();
+      return;
+    }
+    var wasKnown = membershipKnown;
+    membershipKnown = true;
+    amMember = member;
+    if (wasKnown)
+      toast(member ? '🎥 You are on the panel now.'
+                   : 'You left the panel — you are watching now.');
+    if (member) enterPanelMode();
+    else enterWatcherMode();
   }
 
-  /* ---------------- state poll ---------------- */
+  /* ---------------- likes + hearts ---------------- */
+  function spawnHeart(xPct, fromBottomPx){
+    var h = document.createElement('span');
+    h.className = 'live-heart';
+    h.textContent = '❤️';
+    var size = 20 + Math.floor(Math.random() * 16);
+    h.style.fontSize = size + 'px';
+    h.style.left = (xPct != null ? xPct : 62 + Math.random() * 30) + '%';
+    h.style.bottom = (fromBottomPx != null ? fromBottomPx : 14) + 'px';
+    h.style.setProperty('--dx', (Math.random() * 90 - 45) + 'px');
+    heartsEl.appendChild(h);
+    setTimeout(function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    }, 2500);
+  }
+  function paintLikes(){
+    likesEl.textContent = likeCount;
+    likeCountEl.textContent = likeCount;
+  }
+  function doLike(burstX, burstY){
+    if (ended) return;
+    ownLikesPending++;
+    post('/like', {}).then(function(d){
+      if (d && d.ok && typeof d.like_count === 'number'){
+        likeCount = d.like_count;
+        paintLikes();
+      }
+    }).catch(function(){});
+    if (burstX != null){
+      for (var i = 0; i < 5; i++){
+        (function(n){
+          setTimeout(function(){
+            spawnHeart(burstX + (Math.random() * 4 - 2), burstY);
+          }, n * 70);
+        })(i);
+      }
+    } else {
+      spawnHeart();
+    }
+  }
+  $('ctl-like').addEventListener('click', function(){ doLike(); });
+  /* Double-tap / double-click on the stage BACKGROUND only (grid
+     gaps, padding, status area) — never on a tile, its video, its
+     menu button, or the topbar. */
+  function stagePoint(ev){
+    var r = stageEl.getBoundingClientRect();
+    var x = (ev.clientX != null ? ev.clientX
+      : (ev.changedTouches && ev.changedTouches[0]
+         ? ev.changedTouches[0].clientX : 0));
+    var y = (ev.clientY != null ? ev.clientY
+      : (ev.changedTouches && ev.changedTouches[0]
+         ? ev.changedTouches[0].clientY : 0));
+    return {xPct: (x - r.left) / r.width * 100,
+            fromBottom: r.bottom - y};
+  }
+  function isStageBackground(ev){
+    var t = ev.target;
+    return t === stageEl || t === gridEl || t === statusEl;
+  }
+  stageEl.addEventListener('dblclick', function(ev){
+    if (!isStageBackground(ev)) return;
+    var p = stagePoint(ev);
+    doLike(p.xPct, p.fromBottom);
+  });
+  var lastTapAt = 0, lastTapTarget = null;
+  stageEl.addEventListener('touchend', function(ev){
+    if (!isStageBackground(ev)){ lastTapAt = 0; return; }
+    var now = Date.now();
+    if (lastTapTarget === ev.target && now - lastTapAt < 350){
+      var p = stagePoint(ev);
+      doLike(p.xPct, p.fromBottom);
+      lastTapAt = 0;
+    } else {
+      lastTapAt = now;
+      lastTapTarget = ev.target;
+    }
+  }, {passive: true});
+
+  /* ---------------- manage sheet ----------------
+     One shared sheet, portaled to <body> (base.html pattern: backdrop
+     at z 1990, sheet at z 2000 — see the CSS note above). JS fills it
+     with the actions MY role allows on the tapped target. */
+  var sheetBd = $('live-sheet-backdrop'), sheetEl = $('live-sheet'),
+      sheetTitle = $('live-sheet-title'),
+      sheetActions = $('live-sheet-actions');
+  document.body.appendChild(sheetBd);
+  document.body.appendChild(sheetEl);
+  document.body.appendChild(toastEl);
+  var manageTarget = null;
+  function closeSheet(){ sheetEl.hidden = true; sheetBd.hidden = true; manageTarget = null; }
+  sheetBd.addEventListener('click', closeSheet);
+  $('live-sheet-cancel').addEventListener('click', closeSheet);
+  function sheetBtn(label, danger, fn){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cmenu-item' + (danger ? ' danger' : '');
+    b.textContent = label;
+    b.addEventListener('click', function(){ closeSheet(); fn(); });
+    sheetActions.appendChild(b);
+  }
+  function personRow(target){
+    /* Normalize a panel row or a watchers row into one shape. */
+    if (!target) return null;
+    var uid = target.user_id != null ? target.user_id : target.id;
+    var prow = panelById[uid];
+    return {
+      user_id: uid,
+      name: target.name || (prow && prow.name) || '',
+      role: prow ? prow.role : (uid === (B.host && B.host.id) ? 'host' : 'guest'),
+      admin: target.admin != null ? !!target.admin
+        : (target.is_admin != null ? !!target.is_admin : !!(prow && prow.admin)),
+      muted: target.muted != null ? !!target.muted : !!(prow && prow.muted),
+      is_member: prow ? true : !!target.is_member
+    };
+  }
+  function openManageSheet(uid){
+    var raw = panelById[uid];
+    if (!raw) return;
+    var target = personRow(raw);
+    manageTarget = target;
+    sheetTitle.textContent = 'Manage ' + (target.name || 'panelist');
+    sheetActions.innerHTML = '';
+    if (!canActOn(target)){
+      var none = document.createElement('div');
+      none.style.cssText = 'padding:10px 8px;color:var(--muted);font-size:14px';
+      none.textContent = 'No actions available for this person.';
+      sheetActions.appendChild(none);
+    } else {
+      (function(tg){
+        /* Mute / Unmute — host: anyone but the host; admin: guests
+           (non-admin panelists) only, per canActOn + this check. */
+        var muteOk = iAmHost() ? (tg.role !== 'host')
+          : (tg.is_member && !tg.admin && tg.role !== 'host');
+        if (tg.is_member && muteOk){
+          sheetBtn(tg.muted ? '🔊 Unmute' : '🔇 Mute', false, function(){
+            act('/mute', {user_id: tg.user_id, mute: tg.muted ? 0 : 1});
+          });
+        }
+        if (tg.is_member){
+          sheetBtn('◀ Move left', false, function(){
+            act('/move', {user_id: tg.user_id, dir: -1});
+          });
+          sheetBtn('Move right ▶', false, function(){
+            act('/move', {user_id: tg.user_id, dir: 1});
+          });
+          sheetBtn('🚪 Kick from panel', true, function(){
+            act('/kick', {user_id: tg.user_id, scope: 'panel'},
+                'Removed from the panel.');
+          });
+        }
+        sheetBtn('🚪 Kick from live', true, function(){
+          act('/kick', {user_id: tg.user_id, scope: 'room'},
+              'Removed from the live.');
+        });
+        if (iAmHost()){
+          if (tg.admin){
+            sheetBtn('🛡 Remove admin', false, function(){
+              act('/remove-admin', {user_id: tg.user_id});
+            });
+          } else {
+            sheetBtn('🛡 Make admin', false, function(){
+              act('/appoint-admin', {user_id: tg.user_id});
+            });
+          }
+        }
+      })(target);
+    }
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+
+  /* ---------------- requests & people ---------------- */
+  function avatarNode(person, cls){
+    if (person.avatar){
+      var img = document.createElement('img');
+      img.className = cls; img.src = person.avatar; img.alt = '';
+      return img;
+    }
+    var ph = document.createElement('span');
+    ph.className = 'ph-32';
+    ph.textContent = (person.name || '?').charAt(0).toUpperCase();
+    return ph;
+  }
   function renderRequests(reqs){
-    var panel = $('live-requests-panel'), box = $('live-requests');
-    if (myRole !== 'host' || !reqs.length){ panel.hidden = true; return; }
-    panel.hidden = false;
+    var panelEl = $('live-requests-panel'), box = $('live-requests');
+    if (!canManage() || !reqs.length){ panelEl.hidden = true; return; }
+    panelEl.hidden = false;
     box.innerHTML = '';
     reqs.forEach(function(r){
       var row = document.createElement('div');
       row.className = 'live-req';
+      row.appendChild(avatarNode(r, 'av-32'));
       var nm = document.createElement('span');
-      nm.textContent = r.name;
       nm.style.fontWeight = '700';
-      var ok = document.createElement('button');
-      ok.type = 'button'; ok.className = 'btn'; ok.textContent = '✅ Let in';
-      ok.addEventListener('click', function(){
-        post('/join-decide', {request_id: r.id, approve: 1});
-      });
-      var no = document.createElement('button');
-      no.type = 'button'; no.className = 'btn-ghost'; no.textContent = '❌ Not now';
-      no.addEventListener('click', function(){
-        post('/join-decide', {request_id: r.id, approve: 0});
-      });
+      nm.textContent = r.name;
+      var kind = document.createElement('span');
+      kind.className = 'kind';
+      kind.textContent = r.kind === 'invite' ? 'invited — waiting'
+                                             : 'asked to join';
       row.appendChild(nm);
+      row.appendChild(kind);
       var sp = document.createElement('span'); sp.style.flex = '1';
       row.appendChild(sp);
-      row.appendChild(ok); row.appendChild(no);
+      if (r.kind !== 'invite'){
+        var ok = document.createElement('button');
+        ok.type = 'button'; ok.className = 'btn btn-sm'; ok.textContent = '✅ Let in';
+        ok.addEventListener('click', function(){
+          act('/join-decide', {request_id: r.id, approve: 1});
+        });
+        var no = document.createElement('button');
+        no.type = 'button'; no.className = 'btn-ghost btn-sm'; no.textContent = '❌ Not now';
+        no.addEventListener('click', function(){
+          act('/join-decide', {request_id: r.id, approve: 0});
+        });
+        row.appendChild(ok); row.appendChild(no);
+      }
       box.appendChild(row);
     });
   }
+  function renderWatchers(list){
+    var panelEl = $('live-people-panel'), box = $('live-watchers');
+    if (!canManage()){ panelEl.hidden = true; return; }
+    panelEl.hidden = false;
+    box.innerHTML = '';
+    if (!list.length){
+      var empty = document.createElement('div');
+      empty.style.cssText = 'color:var(--muted);font-size:13px;padding:6px 0';
+      empty.textContent = 'Nobody else is here yet.';
+      box.appendChild(empty);
+      return;
+    }
+    list.forEach(function(w){
+      var t = personRow(w);
+      if (!t) return;
+      var row = document.createElement('div');
+      row.className = 'live-req';
+      row.appendChild(avatarNode(w, 'av-32'));
+      var nm = document.createElement('span');
+      nm.style.fontWeight = '700';
+      nm.textContent = w.name;
+      var sub = document.createElement('span');
+      sub.className = 'kind';
+      var bits = [];
+      if (t.role === 'host') bits.push('👑 host');
+      if (t.is_member) bits.push('🎥 on panel');
+      if (t.admin) bits.push('🛡 admin');
+      if (t.muted) bits.push('🔇 muted');
+      sub.textContent = bits.join(' · ');
+      row.appendChild(nm);
+      row.appendChild(sub);
+      var sp = document.createElement('span'); sp.style.flex = '1';
+      row.appendChild(sp);
+      (function(tg){
+        if (!tg.is_member && tg.user_id !== B.me && canManage()){
+          var inv = document.createElement('button');
+          inv.type = 'button'; inv.className = 'mini-btn';
+          inv.textContent = '➕ Invite to panel';
+          inv.addEventListener('click', function(){
+            act('/invite', {user_id: tg.user_id}, 'Invite sent.');
+          });
+          row.appendChild(inv);
+        }
+        if (iAmHost() && tg.user_id !== B.me && tg.role !== 'host'){
+          var adm = document.createElement('button');
+          adm.type = 'button'; adm.className = 'mini-btn';
+          adm.textContent = tg.admin ? '🛡 Remove admin' : '🛡 Make admin';
+          adm.addEventListener('click', function(){
+            act(tg.admin ? '/remove-admin' : '/appoint-admin',
+                {user_id: tg.user_id});
+          });
+          row.appendChild(adm);
+        }
+        if (canActOn(tg)){
+          var kick = document.createElement('button');
+          kick.type = 'button'; kick.className = 'mini-btn';
+          kick.textContent = '🚪 Kick from live';
+          kick.addEventListener('click', function(){
+            act('/kick', {user_id: tg.user_id, scope: 'room'},
+                'Removed from the live.');
+          });
+          row.appendChild(kick);
+        }
+      })(t);
+      box.appendChild(row);
+    });
+  }
+  function renderInviteBanner(){
+    var banner = $('live-invite-banner');
+    if (amMember || !pendingInvites.length){ banner.hidden = true; return; }
+    var inv = pendingInvites[0];
+    $('live-invite-text').textContent =
+      inv.from_name + ' invited you to join the panel';
+    banner.hidden = false;
+    banner.dataset.requestId = inv.id;
+  }
+  $('live-invite-join').addEventListener('click', function(){
+    var id = +($('live-invite-banner').dataset.requestId || 0);
+    if (!id) return;
+    act('/invite-decide', {request_id: id, accept: true},
+        'Joining the panel…');
+  });
+  $('live-invite-no').addEventListener('click', function(){
+    var id = +($('live-invite-banner').dataset.requestId || 0);
+    if (!id) return;
+    act('/invite-decide', {request_id: id, accept: false});
+  });
+
+  /* ---------------- comments (unchanged behavior; the server's
+     can_delete flag now also covers admins) ---------------- */
   function addComment(c){
     if (renderedComments[c.id]) return;
     renderedComments[c.id] = 1;
@@ -540,6 +1123,7 @@ var LIVE_BOOT = {{ boot|safe }};
       del.addEventListener('click', function(){
         post('/comment/' + c.id + '/delete').then(function(d){
           if (d && d.ok) row.remove();
+          else toast((d && d.error) || 'Could not delete that comment.');
         });
       });
       row.appendChild(del);
@@ -547,13 +1131,41 @@ var LIVE_BOOT = {{ boot|safe }};
     commentsEl.appendChild(row);
     if (nearBottom) commentsEl.scrollTop = commentsEl.scrollHeight;
   }
+  $('live-comment-form').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var input = $('live-comment-input');
+    var body = input.value.trim();
+    if (!body || ended) return;
+    input.value = '';
+    post('/comment', {body: body}).then(function(d){
+      if (d && d.ok && d.comment) addComment(d.comment);
+      else if (d && d.error){
+        input.value = body;
+        toast(d.error);
+      }
+    });
+  });
+
+  /* ---------------- controls ---------------- */
+  function updateControls(){
+    var member = amMember;
+    $('ctl-mute').hidden = !member;
+    $('ctl-cam').hidden = !member;
+    $('ctl-flip').hidden = !member;
+    $('ctl-panel-leave').hidden = !(member && !iAmHost());
+    $('ctl-end').hidden = !iAmHost();
+    $('ctl-sound').hidden = member;
+    $('ctl-leave').hidden = member;
+    $('ctl-join').hidden = member;
+    $('live-member-banner').hidden = !member;
+  }
   function updateJoinButton(d){
     var btn = $('ctl-join'), msg = $('live-join-msg');
-    if (myRole !== 'watcher'){ btn.hidden = true; return; }
+    if (amMember){ btn.hidden = true; return; }
     btn.hidden = false;
-    if (d.guest && d.guest.id !== B.me){
+    if (panel.length >= 16){
       btn.disabled = true;
-      btn.textContent = '🎥 Someone is on camera';
+      btn.textContent = '🎥 Panel is full';
       return;
     }
     if (d.my_join && d.my_join.status === 'pending'){
@@ -572,79 +1184,15 @@ var LIVE_BOOT = {{ boot|safe }};
     }
     if (msg.dataset.sticky !== '1') msg.hidden = true;
   }
-  function pollState(){
-    if (ended) return;
-    jget('/live/' + B.id + '/state?since_comment=' + lastComment)
-      .then(function(d){
-        if (!d || !d.ok) return;
-        if (d.status === 'ended'){ teardownEnded(); return; }
-        viewersEl.textContent = d.viewers;
-        (d.comments || []).forEach(function(c){
-          if (c.id > lastComment) lastComment = c.id;
-          addComment(c);
-        });
-        /* Guest changes */
-        var newGuest = d.guest ? d.guest.id : null;
-        if (newGuest !== guestId){
-          if (guestId && peers[guestId] && myRole !== 'guest')
-            closePeer(guestId);
-          guestId = newGuest;
-          lastGuestInfo = d.guest || null;
-          if (guestId){
-            showGuestTag();
-            /* Watchers: the guest will offer to us on their own
-               state poll; nothing to do but wait for the track. */
-          } else {
-            guestTag.hidden = true;
-            if (myRole !== 'guest'){
-              guestVideo.srcObject = null;
-              guestVideo.hidden = true;
-            }
-          }
-        } else if (guestId){
-          lastGuestInfo = d.guest || lastGuestInfo;
-          showGuestTag();
-        }
-        /* Did I just get approved (or dropped)? */
-        if (d.my_role === 'guest' && myRole === 'watcher') becomeGuest();
-        if (d.my_role === 'watcher' && myRole === 'guest')
-          stepDownFromGuest();
-        /* Host/guest room maintenance */
-        if (d.viewer_list){
-          lastViewerList = d.viewer_list;
-          if (myRole === 'guest') offerToWatchers();
-          if (myRole === 'host' || myRole === 'guest'){
-            var keep = {};
-            keep[B.host.id] = 1;
-            if (guestId) keep[guestId] = 1;
-            lastViewerList.forEach(function(v){ keep[v.id] = 1; });
-            Object.keys(peers).forEach(function(uid){
-              if (!keep[uid]) closePeer(+uid);
-            });
-          }
-        }
-        if (myRole === 'host') renderRequests(d.pending_requests || []);
-        updateJoinButton(d);
-      })
-      .catch(function(){});
-  }
-
-  /* ---------------- controls ---------------- */
-  function trackToggle(kind, btn, onText, offText){
-    if (!myStream) return;
-    var tracks = kind === 'audio' ? myStream.getAudioTracks()
-                                  : myStream.getVideoTracks();
-    if (!tracks.length) return;
-    var on = !tracks[0].enabled;
-    tracks.forEach(function(t){ t.enabled = on; });
-    btn.classList.toggle('off', !on);
-    btn.textContent = on ? onText : offText;
-  }
   $('ctl-mute').addEventListener('click', function(){
-    trackToggle('audio', this, '🎤 Mute', '🔇 Unmute');
+    if (forcedMuted || !myStream) return;
+    myMicOn = !myMicOn;
+    applyLocalTrackStates();
   });
   $('ctl-cam').addEventListener('click', function(){
-    trackToggle('video', this, '📷 Camera on', '🚫 Camera off');
+    if (!myStream) return;
+    myCamOn = !myCamOn;
+    applyLocalTrackStates();
   });
   $('ctl-flip').addEventListener('click', function(){
     facing = facing === 'user' ? 'environment' : 'user';
@@ -656,16 +1204,29 @@ var LIVE_BOOT = {{ boot|safe }};
       teardownEnded();
     });
   });
-  $('ctl-guest-leave').addEventListener('click', function(){
-    post('/guest-leave').then(function(){ stepDownFromGuest(); });
-  });
-  guestRemoveBtn.addEventListener('click', function(){
-    if (guestId) post('/guest-leave', {user_id: guestId});
+  $('ctl-panel-leave').addEventListener('click', function(){
+    post('/guest-leave', {}).then(function(d){
+      if (d && d.ok){
+        /* The next state poll flips my_panel.am_member and
+           syncMembership drops me to watcher mode; force a poll
+           now so it feels instant. */
+        pollState();
+      } else {
+        toast((d && d.error) || 'Could not leave the panel.');
+      }
+    });
   });
   $('ctl-sound').addEventListener('click', function(){
-    mainVideo.muted = !mainVideo.muted;
-    this.textContent = mainVideo.muted ? '🔊 Tap for sound' : '🔇 Sound off';
-    if (!mainVideo.muted) mainVideo.play().catch(function(){});
+    soundOff = !soundOff;
+    Object.keys(tiles).forEach(function(uid){
+      if (+uid !== B.me) tiles[uid].video.muted = soundOff;
+    });
+    this.textContent = soundOff ? '🔊 Tap for sound' : '🔇 Sound off';
+    if (!soundOff){
+      Object.keys(tiles).forEach(function(uid){
+        tiles[uid].video.play().catch(function(){});
+      });
+    }
   });
   $('ctl-join').addEventListener('click', function(){
     var msg = $('live-join-msg');
@@ -673,7 +1234,7 @@ var LIVE_BOOT = {{ boot|safe }};
       msg.hidden = false;
       msg.dataset.sticky = '1';
       if (d && d.ok){
-        msg.textContent = '✋ Request sent — the host can let you in.';
+        msg.textContent = '✋ Request sent — the host or an admin can let you in.';
       } else {
         msg.textContent = (d && d.error) || 'Could not send the request.';
       }
@@ -686,36 +1247,102 @@ var LIVE_BOOT = {{ boot|safe }};
     } catch (e) {}
     window.location.href = '/home';
   });
-  $('live-comment-form').addEventListener('submit', function(ev){
-    ev.preventDefault();
-    var input = $('live-comment-input');
-    var body = input.value.trim();
-    if (!body || ended) return;
-    input.value = '';
-    post('/comment', {body: body}).then(function(d){
-      if (d && d.ok && d.comment) addComment(d.comment);
-      else if (d && d.error){
-        input.value = body;
-      }
-    });
-  });
+
+  /* ---------------- state poll ---------------- */
+  function fallbackPanel(d){
+    /* Pre-panel backends: synthesize host (+ legacy guest) so the
+       page still works while the new contract rolls out. */
+    var out = [];
+    if (B.host) out.push({user_id: B.host.id, name: B.host.name,
+      avatar: B.host.avatar || '', role: 'host', admin: false, muted: false});
+    var g = d.guest || B.guest;
+    if (g) out.push({user_id: g.id, name: g.name, avatar: g.avatar || '',
+      role: 'guest', admin: false, muted: false});
+    return out;
+  }
+  function pollState(){
+    if (ended) return;
+    jget('/live/' + B.id + '/state?since_comment=' + lastComment
+         + '&since_like=' + lastLikeCursor)
+      .then(function(d){
+        if (!d || !d.ok) return;
+        if (d.status === 'ended'){ teardownEnded(); return; }
+        viewersEl.textContent = d.viewers;
+        (d.comments || []).forEach(function(c){
+          if (c.id > lastComment) lastComment = c.id;
+          addComment(c);
+        });
+        /* Likes: remote hearts = fresh like events minus the ones
+           I tapped myself since the last poll. */
+        if (typeof d.like_count === 'number'){
+          likeCount = d.like_count;
+          paintLikes();
+        }
+        if (typeof d.like_cursor === 'number')
+          lastLikeCursor = Math.max(lastLikeCursor, d.like_cursor);
+        var newLikes = d.new_likes || 0;
+        if (newLikes > 0){
+          var remote = Math.max(0, newLikes - ownLikesPending);
+          ownLikesPending = 0;
+          var n = Math.min(remote, 8);
+          for (var i = 0; i < n; i++){
+            (function(k){ setTimeout(spawnHeart, k * 90); })(i);
+          }
+        } else {
+          ownLikesPending = 0;
+        }
+        /* Panel roster (authoritative order) + my standing. */
+        panel = (d.panel && d.panel.length) ? d.panel : fallbackPanel(d);
+        panelById = {};
+        panel.forEach(function(m){ panelById[m.user_id] = m; });
+        if (d.my_panel){
+          myPanel = d.my_panel;
+        } else {
+          myPanel = {
+            am_member: panelIndexOf(B.me) !== -1
+              || (d.my_role && d.my_role !== 'watcher'),
+            muted: false,
+            is_admin: false,
+            is_host: B.me === (B.host && B.host.id)
+          };
+        }
+        isHost = !!myPanel.is_host;
+        pendingInvites = d.pending_invites_for_me || [];
+        watchersList = d.watchers || [];
+        if (d.viewer_list)
+          audienceIds = d.viewer_list.map(function(v){ return v.id; });
+        syncMembership();
+        renderTiles();
+        if (amMember) bindLocalTile();
+        reconcilePeers();
+        renderRequests(d.pending_requests || []);
+        renderWatchers(watchersList);
+        renderInviteBanner();
+        updateControls();
+        updateJoinButton(d);
+      })
+      .catch(function(){});
+  }
 
   /* ---------------- lifecycle ---------------- */
   function teardownEnded(){
     if (ended) return;
     ended = true;
     timers.forEach(clearInterval);
-    Object.keys(peers).forEach(function(uid){ closePeer(+uid); });
+    teardownPeers();
     if (myStream){
-      myStream.getTracks().forEach(function(t){ t.stop(); });
+      myStream.getTracks().forEach(function(tr){ tr.stop(); });
       myStream = null;
     }
-    mainVideo.srcObject = null;
-    guestVideo.srcObject = null;
+    Object.keys(tiles).forEach(function(uid){
+      try { tiles[uid].video.srcObject = null; } catch (e) {}
+    });
+    closeSheet();
     setStatus('📺 This live has ended.');
     $('live-comment-input').disabled = true;
-    ['ctl-mute','ctl-cam','ctl-flip','ctl-end','ctl-guest-leave',
-     'ctl-join','live-requests-panel'].forEach(function(id){
+    ['ctl-mute','ctl-cam','ctl-flip','ctl-end','ctl-panel-leave',
+     'ctl-join','ctl-like','live-requests-panel','live-people-panel',
+     'live-invite-banner','live-member-banner'].forEach(function(id){
       var el = $(id);
       if (el) el.hidden = true;
     });
@@ -723,7 +1350,7 @@ var LIVE_BOOT = {{ boot|safe }};
   window.addEventListener('beforeunload', function(){
     if (ended) return;
     try {
-      if (myRole === 'host')
+      if (iAmHost())
         navigator.sendBeacon('/live/' + B.id + '/end');
       else
         navigator.sendBeacon('/live/' + B.id + '/leave');
@@ -735,21 +1362,25 @@ var LIVE_BOOT = {{ boot|safe }};
       + ('0' + (s % 60)).slice(-2);
   }, 1000);
 
-  /* ---------------- boot by role ---------------- */
-  if (myRole === 'host'){
-    $('ctl-mute').hidden = false;
-    $('ctl-cam').hidden = false;
-    $('ctl-flip').hidden = false;
-    $('ctl-end').hidden = false;
-    setStatus('You are live 🔴 — setting up your camera…');
+  /* ---------------- boot ---------------- */
+  /* Seed an initial panel from the boot JSON so the stage paints
+     before the first state poll lands; the poll replaces it with
+     the authoritative roster. */
+  panel = fallbackPanel({});
+  panelById = {};
+  panel.forEach(function(m){ panelById[m.user_id] = m; });
+  myPanel = {am_member: amMember, muted: false,
+             is_admin: false, is_host: isHost};
+  renderTiles();
+  updateControls();
+  paintLikes();
+  if (amMember){
+    setStatus(isHost ? 'You are live 🔴 — setting up your camera…'
+                     : 'Joining the panel…');
     setupLocalMedia();
   } else {
-    $('ctl-sound').hidden = false;
-    $('ctl-leave').hidden = false;
-    if (myRole === 'watcher') $('ctl-join').hidden = false;
     setStatus('Joining the live…');
-    post('/heartbeat').then(function(){ sayHello(); });
-    if (myRole === 'guest') becomeGuest();
+    post('/heartbeat').catch(function(){});
   }
   every(2000, pollSignals);
   every(3000, pollState);

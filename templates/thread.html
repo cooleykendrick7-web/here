@@ -58,6 +58,17 @@
     {% for m in msgs %}
     <div class="msg-row" style="{% if m.mine %}justify-content:flex-end{% else %}justify-content:flex-start{% endif %}">
       <div style="{% if m.mine %}text-align:right{% endif %}">
+        {% if m.story %}
+        <div class="story-card">
+          {% if m.story.media %}
+            {% if m.story.is_video %}<video class="story-clip" src="{{ m.story.media|e }}" muted playsinline preload="metadata" controls></video>
+            {% else %}<img class="story-clip" src="{{ m.story.media|e }}" alt="Story clip">{% endif %}
+          {% else %}
+          <div class="story-clip story-clip-gone">📖 Story no longer available</div>
+          {% endif %}
+          <div class="story-card-label">{{ m.story.label|e }}</div>
+        </div>
+        {% endif %}
         <div class="msg-bub {% if m.mine %}msg-mine{% else %}msg-theirs{% endif %}">{{ m.body|e }}</div>
         <div class="msg-time">{{ m.created_at|e }}<button type="button" class="mmenu-btn" title="Message options" aria-label="Message options"
           data-dtitle="Message options" data-dlabel="🗑 Delete this message"

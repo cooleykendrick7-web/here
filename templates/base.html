@@ -421,8 +421,6 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
   background:linear-gradient(transparent,rgba(0,0,0,.55))}
 .sv-chipbtn{background:rgba(255,255,255,.14);color:#fff;border:none;border-radius:999px;
   padding:8px 14px;font-size:14px;font-weight:600;cursor:pointer}
-#sv-end{position:absolute;inset:0;display:flex;flex-direction:column;gap:14px;
-  align-items:center;justify-content:center;background:#000;font-size:19px;font-weight:700}
 #sv-viewers-sheet{position:absolute;left:0;right:0;bottom:0;max-height:55%;overflow-y:auto;
   background:#161616;border-top-left-radius:16px;border-top-right-radius:16px;padding:14px 16px 22px}
 .sv-viewer-row{display:flex;align-items:center;gap:10px;padding:7px 0}
@@ -430,6 +428,29 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 #sv-novol{position:absolute;left:50%;bottom:110px;transform:translateX(-50%);
   background:rgba(0,0,0,.65);color:#fff;border-radius:999px;padding:8px 16px;
   font-size:14px;font-weight:600;cursor:pointer}
+/* story reply + reaction bar (someone else's story): reactions row on
+   top, reply input under it; sends land in the owner's inbox */
+#sv-replybar{flex-direction:column;align-items:stretch;gap:8px}
+.sv-react-row{display:flex;align-items:center;gap:6px}
+.sv-react-row button{background:rgba(255,255,255,.12);border:none;border-radius:50%;
+  width:42px;height:42px;font-size:21px;cursor:pointer;line-height:1;
+  transition:transform .15s ease}
+.sv-react-row button.sent{transform:scale(1.35)}
+#sv-reply-note{font-size:13px;font-weight:600;color:#ffd7d7;margin-left:4px}
+#sv-reply-form{display:flex;gap:8px}
+#sv-reply-input{flex:1;min-width:0;background:rgba(255,255,255,.12);color:#fff;
+  border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:9px 15px;
+  font-size:15px;outline:none}
+#sv-reply-input::placeholder{color:rgba(255,255,255,.6)}
+/* story clip card inside a message thread (reply/reaction bubbles) */
+.story-card{display:inline-block;text-align:left;max-width:190px;margin-bottom:4px}
+.story-card .story-clip{width:190px;max-height:250px;object-fit:cover;display:block;
+  border-radius:12px;background:#111}
+.story-card video.story-clip{width:190px}
+.story-clip-gone{height:120px;display:flex;align-items:center;justify-content:center;
+  text-align:center;padding:10px;color:rgba(255,255,255,.75);font-size:13px;
+  font-weight:600;border:1px dashed rgba(127,127,127,.5)}
+.story-card-label{font-size:12px;color:var(--muted);margin-top:4px;max-width:190px}
 /* ===== story composer (overlay / music / lifetime) ===== */
 .cmp-sec{border-top:1px solid var(--border);padding-top:12px;margin-top:14px}
 .cmp-sec h4{margin:0 0 8px;font-size:15px}

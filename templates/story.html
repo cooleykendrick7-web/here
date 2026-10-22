@@ -27,9 +27,25 @@
   </div>
 
   <div class="sv-bottom" id="sv-ownbar" hidden>
-    <button class="sv-chipbtn" id="sv-viewers-btn" type="button">👀 <span id="sv-viewers-count">0</span> viewers</button>
+    <button class="sv-chipbtn" id="sv-viewers-btn" type="button">👀 <span id="sv-viewers-count">0</span> views</button>
     <form id="sv-del-form" method="post" style="margin-left:auto" onsubmit="return confirm('Delete this story?');">
       <button class="sv-chipbtn" type="submit" style="background:rgba(220,38,38,.75)">🗑 Delete this story</button>
+    </form>
+  </div>
+
+  <div class="sv-bottom" id="sv-replybar" hidden>
+    <div class="sv-react-row" id="sv-react-row">
+      <button type="button" data-kind="like" title="Like">👍</button>
+      <button type="button" data-kind="love" title="Love">❤️</button>
+      <button type="button" data-kind="laugh" title="Haha">😂</button>
+      <button type="button" data-kind="wow" title="Wow">😮</button>
+      <button type="button" data-kind="sad" title="Sad">😢</button>
+      <button type="button" data-kind="angry" title="Angry">😡</button>
+      <span id="sv-reply-note" hidden></span>
+    </div>
+    <form id="sv-reply-form">
+      <input id="sv-reply-input" type="text" maxlength="2000" autocomplete="off" placeholder="Reply…">
+      <button class="sv-chipbtn" type="submit">Send</button>
     </form>
   </div>
 
@@ -41,12 +57,6 @@
       <button class="sv-chipbtn" id="sv-viewers-close" type="button" style="margin-left:auto;padding:4px 12px">✕</button>
     </div>
     <div id="sv-viewers-list"></div>
-  </div>
-
-  <div id="sv-end" hidden>
-    <div>You're all caught up 🎉</div>
-    <button class="sv-chipbtn" id="sv-again" type="button" style="font-size:16px;padding:10px 22px">↻ Watch again</button>
-    <button class="sv-chipbtn" id="sv-end-close" type="button" style="font-size:16px;padding:10px 22px">Close</button>
   </div>
 </div>
 {% endblock %}
@@ -73,7 +83,10 @@
   var viewersSheet = document.getElementById('sv-viewers-sheet');
   var viewersList = document.getElementById('sv-viewers-list');
   var delForm = document.getElementById('sv-del-form');
-  var endCard = document.getElementById('sv-end');
+  var replyBar = document.getElementById('sv-replybar');
+  var replyForm = document.getElementById('sv-reply-form');
+  var replyInput = document.getElementById('sv-reply-input');
+  var replyNote = document.getElementById('sv-reply-note');
   var novol = document.getElementById('sv-novol');
   var ytWrap = document.getElementById('sv-yt-wrap');
   var ytSlot = document.getElementById('sv-yt-slot');
@@ -248,10 +261,12 @@
 
   function show(i) {
     stopAll();
-    endCard.hidden = true;
     viewersSheet.hidden = true;
     idx = i;
-    if (i >= flat.length) { endCard.hidden = false; return; }
+    // No end card: running off the last story just closes the viewer,
+    // exactly like the ✕. Any story can be reopened from the tray at
+    // any time while it's live — seen state never blocks viewing.
+    if (i >= flat.length) { closeViewer(); return; }
     var item = flat[idx], s = item.s, g = item.g;
     vidEnded = false;
     avatarEl.innerHTML = avatarHTML(g);
@@ -312,6 +327,14 @@
       delForm.action = '/story/' + s.id + '/delete';
       loadViewers(s.id);
     }
+    // Someone else's story gets the reply + reaction bar instead;
+    // the taller bar also lifts the YouTube mini player clear of it.
+    replyBar.hidden = s.mine;
+    ytWrap.style.bottom = s.mine ? '' : '158px';
+    if (!s.mine) {
+      replyInput.placeholder = 'Reply to ' + g.name + '…';
+      replyNote.hidden = true;
+    }
     if (!s.seen) {
       s.seen = true;
       fetch('/story/' + s.id + '/view', { method: 'POST' }).catch(function () {});
@@ -361,11 +384,6 @@
   });
 
   document.getElementById('sv-close').addEventListener('click', closeViewer);
-  document.getElementById('sv-end-close').addEventListener('click', closeViewer);
-  document.getElementById('sv-again').addEventListener('click', function () {
-    // Stories are rewatchable without limit: restart the whole queue.
-    if (flat.length) show(0);
-  });
   novol.addEventListener('click', function () {
     novol.hidden = true;
     var item = flat[idx];
@@ -411,7 +429,72 @@
     resumeClock();
   });
 
+  // --- story replies + reactions: both land in the owner's inbox as
+  // story-linked messages (the server attaches the clip). Feedback is
+  // a short note in the bar; failures show the server's wording. ---
+  var noteTimer = null;
+  function flashNote(text) {
+    replyNote.textContent = text;
+    replyNote.hidden = false;
+    if (noteTimer) clearTimeout(noteTimer);
+    noteTimer = setTimeout(function () { replyNote.hidden = true; }, 2200);
+  }
+  function postStoryAction(url, payload) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().catch(function () { return { ok: false }; })
+        .then(function (d) { return { status: r.status, d: d }; });
+    });
+  }
+  replyForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var item = flat[idx];
+    var body = replyInput.value.trim();
+    if (!item || !body) return;
+    postStoryAction('/story/' + item.s.id + '/reply', { body: body })
+      .then(function (res) {
+        if (res.d && res.d.ok) {
+          replyInput.value = '';
+          flashNote('Sent ✓');
+          replyInput.blur();
+        } else {
+          flashNote((res.d && res.d.error) || 'Could not send.');
+        }
+      })
+      .catch(function () { flashNote('Could not send.'); });
+  });
+  // Typing must not watch the story run out from under you.
+  replyInput.addEventListener('focus', pauseClock);
+  replyInput.addEventListener('blur', function () {
+    if (viewersSheet.hidden) resumeClock();
+  });
+  document.getElementById('sv-react-row').addEventListener('click',
+    function (e) {
+      var btn = e.target.closest('button[data-kind]');
+      if (!btn) return;
+      var item = flat[idx];
+      if (!item) return;
+      postStoryAction('/story/' + item.s.id + '/react',
+                      { kind: btn.getAttribute('data-kind') })
+        .then(function (res) {
+          if (res.d && res.d.ok) {
+            flashNote(btn.textContent + ' sent');
+            btn.classList.add('sent');
+            setTimeout(function () { btn.classList.remove('sent'); }, 600);
+          } else {
+            flashNote((res.d && res.d.error) || 'Could not react.');
+          }
+        })
+        .catch(function () { flashNote('Could not react.'); });
+    });
+
   document.addEventListener('keydown', function (e) {
+    // Arrows/Escape belong to the reply input while it's being typed in.
+    if (e.target && (e.target.tagName === 'INPUT'
+                     || e.target.tagName === 'TEXTAREA')) return;
     if (e.key === 'Escape') closeViewer();
     else if (e.key === 'ArrowRight') go(1);
     else if (e.key === 'ArrowLeft') go(-1);
@@ -440,11 +523,11 @@
           flat.push({ g: g, s: s, si: si });
         });
       });
-      if (!flat.length) { endCard.hidden = false; return; }
+      if (!flat.length) { closeViewer(); return; }
       var start = flat.findIndex(function (x) { return x.s.id === startId; });
       show(start >= 0 ? start : 0);
     })
-    .catch(function () { endCard.hidden = false; });
+    .catch(function () { closeViewer(); });
 })();
 </script>
 {% endblock %}
