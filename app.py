@@ -162,6 +162,12 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sender_id INTEGER NOT NULL, receiver_id INTEGER NOT NULL,
         body TEXT NOT NULL, is_read INTEGER DEFAULT 0, created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS message_hidden (
+        message_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, PRIMARY KEY(message_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS thread_deletes (
+        user_id INTEGER NOT NULL, other_id INTEGER NOT NULL,
+        hidden_before TEXT NOT NULL, PRIMARY KEY(user_id, other_id))""")
     c.execute("""CREATE TABLE IF NOT EXISTS pages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         owner_id INTEGER NOT NULL, name TEXT NOT NULL,
@@ -545,8 +551,9 @@ def render(request: Request, name, ctx=None):
             "SELECT COUNT(*) c FROM notifications WHERE user_id=? AND is_read=0",
             (u["id"],)).fetchone()["c"]
         ctx["unread_msgs"] = conn.execute(
-            "SELECT COUNT(*) c FROM messages WHERE receiver_id=? AND is_read=0",
-            (u["id"],)).fetchone()["c"]
+            "SELECT COUNT(*) c FROM messages m WHERE m.receiver_id=? "
+            "AND m.is_read=0" + _vis_frag("m"),
+            (u["id"], u["id"], u["id"], u["id"])).fetchone()["c"]
         conn.close()
         # The viewer's own profile background follows them around the whole
         # logged-in site. Routes may override page_bg (profile pages show the
@@ -2874,6 +2881,30 @@ async def tap(request: Request, uid: int):
 
 
 # ---------------- messages ----------------
+def _vis_frag(alias="m"):
+    """SQL AND-fragment hiding messages the VIEWER deleted-for-me.
+
+    Delete-for-me never removes rows from `messages` (the other person
+    keeps their copy; owner moderation works on the raw rows). It hides
+    them per viewer in two ways, and every query a user sees goes
+    through this fragment:
+      * message_hidden — single messages the viewer deleted;
+      * thread_deletes — a per-conversation watermark: rows at or
+        before hidden_before are hidden; a NEW message after the
+        watermark revives the thread with only the new rows visible.
+    The fragment carries 3 placeholders, ALL bound to the viewer's id,
+    in order. `alias` is the messages-table alias used by the query.
+    """
+    return (
+        f" AND NOT EXISTS (SELECT 1 FROM message_hidden mh "
+        f"WHERE mh.message_id={alias}.id AND mh.user_id=?)"
+        f" AND NOT EXISTS (SELECT 1 FROM thread_deletes td "
+        f"WHERE td.user_id=? AND td.other_id="
+        f"(CASE WHEN {alias}.sender_id=? THEN {alias}.receiver_id "
+        f"ELSE {alias}.sender_id END) "
+        f"AND {alias}.created_at<=td.hidden_before)")
+
+
 @app.get("/messages", response_class=HTMLResponse)
 async def inbox(request: Request):
     user, err = require_login(request)
@@ -2887,8 +2918,9 @@ async def inbox(request: Request):
             "u.last_seen_at AS rlast, u.status_mode AS rmode, "
             "u.inbox_status AS rinbox FROM messages m "
             "JOIN users u ON u.id=m.receiver_id "
-            "WHERE m.sender_id=? ORDER BY m.created_at DESC LIMIT 200",
-            (user["id"],)).fetchall()
+            "WHERE m.sender_id=?" + _vis_frag("m") +
+            " ORDER BY m.created_at DESC LIMIT 200",
+            (user["id"], user["id"], user["id"], user["id"])).fetchall()
         conn.close()
         sent = [{"friend_id": r["receiver_id"],
                  "friend_name": r["rname"] or "Deleted user",
@@ -2901,10 +2933,11 @@ async def inbox(request: Request):
         return render(request, "inbox.html",
                       {"box": "sent", "threads": [], "sent": sent})
     rows = conn.execute(
-        "SELECT CASE WHEN sender_id=? THEN receiver_id ELSE sender_id END AS fid, "
-        "MAX(created_at) AS last_at FROM messages "
-        "WHERE sender_id=? OR receiver_id=? GROUP BY fid "
-        "ORDER BY last_at DESC", (user["id"], user["id"], user["id"])).fetchall()
+        "SELECT CASE WHEN m.sender_id=? THEN m.receiver_id ELSE m.sender_id "
+        "END AS fid, MAX(m.created_at) AS last_at FROM messages m "
+        "WHERE (m.sender_id=? OR m.receiver_id=?)" + _vis_frag("m") +
+        " GROUP BY fid ORDER BY last_at DESC",
+        (user["id"],) * 6).fetchall()
     threads = []
     for r in rows:
         fid = r["fid"]
@@ -2912,13 +2945,17 @@ async def inbox(request: Request):
             "SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
             "FROM users WHERE id=?", (fid,)).fetchone()
         last = conn.execute(
-            "SELECT body, created_at FROM messages WHERE "
-            "((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) "
-            "ORDER BY created_at DESC LIMIT 1",
-            (user["id"], fid, fid, user["id"])).fetchone()
+            "SELECT m.body, m.created_at FROM messages m WHERE "
+            "((m.sender_id=? AND m.receiver_id=?) OR "
+            "(m.sender_id=? AND m.receiver_id=?))" + _vis_frag("m") +
+            " ORDER BY m.created_at DESC LIMIT 1",
+            (user["id"], fid, fid, user["id"],
+             user["id"], user["id"], user["id"])).fetchone()
         unread = conn.execute(
-            "SELECT COUNT(*) c FROM messages WHERE sender_id=? AND receiver_id=? "
-            "AND is_read=0", (fid, user["id"])).fetchone()["c"]
+            "SELECT COUNT(*) c FROM messages m WHERE m.sender_id=? "
+            "AND m.receiver_id=? AND m.is_read=0" + _vis_frag("m"),
+            (fid, user["id"], user["id"], user["id"], user["id"]),
+            ).fetchone()["c"]
         threads.append({
             "friend_id": fid,
             "friend_name": f["name"] if f else "Deleted user",
@@ -2947,10 +2984,12 @@ async def thread(request: Request, fid: int):
         (fid, user["id"]))
     conn.commit()
     rows = conn.execute(
-        "SELECT * FROM messages WHERE "
-        "((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) "
-        "ORDER BY created_at ASC",
-        (user["id"], fid, fid, user["id"])).fetchall()
+        "SELECT m.* FROM messages m WHERE "
+        "((m.sender_id=? AND m.receiver_id=?) OR "
+        "(m.sender_id=? AND m.receiver_id=?))" + _vis_frag("m") +
+        " ORDER BY m.created_at ASC",
+        (user["id"], fid, fid, user["id"],
+         user["id"], user["id"], user["id"])).fetchall()
     # Calling permissions for the header buttons: friends call directly;
     # anyone else goes through a call request (pending one shown inline).
     _sweep_call_requests(conn)
@@ -2999,6 +3038,62 @@ async def send_message(request: Request, fid: int):
     send_push(fid, f"💬 {user['name']}", preview,
               f"/messages/{user['id']}", tag=f"msg-{user['id']}")
     return redir(f"/messages/{fid}")
+
+
+@app.post("/messages/{mid}/delete")
+async def delete_message_for_me(request: Request, mid: int):
+    """Delete-for-me, one message: hides it from the CALLER's views
+    only (inbox, Sent, thread, unread counts). The other participant
+    keeps their copy and the row itself stays in `messages` — owner
+    moderation/flags keep working on it. Only a participant (sender or
+    receiver) may hide a message; anyone else just gets the same
+    not-found redirect, so message ids can't be probed. Idempotent."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    m = conn.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
+    if not m or (m["sender_id"] != user["id"]
+                 and m["receiver_id"] != user["id"]):
+        conn.close()
+        return redir("/messages", "Message not found.")
+    other = (m["receiver_id"] if m["sender_id"] == user["id"]
+             else m["sender_id"])
+    conn.execute(
+        "INSERT OR IGNORE INTO message_hidden(message_id, user_id, "
+        "created_at) VALUES(?,?,?)", (mid, user["id"], now_iso()))
+    conn.commit()
+    conn.close()
+    return back(request, f"/messages/{other}")
+
+
+@app.post("/messages/{fid}/delete-thread")
+async def delete_thread_for_me(request: Request, fid: int):
+    """Delete-for-me, whole conversation: upserts the caller's
+    watermark for this partner to now, so every message up to this
+    moment disappears from the caller's inbox, Sent tab, thread view
+    and unread counts. The partner's copy is untouched. A NEW message
+    after the watermark revives the thread, showing only what came
+    after. Requires an existing conversation. Idempotent — deleting
+    again just moves the watermark forward."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    exists = conn.execute(
+        "SELECT 1 FROM messages WHERE (sender_id=? AND receiver_id=?) "
+        "OR (sender_id=? AND receiver_id=?) LIMIT 1",
+        (user["id"], fid, fid, user["id"])).fetchone()
+    if not exists:
+        conn.close()
+        return redir("/messages", "Conversation not found.")
+    conn.execute(
+        "INSERT OR REPLACE INTO thread_deletes(user_id, other_id, "
+        "hidden_before) VALUES(?,?,?)",
+        (user["id"], fid, now_iso()))
+    conn.commit()
+    conn.close()
+    return redir("/messages", "Conversation deleted.")
 
 
 # ---------------- voice / video calls (WebRTC, DB-signaled) ----------------
