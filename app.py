@@ -436,6 +436,44 @@ def init_db():
               "ON call_requests(target_id, status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_callreq_pair "
               "ON call_requests(requester_id, target_id, status)")
+    # --- go live (safe on existing DBs) ---
+    # Same architecture as calls: media flows phone-to-phone via WebRTC,
+    # these tables only carry room state, chat, presence, join requests,
+    # and the small signaling messages (SDP/ICE) browsers exchange.
+    c.execute("""CREATE TABLE IF NOT EXISTS live_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        host_id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'live',
+        created_at TEXT NOT NULL, ended_at TEXT,
+        host_seen_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_signals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, from_id INTEGER NOT NULL,
+        to_id INTEGER NOT NULL, kind TEXT NOT NULL,
+        payload TEXT DEFAULT '', created_at TEXT NOT NULL,
+        consumed INTEGER NOT NULL DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        body TEXT NOT NULL, created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_viewers (
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+        left_at TEXT,
+        PRIMARY KEY (live_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_join_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL, decided_at TEXT)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_sessions_host "
+              "ON live_sessions(host_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_signals_room "
+              "ON live_signals(live_id, to_id, id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_comments_room "
+              "ON live_comments(live_id, id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_join_room "
+              "ON live_join_requests(live_id, status)")
     # --- phone push notifications (Web Push) ---
     # app_settings is a tiny key/value store; it holds the VAPID private
     # key (PEM) so the server's push identity survives restarts on the
@@ -1867,6 +1905,7 @@ async def home(request: Request):
     return render(request, "home.html",
                   {"posts": posts, "contacts": contacts,
                    "stories_tray": stories_tray(user["id"]),
+                   "live_now": live_now_for(user["id"], owner_on),
                    "discover_people": discover_people(user["id"], 3),
                    "trends": trending_topics(5, user["id"]),
                    "composer_friends": cfriends, "composer_pages": cpages})
@@ -3139,6 +3178,16 @@ async def profile(request: Request, uid: int):
     conn.close()
     _, spot_classes = spot_style_for(prof)
     status = req_status(user["id"], uid)
+    # Go Live badge: this profile's active live, shown only when the
+    # viewer could actually watch it (the locked face hides it too —
+    # a private host's non-friends don't even learn they're live).
+    _lconn = db()
+    _sweep_lives(_lconn)
+    live_row = _lconn.execute(
+        "SELECT id FROM live_sessions WHERE host_id=? AND "
+        "status='live' ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
+    _lconn.close()
+    prof_live_id = live_row["id"] if live_row else None
     # Private profile: non-friends see a locked profile (public face
     # only) — the owner, their friends, and the owner context see all.
     locked = bool(prof.get("private_profile")) and user["id"] != uid \
@@ -3157,6 +3206,7 @@ async def profile(request: Request, uid: int):
         "presence": presence_of(prof),
         "is_private": bool(prof.get("private_profile")),
         "is_private_locked": locked,
+        "live_id": prof_live_id if not locked else None,
         "muted_by_viewer": bool(user["id"] != uid
                                 and uid in muted_id_set(user["id"])),
         "spot_name": (prof.get("spot_name") or "").strip(),
@@ -4470,6 +4520,758 @@ async def call_request_decline(request: Request, rid: int):
     return JSONResponse({"ok": True})
 
 
+# ---------------- go live (WebRTC, DB-signaled) ----------------
+# Ken's Go Live: any user can stream from their phone; friends and the
+# public (minus blocks / private-profile rules) watch, comment live,
+# and one approved guest can join on camera. The architecture mirrors
+# 1:1 calls exactly — media flows phone-to-phone via WebRTC, the DB
+# only carries room state, chat, presence, join requests, and the
+# small signaling messages (SDP/ICE) browsers poll for. No websockets,
+# nothing is recorded or stored server-side.
+#
+# Topology: the HOST sends to every watcher (one send peer per
+# watcher, host always offers). The GUEST (max one) is two-way with
+# the host (host offers) and sends to every watcher (guest offers).
+# Watchers are receive-only and answer. Fixed offerer roles per pair
+# mean there is never negotiation glare to resolve.
+LIVE_STALE_SECONDS = 90        # host heartbeat gap that auto-ends a live
+LIVE_VIEWER_WINDOW = 45       # viewer counts if seen within this window
+LIVE_TITLE_MAX = 80
+LIVE_COMMENT_MAX = 300
+LIVE_JOIN_COOLDOWN = 60       # seconds after a decline before re-asking
+LIVE_SIGNAL_TYPES = ("hello", "offer", "answer", "ice", "bye")
+LIVE_MAX_PAYLOAD = 65536      # same SDP headroom as calls
+
+
+def _sweep_lives(conn):
+    """Lazy stale sweep, run on live reads/writes like _sweep_calls:
+    a live whose host stopped heartbeating (closed the tab, lost
+    signal) auto-ends so nobody watches a ghost room forever."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=LIVE_STALE_SECONDS)).isoformat()
+    stale = conn.execute(
+        "SELECT * FROM live_sessions WHERE status='live' AND "
+        "host_seen_at<?", (cutoff,)).fetchall()
+    for row in stale:
+        _end_live_row(conn, dict(row))
+    if stale:
+        conn.commit()
+
+
+def _end_live_row(conn, live):
+    """End a live session in place (no commit): pending join requests
+    are declined and an on-camera guest is dropped back to watcher, so
+    every client's next state poll settles into the ended screen."""
+    if live["status"] != "live":
+        return
+    stamp = now_iso()
+    conn.execute(
+        "UPDATE live_sessions SET status='ended', ended_at=? WHERE id=?",
+        (stamp, live["id"]))
+    conn.execute(
+        "UPDATE live_join_requests SET status='declined', decided_at=? "
+        "WHERE live_id=? AND status='pending'", (stamp, live["id"]))
+    conn.execute(
+        "UPDATE live_join_requests SET status='left', decided_at=? "
+        "WHERE live_id=? AND status='approved'", (stamp, live["id"]))
+
+
+def _live_get(conn, lid):
+    r = conn.execute("SELECT * FROM live_sessions WHERE id=?",
+                     (lid,)).fetchone()
+    return dict(r) if r else None
+
+
+def _live_can_watch(viewer, live, owner_on=False):
+    """Who may watch/comment/join a live: the host always; the site
+    owner context always; anyone logged in EXCEPT a pair blocked
+    either way with the host; and when the host's profile is private,
+    only the host's friends (the privacy suite's rule)."""
+    if not viewer:
+        return False
+    if viewer["id"] == live["host_id"] or owner_on:
+        return True
+    if blocked_either_way(viewer["id"], live["host_id"]):
+        return False
+    host = get_user(live["host_id"])
+    if host and host.get("private_profile"):
+        return viewer["id"] in friend_id_set(live["host_id"])
+    return True
+
+
+def _live_guest_req(conn, lid):
+    """The currently approved join request (the on-camera guest)."""
+    r = conn.execute(
+        "SELECT * FROM live_join_requests WHERE live_id=? AND "
+        "status='approved' ORDER BY id DESC LIMIT 1", (lid,)).fetchone()
+    return dict(r) if r else None
+
+
+def _live_viewer_rows(conn, lid):
+    """Viewers counted right now: heartbeat fresh, not left. The guest
+    heartbeats as a viewer too, so they're included; the host isn't."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=LIVE_VIEWER_WINDOW)).isoformat()
+    return conn.execute(
+        "SELECT v.*, u.name, u.avatar FROM live_viewers v "
+        "LEFT JOIN users u ON u.id=v.user_id WHERE v.live_id=? AND "
+        "v.left_at IS NULL AND v.last_seen_at>=? ORDER BY v.joined_at",
+        (lid, cutoff)).fetchall()
+
+
+def _live_viewer_count(conn, lid):
+    return len(_live_viewer_rows(conn, lid))
+
+
+def _live_signal(conn, live_id, from_id, to_id, kind, payload=""):
+    conn.execute(
+        "INSERT INTO live_signals(live_id, from_id, to_id, kind, "
+        "payload, created_at) VALUES(?,?,?,?,?,?)",
+        (live_id, from_id, to_id, kind, payload, now_iso()))
+
+
+def _drop_guest(conn, live, guest_id):
+    """Drop the on-camera guest back to watcher (no commit): settle
+    the join request and leave 'bye' signals so the guest's client and
+    every peer holding a guest connection tears it down at once."""
+    stamp = now_iso()
+    conn.execute(
+        "UPDATE live_join_requests SET status='left', decided_at=? "
+        "WHERE live_id=? AND user_id=? AND status='approved'",
+        (stamp, live["id"], guest_id))
+    _live_signal(conn, live["id"], guest_id, live["host_id"], "bye")
+    _live_signal(conn, live["id"], live["host_id"], guest_id, "bye")
+    for v in _live_viewer_rows(conn, live["id"]):
+        if v["user_id"] not in (guest_id, live["host_id"]):
+            _live_signal(conn, live["id"], guest_id, v["user_id"], "bye")
+
+
+def _live_access(request, lid, need_live=False):
+    """(user, live, err) for the /live/{lid} JSON endpoints. Mirrors
+    _participant_call: login first, 404 for unknown ids, and the
+    watch-permission rule for everything except bare existence."""
+    user = current_user(request)
+    if not user:
+        return None, None, JSONResponse({"ok": False, "error": "login"},
+                                        status_code=401)
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    conn.close()
+    if not live:
+        return None, None, JSONResponse({"ok": False,
+                                         "error": "not found"},
+                                        status_code=404)
+    if need_live and live["status"] != "live":
+        return None, None, JSONResponse({"ok": False,
+                                         "error": "This live has ended."},
+                                        status_code=409)
+    if not _live_can_watch(user, live, owner_on=is_owner(request)):
+        return None, None, JSONResponse(
+            {"ok": False, "error": "You can't watch this live."},
+            status_code=403)
+    return user, live, None
+
+
+def _live_comment_json(row, viewer_id, host_id):
+    return {
+        "id": row["id"], "user_id": row["user_id"],
+        "name": row["name"] or "Deleted user",
+        "avatar": avatar_url(row["avatar"] or ""),
+        "body": row["body"], "created_at": row["created_at"],
+        "mine": row["user_id"] == viewer_id,
+        "from_host": row["user_id"] == host_id,
+        "can_delete": row["user_id"] == viewer_id
+                      or viewer_id == host_id}
+
+
+def _live_person(uid):
+    u = get_user(uid) or {}
+    return {"id": uid, "name": u.get("name", "Deleted user"),
+            "avatar": avatar_url(u.get("avatar", ""))}
+
+
+def live_now_for(viewer_id, owner_on=False):
+    """Active lives this viewer may watch — the home 'Live now' strip.
+    Blocked pairs and private hosts' non-friends never appear."""
+    viewer = get_user(viewer_id)
+    if not viewer:
+        return []
+    conn = db()
+    _sweep_lives(conn)
+    rows = conn.execute(
+        "SELECT * FROM live_sessions WHERE status='live' "
+        "ORDER BY created_at DESC").fetchall()
+    out = []
+    for r in rows:
+        live = dict(r)
+        if not _live_can_watch(viewer, live, owner_on=owner_on):
+            continue
+        host = _live_person(live["host_id"])
+        out.append({"id": live["id"], "host_id": live["host_id"],
+                    "name": host["name"], "avatar": host["avatar"],
+                    "title": live["title"],
+                    "viewers": _live_viewer_count(conn, live["id"]),
+                    "is_self": live["host_id"] == viewer_id})
+    conn.close()
+    return out
+
+
+@app.post("/live/start")
+async def live_start(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    title = str(data.get("title") or "").strip()[:LIVE_TITLE_MAX] \
+        if isinstance(data, dict) else ""
+    conn = db()
+    _sweep_lives(conn)
+    # One live per host: starting a new one ends the old one first.
+    old = conn.execute(
+        "SELECT * FROM live_sessions WHERE host_id=? AND status='live'",
+        (user["id"],)).fetchone()
+    if old:
+        _end_live_row(conn, dict(old))
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO live_sessions(host_id, title, status, created_at, "
+        "host_seen_at) VALUES(?,?,'live',?,?)",
+        (user["id"], title, stamp, stamp))
+    lid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    if title:
+        flag_item("live_title", lid, user["id"], user["name"], title)
+    # Tell the host's friends (bell + phone push). notify() and the
+    # push gate both respect silence/block via notifications_allowed.
+    text = f"🔴 {user['name']} is live" + (f": {title}" if title else "")
+    for fid in friend_id_set(user["id"]):
+        notify(fid, "live", text, f"/live/{lid}", actor_id=user["id"])
+        if notifications_allowed(fid, user["id"]):
+            send_push(fid, f"🔴 {user['name']} is live",
+                      title or "Tap to watch now.", f"/live/{lid}",
+                      tag=f"live-{lid}", ttl=3600)
+    return JSONResponse({"ok": True, "id": lid, "url": f"/live/{lid}"})
+
+
+@app.get("/live/{lid}", response_class=HTMLResponse)
+async def live_page(request: Request, lid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if not live:
+        conn.close()
+        return redir("/home", "That live isn't available anymore.")
+    host = _live_person(live["host_id"])
+    owner_on = is_owner(request)
+    if live["status"] != "live":
+        conn.close()
+        return render(request, "live.html", {
+            "mode": "ended", "live": live, "host": host,
+            "hide_golive": True})
+    if not _live_can_watch(user, live, owner_on=owner_on):
+        conn.close()
+        # Same face as an ended live: nothing about the room leaks.
+        return render(request, "live.html", {
+            "mode": "unavailable", "live": live, "host": host,
+            "hide_golive": True})
+    guest_req = _live_guest_req(conn, lid)
+    conn.close()
+    guest = _live_person(guest_req["user_id"]) if guest_req else None
+    if user["id"] == live["host_id"]:
+        role = "host"
+    elif guest_req and guest_req["user_id"] == user["id"]:
+        role = "guest"
+    else:
+        role = "watcher"
+    boot = {"id": lid, "me": user["id"], "role": role,
+            "host": host, "guest": guest, "title": live["title"],
+            "created_at": live["created_at"]}
+    return render(request, "live.html", {
+        "mode": "live", "live": live, "host": host, "guest": guest,
+        "role": role,
+        "boot": json.dumps(boot).replace("</", "<\\/"),
+        "hide_golive": True})
+
+
+@app.post("/live/{lid}/end")
+async def live_end(request: Request, lid: int):
+    """Host ends the live. Takes no body so the page can fire it from
+    beforeunload with sendBeacon. Idempotent."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if not live:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if live["host_id"] != user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "Only the host can end this live."},
+            status_code=403)
+    _end_live_row(conn, live)
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/owner/live/{lid}/end")
+async def owner_live_end(request: Request, lid: int):
+    """Admin kill switch: the site owner ends ANY live (from the
+    owner panel's Live now section)."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if live:
+        _end_live_row(conn, live)
+        conn.commit()
+    conn.close()
+    return redir("/owner")
+
+
+@app.post("/live/{lid}/heartbeat")
+async def live_heartbeat(request: Request, lid: int):
+    """Presence: the host's heartbeat keeps the live from being swept;
+    a watcher's/guest's heartbeat is their live_viewers row (viewer
+    counts read rows fresh within LIVE_VIEWER_WINDOW)."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    conn = db()
+    stamp = now_iso()
+    if user["id"] == live["host_id"]:
+        conn.execute(
+            "UPDATE live_sessions SET host_seen_at=? WHERE id=?",
+            (stamp, lid))
+    else:
+        conn.execute(
+            "INSERT INTO live_viewers(live_id, user_id, joined_at, "
+            "last_seen_at) VALUES(?,?,?,?) ON CONFLICT(live_id, user_id) "
+            "DO UPDATE SET last_seen_at=excluded.last_seen_at, "
+            "left_at=NULL", (lid, user["id"], stamp, stamp))
+    count = _live_viewer_count(conn, lid)
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "viewers": count})
+
+
+@app.post("/live/{lid}/leave")
+async def live_leave(request: Request, lid: int):
+    """A watcher/guest closes the page (beacon-friendly, no body
+    needed): their viewer row is marked left; an on-camera guest is
+    dropped back to watcher, freeing the guest slot."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if live and user["id"] != live["host_id"]:
+        guest_req = _live_guest_req(conn, lid)
+        if guest_req and guest_req["user_id"] == user["id"]:
+            _drop_guest(conn, live, user["id"])
+        conn.execute(
+            "UPDATE live_viewers SET left_at=? WHERE live_id=? AND "
+            "user_id=?", (now_iso(), lid, user["id"]))
+        conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/live/{lid}/state")
+async def live_state(request: Request, lid: int):
+    """The watch page's 3s poll: room status, viewer count, the guest,
+    new comments since ?since_comment=, the host's pending join
+    requests, and my own join-request standing."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if not live:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    host = _live_person(live["host_id"])
+    if live["status"] != "live":
+        conn.close()
+        return JSONResponse({"ok": True, "status": "ended",
+                             "host": host, "title": live["title"]})
+    if not _live_can_watch(user, live, owner_on=is_owner(request)):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't watch this live."},
+            status_code=403)
+    try:
+        since = int(request.query_params.get("since_comment") or 0)
+    except (TypeError, ValueError):
+        since = 0
+    rows = conn.execute(
+        "SELECT lc.*, u.name, u.avatar FROM live_comments lc "
+        "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.live_id=? AND "
+        "lc.id>? ORDER BY lc.id ASC LIMIT 100", (lid, since)).fetchall()
+    comments = [_live_comment_json(dict(r), user["id"], live["host_id"])
+                for r in rows]
+    guest_req = _live_guest_req(conn, lid)
+    guest = _live_person(guest_req["user_id"]) if guest_req else None
+    viewer_rows = _live_viewer_rows(conn, lid)
+    is_host = user["id"] == live["host_id"]
+    is_guest = bool(guest_req and guest_req["user_id"] == user["id"])
+    out = {
+        "ok": True, "status": "live", "title": live["title"],
+        "host": host, "guest": guest,
+        "created_at": live["created_at"],
+        "viewers": len(viewer_rows),
+        "comments": comments,
+        "my_role": "host" if is_host else ("guest" if is_guest
+                                           else "watcher"),
+        "my_join": None, "pending_requests": [],
+    }
+    if is_host or is_guest:
+        # The people sending video need to know who is watching so
+        # they can open a peer to each new watcher.
+        out["viewer_list"] = [
+            {"id": v["user_id"], "name": v["name"] or "Deleted user",
+             "avatar": avatar_url(v["avatar"] or "")}
+            for v in viewer_rows]
+    if is_host:
+        prows = conn.execute(
+            "SELECT jr.*, u.name, u.avatar FROM live_join_requests jr "
+            "LEFT JOIN users u ON u.id=jr.user_id WHERE jr.live_id=? "
+            "AND jr.status='pending' ORDER BY jr.id ASC",
+            (lid,)).fetchall()
+        out["pending_requests"] = [
+            {"id": r["id"], "user_id": r["user_id"],
+             "name": r["name"] or "Deleted user",
+             "avatar": avatar_url(r["avatar"] or ""),
+             "created_at": r["created_at"]} for r in prows]
+    mine = conn.execute(
+        "SELECT * FROM live_join_requests WHERE live_id=? AND "
+        "user_id=? ORDER BY id DESC LIMIT 1",
+        (lid, user["id"])).fetchone()
+    if mine:
+        out["my_join"] = {"id": mine["id"], "status": mine["status"],
+                          "decided_at": mine["decided_at"]}
+    conn.close()
+    return JSONResponse(out)
+
+
+@app.post("/live/{lid}/comment")
+async def live_comment(request: Request, lid: int):
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict) or not data:
+        try:
+            form = await request.form()
+            data = {"body": form.get("body")}
+        except Exception:
+            data = {}
+    body = str(data.get("body") or "").strip()[:LIVE_COMMENT_MAX]
+    if not body:
+        return JSONResponse({"ok": False, "error": "Empty comment."},
+                            status_code=400)
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO live_comments(live_id, user_id, body, created_at) "
+        "VALUES(?,?,?,?)", (lid, user["id"], body, now_iso()))
+    cid = cur.lastrowid
+    conn.commit()
+    row = conn.execute(
+        "SELECT lc.*, u.name, u.avatar FROM live_comments lc "
+        "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.id=?",
+        (cid,)).fetchone()
+    conn.close()
+    flag_item("live_comment", cid, user["id"], user["name"], body)
+    return JSONResponse({"ok": True, "comment": _live_comment_json(
+        dict(row), user["id"], live["host_id"])})
+
+
+@app.post("/live/{lid}/comment/{cid}/delete")
+async def live_comment_delete(request: Request, lid: int, cid: int):
+    """The comment's author can delete it; so can the live's host —
+    hosts moderate their own live chat."""
+    user, live, err = _live_access(request, lid)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM live_comments WHERE id=? AND live_id=?",
+        (cid, lid)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if row["user_id"] != user["id"] and live["host_id"] != user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the author or the host can delete this."},
+            status_code=403)
+    conn.execute("DELETE FROM live_comments WHERE id=?", (cid,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/signal")
+async def live_signal_send(request: Request, lid: int):
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    kind = data.get("kind") if isinstance(data, dict) else None
+    if kind not in LIVE_SIGNAL_TYPES:
+        return JSONResponse({"ok": False, "error": "Bad signal kind."},
+                            status_code=400)
+    try:
+        to_id = int(data.get("to_id") or 0)
+    except (TypeError, ValueError):
+        to_id = 0
+    payload = data.get("payload")
+    if not isinstance(payload, str):
+        payload = json.dumps(payload or {})
+    if len(payload) > LIVE_MAX_PAYLOAD:
+        return JSONResponse({"ok": False, "error": "Signal too big."},
+                            status_code=400)
+    # Signals only travel between people in this room: the host, the
+    # on-camera guest, current watchers, and people with a join
+    # request in flight — never to an outsider, and never across a
+    # block. (The sender already passed _live_can_watch.)
+    conn = db()
+    allowed = {live["host_id"]}
+    guest_req = _live_guest_req(conn, lid)
+    if guest_req:
+        allowed.add(guest_req["user_id"])
+    for v in conn.execute(
+            "SELECT user_id FROM live_viewers WHERE live_id=? AND "
+            "left_at IS NULL", (lid,)).fetchall():
+        allowed.add(v["user_id"])
+    for v in conn.execute(
+            "SELECT user_id FROM live_join_requests WHERE live_id=? "
+            "AND status IN ('pending','approved')", (lid,)).fetchall():
+        allowed.add(v["user_id"])
+    if to_id == user["id"] or to_id not in allowed:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't in this live."},
+            status_code=403)
+    if blocked_either_way(user["id"], to_id):
+        conn.close()
+        return JSONResponse({"ok": False, "error": "Blocked."},
+                            status_code=403)
+    cur = conn.execute(
+        "INSERT INTO live_signals(live_id, from_id, to_id, kind, "
+        "payload, created_at) VALUES(?,?,?,?,?,?)",
+        (lid, user["id"], to_id, kind, payload, now_iso()))
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "id": sid})
+
+
+@app.get("/live/{lid}/signals")
+async def live_signals_poll(request: Request, lid: int):
+    """Deliver signals addressed to ME after ?since=<last id seen>,
+    in order, marked consumed on delivery — the calls pattern, made
+    point-to-point because a live room has many peers."""
+    user, live, err = _live_access(request, lid)
+    if err:
+        return err
+    try:
+        since = int(request.query_params.get("since") or 0)
+    except (TypeError, ValueError):
+        since = 0
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM live_signals WHERE live_id=? AND to_id=? AND "
+        "id>? ORDER BY id ASC LIMIT 200", (lid, user["id"], since)
+    ).fetchall()
+    if rows:
+        ids = [r["id"] for r in rows]
+        conn.execute(
+            "UPDATE live_signals SET consumed=1 WHERE id IN (%s)"
+            % ",".join("?" * len(ids)), ids)
+        conn.commit()
+    fresh = conn.execute(
+        "SELECT status FROM live_sessions WHERE id=?", (lid,)).fetchone()
+    conn.close()
+    sigs = []
+    for r in rows:
+        payload = r["payload"]
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            pass
+        sigs.append({"id": r["id"], "from_id": r["from_id"],
+                     "kind": r["kind"], "payload": payload,
+                     "created_at": r["created_at"]})
+    return JSONResponse({
+        "ok": True,
+        "status": fresh["status"] if fresh else live["status"],
+        "signals": sigs})
+
+
+@app.post("/live/{lid}/join-request")
+async def live_join_request(request: Request, lid: int):
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if user["id"] == live["host_id"]:
+        return JSONResponse(
+            {"ok": False, "error": "You're the host of this live."},
+            status_code=400)
+    conn = db()
+    guest_req = _live_guest_req(conn, lid)
+    if guest_req and guest_req["user_id"] == user["id"]:
+        conn.close()
+        return JSONResponse({"ok": True, "already_guest": True})
+    pending = conn.execute(
+        "SELECT * FROM live_join_requests WHERE live_id=? AND "
+        "user_id=? AND status='pending' ORDER BY id DESC LIMIT 1",
+        (lid, user["id"])).fetchone()
+    if pending:
+        conn.close()
+        return JSONResponse({"ok": True, "request": {
+            "id": pending["id"], "status": "pending"}})
+    last = conn.execute(
+        "SELECT * FROM live_join_requests WHERE live_id=? AND "
+        "user_id=? ORDER BY id DESC LIMIT 1",
+        (lid, user["id"])).fetchone()
+    if last and last["status"] == "declined" and last["decided_at"]:
+        decided = _parse_ts(last["decided_at"])
+        if decided:
+            left = LIVE_JOIN_COOLDOWN - int(
+                (datetime.now(timezone.utc) - decided).total_seconds())
+            if left > 0:
+                conn.close()
+                return JSONResponse(
+                    {"ok": False, "cooldown": True,
+                     "error": f"Take a breather — you can ask again "
+                              f"in {left}s."}, status_code=429)
+    cur = conn.execute(
+        "INSERT INTO live_join_requests(live_id, user_id, status, "
+        "created_at) VALUES(?,?,'pending',?)",
+        (lid, user["id"], now_iso()))
+    rid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "request": {"id": rid,
+                                                 "status": "pending"}})
+
+
+@app.post("/live/{lid}/join-decide")
+async def live_join_decide(request: Request, lid: int):
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False, "error": "Only the host can decide."},
+            status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        rid = int(data.get("request_id") or 0)
+    except (TypeError, ValueError):
+        rid = 0
+    approve = bool(data.get("approve")) if isinstance(data, dict) \
+        else False
+    conn = db()
+    req = conn.execute(
+        "SELECT * FROM live_join_requests WHERE id=? AND live_id=?",
+        (rid, lid)).fetchone()
+    if not req or req["status"] != "pending":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That request is already settled."},
+            status_code=409)
+    if approve and _live_guest_req(conn, lid):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Someone is already on camera — only one guest "
+                      "at a time."}, status_code=409)
+    conn.execute(
+        "UPDATE live_join_requests SET status=?, decided_at=? "
+        "WHERE id=?",
+        ("approved" if approve else "declined", now_iso(), rid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/guest-leave")
+async def live_guest_leave(request: Request, lid: int):
+    """The guest steps down (or the host removes them): the slot
+    frees, peers tear the guest down via 'bye' signals."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    conn = db()
+    guest_req = _live_guest_req(conn, lid)
+    if not guest_req:
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "Nobody is on camera right now."},
+                            status_code=409)
+    guest_id = guest_req["user_id"]
+    if user["id"] == live["host_id"]:
+        try:
+            want = int(data.get("user_id") or guest_id) \
+                if isinstance(data, dict) else guest_id
+        except (TypeError, ValueError):
+            want = guest_id
+        if want != guest_id:
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "That person isn't the guest."},
+                status_code=400)
+    elif user["id"] != guest_id:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the guest or the host can do that."},
+            status_code=403)
+    _drop_guest(conn, live, guest_id)
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
 # ---------------- notifications ----------------
 @app.get("/notifications", response_class=HTMLResponse)
 async def notifications_page(request: Request):
@@ -4916,6 +5718,31 @@ async def owner_dashboard(request: Request):
             "status": r["status"], "created_at": fancy_time(r["created_at"]),
         })
 
+    # --- go live: rooms on air right now + the recently ended ---
+    _sweep_lives(conn)
+    live_now = []
+    for r in conn.execute(
+            "SELECT ls.*, u.name AS host_name FROM live_sessions ls "
+            "LEFT JOIN users u ON u.id=ls.host_id WHERE ls.status='live' "
+            "ORDER BY ls.created_at DESC").fetchall():
+        live_now.append({
+            "id": r["id"], "host_id": r["host_id"],
+            "host_name": r["host_name"] or "Deleted user",
+            "title": r["title"],
+            "created_at": fancy_time(r["created_at"]),
+            "viewers": _live_viewer_count(conn, r["id"])})
+    live_recent = []
+    for r in conn.execute(
+            "SELECT ls.*, u.name AS host_name FROM live_sessions ls "
+            "LEFT JOIN users u ON u.id=ls.host_id WHERE ls.status='ended' "
+            "ORDER BY ls.ended_at DESC LIMIT 10").fetchall():
+        live_recent.append({
+            "id": r["id"], "host_id": r["host_id"],
+            "host_name": r["host_name"] or "Deleted user",
+            "title": r["title"],
+            "created_at": fancy_time(r["created_at"]),
+            "ended_at": fancy_time(r["ended_at"] or "")})
+
     today = datetime.now(timezone.utc).date().isoformat()
     stats = {
         "users": conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"],
@@ -4939,7 +5766,8 @@ async def owner_dashboard(request: Request):
     return render(request, "owner/dashboard.html", {
         "users": users, "friend_activity": friend_activity,
         "flags": flags, "pages": pages, "stats": stats,
-        "verifications": verifications})
+        "verifications": verifications,
+        "live_now": live_now, "live_recent": live_recent})
 
 
 @app.post("/owner/flag/{fid}/dismiss")
