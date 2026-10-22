@@ -20,16 +20,15 @@ rebuild it fresh for HERE.
 
 - users(id, name, email UNIQUE, pw_hash, bio DEFAULT '', avatar DEFAULT '', background TEXT DEFAULT '' (relative path under uploads/backgrounds/, e.g. 'backgrounds/abc123.jpg'; '' = default site background), last_seen TEXT, last_seen_at TEXT (presence heartbeat, UTC ISO; refreshed by touch_presence() on authenticated activity, throttled to one write per ~30s per user), status_mode TEXT DEFAULT 'auto' ('auto'|'online'|'away'|'offline'|'hidden'), inbox_status INTEGER DEFAULT 1 (0 = no status bolt in Messages), is_verified INTEGER DEFAULT 0, verification_status TEXT DEFAULT 'none' ('none'|'pending'|'approved'|'declined'), spot_name TEXT NULL (owner's custom profile title — "Your Spot" name; NULL/'' = not set), spot_text_color TEXT NULL (#rrggbb profile text color), spot_card_color TEXT NULL (#rrggbb card/comment-bubble tint), spot_card_opacity INTEGER NULL (30–100; bubble solidity percent), private_profile INTEGER NOT NULL DEFAULT 0 (1 = private: profile + posts are friends-only; owner context exempt), created_at)
 - sessions(token PRIMARY KEY, user_id, created_at)
-- posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), privacy TEXT DEFAULT 'public' ('public'|'friends'|'onlyme'), pinned INTEGER DEFAULT 0, shared_post_id INTEGER NULL (points at original post for share rows), created_at)
+- posts(id, user_id, page_id NULL, kind TEXT ('text'|'photo'|'feeling'|'clothes'|'link'|'video'|'audio'), body TEXT DEFAULT '', feeling TEXT DEFAULT '', link_url TEXT DEFAULT '', video_url TEXT DEFAULT '', media TEXT DEFAULT '' (relative upload path), privacy TEXT DEFAULT 'public' ('public'|'friends'|'onlyme'), pinned INTEGER DEFAULT 0, shared_post_id INTEGER NULL (points at original post for share rows), music_video_id TEXT DEFAULT '' (YouTube video id of the attached song; '' = no song), music_title TEXT DEFAULT '', music_artist TEXT DEFAULT '', music_thumb TEXT DEFAULT '' (oEmbed snapshot at attach time), music_start INTEGER DEFAULT 0 (seconds into the song where wall playback begins), created_at)
 - hidden_posts(user_id, post_id, created_at) — UNIQUE(user_id, post_id); hides a post row from that user's feeds only
 - post_hidden_from(post_id, user_id, created_at) — UNIQUE(post_id, user_id); per-post custom audience: these users must NOT see the post (enforced everywhere via can_view_post; author + owner context exempt)
 - post_tags(id, post_id, user_id NULL, page_id NULL, created_at) — friends/pages tagged in a post; renders "— with …" / tagged page names; tagging never overrides privacy or the hide-from list
 - comments(id, post_id, user_id, body, parent_id INTEGER NULL (NULL = top-level comment; otherwise the id of the TOP-LEVEL comment this reply hangs under — replies never nest deeper than one level), reply_to_id INTEGER NULL (the exact comment the author tapped Reply on; when it differs from parent_id the reply renders with a linked "@Name" prefix naming that comment's author — Facebook-style flattening), created_at)
 - post_comment_blocks(post_id, user_id, created_at) — UNIQUE(post_id, user_id); per-post comment block: the post's author has stopped this user from adding NEW comments/replies on this post only. Existing comments are untouched; the block applies nowhere else on the site. Enforced in POST /post/{id}/comment (top-level and replies alike)
 - likes(post_id, user_id, kind TEXT DEFAULT 'like' ('like'|'love'|'laugh'|'wow'|'sad'|'angry'), created_at) — UNIQUE(post_id, user_id)
-- stories(id, user_id, media (relative upload path), caption DEFAULT '', created_at, expires_at, overlay_text DEFAULT '', overlay_color DEFAULT '', overlay_pos DEFAULT 'bottom' ('top'|'middle'|'bottom'), music_kind ('catalog'|'upload'|NULL), music_ref DEFAULT '' (catalog: track id as text; upload: uploads-relative path), music_title DEFAULT '', music_artist DEFAULT '' (attribution snapshot), music_start INTEGER DEFAULT 0 (seconds), music_len INTEGER DEFAULT 15 (clip seconds, 5–30), music_volume INTEGER DEFAULT 80 (0–100), music_mute_orig INTEGER DEFAULT 0) — per-story lifetime chosen at post time (5m/10m/15m/1h/custom hours/24h default; server clamps the total to 5–1440 minutes), friends + self only; expired rows lazily pruned by expires_at
-- music_tracks(id, title, artist, genre, file_path (static-relative, under static/music/), license_note, attribution, use_count DEFAULT 0, created_at) — built-in story-music catalog; seeded once from MUSIC_SEED only when the table is empty and only for files present on disk. Every track is CC0 / public domain / CC-BY (seed set: 8 Kevin MacLeod tracks, CC BY 4.0, incompetech.com). use_count bumps when a story posts with the track
-- story_music_uploads(id, user_id, file_path (uploads-relative, under uploads/story_music/), title, created_at) — MP3s a user uploaded for story music (max 10MB); reusable on later stories. A story may reference an 'upload' file only when the poster owns it (a story_music_uploads row, or the media of their own kind='audio' post) — enforced server-side in POST /stories/new
+- stories(id, user_id, media (relative upload path), caption DEFAULT '', created_at, expires_at, overlay_text DEFAULT '', overlay_color DEFAULT '', overlay_pos DEFAULT 'bottom' ('top'|'middle'|'bottom'), music_kind ('youtube'|NULL — legacy rows may still say 'catalog'/'upload' and render silent), music_ref DEFAULT '' (the YouTube video id when kind='youtube'), music_title DEFAULT '', music_artist DEFAULT '', music_thumb DEFAULT '' (attribution/title snapshot from oEmbed), music_start INTEGER DEFAULT 0 (seconds), music_len INTEGER DEFAULT 15 (clip seconds, 5–30), music_volume INTEGER DEFAULT 80 (0–100), music_mute_orig INTEGER DEFAULT 0) — per-story lifetime chosen at post time (5m/10m/15m/1h/custom hours/24h default; server clamps the total to 5–1440 minutes), friends + self only; expired rows lazily pruned by expires_at. REWATCH RULE: stories are rewatchable without limit while unexpired — story_views is write-only analytics (the owner's viewers list) and never gates the tray, the queue, or the viewer; the viewer always starts at the tapped user's OLDEST active story, seen stories are never skipped, and the end card offers "↻ Watch again"
+- music_tracks(...) / story_music_uploads(...) — LEGACY tables from the removed preset-catalog / MP3-upload era. The tables are still created so old DBs keep their shape, but NOTHING seeds or reads them and the preset MP3 files (static/music/) are deleted. Story/post music is YouTube-only (see "YouTube music" below)
 - story_views(story_id, user_id, viewed_at) — UNIQUE(story_id, user_id)
 - friendships(id, user_id, friend_id, status TEXT 'pending'|'accepted', created_at) — one row per direction is NOT needed; single row: user_id=requester, friend_id=target. accepted => mutual.
 - messages(id, sender_id, receiver_id, body, is_read INTEGER DEFAULT 0, created_at)
@@ -154,7 +153,7 @@ Go Live (WebRTC, DB-signaled — same architecture as 1:1 calls; media is phone-
 | POST | /login | fields: email, password | -> redirect /home |
 | GET | /logout | | -> redirect /login |
 | GET | /home | home.html | posts (post-card dicts, newest first: friends' posts + public posts), contacts (friends: id,name,avatar,online), stories_tray (self + friends' active stories: user_id,name,avatar,is_self,first_id (= the user's OLDEST active story — the tray tile opens the full-screen viewer there),count,all_viewed) |
-| POST | /posts | fields: kind, privacy ('public'|'friends'|'onlyme'), body, feeling, link_url, video_url, media (file), hide_from (friend ids, repeated), tags_json (JSON [{kind:'user'|'page', id, name}] from the composer @ picker — server re-validates: real friend / owned-or-member page AND the literal '@Name' must appear in body), tag_users/tag_pages (legacy checkbox fields, still accepted) | -> redirect /home; tagged friends get a 'tag' notification |
+| POST | /posts | fields: kind, privacy ('public'|'friends'|'onlyme'), body, feeling, link_url, video_url, media (file), music_url / music_video_id + music_start (optional YouTube song — same resolution as stories; a non-embeddable song fails the save with the "can't be played inside HERE" flash), hide_from (friend ids, repeated), tags_json (JSON [{kind:'user'|'page', id, name}] from the composer @ picker — server re-validates: real friend / owned-or-member page AND the literal '@Name' must appear in body), tag_users/tag_pages (legacy checkbox fields, still accepted) | -> redirect /home; tagged friends get a 'tag' notification |
 | GET | /api/tag-suggest | ?q= partial name | login required; -> JSON {ok, results: [{kind:'user'|'page', id, name, avatar}]} — current user's friends + pages they own/belong to, case-insensitive substring match on name, friends first, max 8; 401 JSON when logged out |
 | GET | /post/{id} | post.html | post (post-card dict + comments: top-level comments oldest first, each {id,user_id,author_name,author_avatar,body,body_html,created_at,can_delete,can_block,reply_prefix ({id,name} or None),replies[]} with replies nested oldest first. can_delete = viewer is the comment author, the post author, or owner context; can_block = viewer is the post author and the comment is someone else's. Comments (and replies) authored by users in a block relationship with the viewer (either direction) are NOT rendered for that viewer. A viewer on the post's comment-block list gets the "🚫 The author of this post has blocked you from commenting here." note instead of the comment box and no Reply links) |
 | POST | /post/{id}/comment | fields: body, parent_id (optional — the comment being replied to) | -> redirect /post/{id}. With parent_id: creates a reply flattened onto that comment's top-level parent (reply_to_id = the tapped comment), scanned by moderation like a comment, and notifies the replied-to comment's author (kind 'reply', "X replied to your comment.") unless it's their own reply. Without parent_id: top-level comment; notifies the post author (kind 'comment') unless it's their own post. A user on the post's comment-block list is refused (redirect with the blocked flash) for comments AND replies |
@@ -163,10 +162,12 @@ Go Live (WebRTC, DB-signaled — same architecture as 1:1 calls; media is phone-
 | POST | /post/{id}/comment-unblock | field: user_id | post author only (403 JSON otherwise). Removes the block. -> redirect /post/{id} with flash. The author's blocked list + Unblock buttons live in the post card's "🚫 Blocked (N)" sheet (post.blocked_commenters) |
 | POST | /post/{id}/like | | toggle 'like' (removes any existing reaction); -> JSON {ok, likes, liked} (share ids resolve to the original; privacy-gated) |
 | POST | /post/{id}/react | field: kind ('like'|'love'|'laugh'|'wow'|'sad'|'angry') | set/change reaction; same kind twice removes it; -> JSON {ok, likes, reacted, kind, top:[{emoji,count}]} |
-| GET | /stories/new | story_new.html | story composer (catalog = music_tracks trending-first, my_music = the user's story_music_uploads + their audio-post files) |
-| POST | /stories/new | fields: media (file: jpg,png,gif,webp,mp4,mov,webm, max 25MB), caption (max 280), overlay_text (max 80), overlay_color (#rrggbb; invalid -> #ffffff when text present), overlay_pos ('top'|'middle'|'bottom'), lifetime ('5m'|'10m'|'15m'|'1h'|'custom' + custom_hours, or '24h'; total clamped 5–1440 min), music_kind ('catalog'|'upload'), music_ref, music_file (optional fresh audio upload, max 10MB -> uploads/story_music/ + story_music_uploads row; beats a picked track), music_start (sec, 0–3600), music_len (5–30), music_volume (0–100), music_mute_orig ('1') | friends-only; caption + overlay text moderation-scanned together (flag, never block); catalog refs snapshot title/artist + bump use_count; upload refs must be owned by the poster or the music is silently dropped; -> redirect /home |
-| GET | /stories/queue | JSON {ok, groups} | full-screen viewer queue: groups = own first, then friends by latest story (tray order); stories oldest->newest per group; each story {id,media,is_video,caption,created_at,expires_at,mine,seen,overlay {text,color,pos}|null,music {kind,url,title,artist,start,len,volume,mute_orig}|null}; only own + friends' unexpired stories |
-| GET | /story/{id} | story.html | full-screen viewer shell (author/friends only, unexpired; else post_gone); entering marks the story viewed (INSERT OR IGNORE story_views); the viewer JS walks /stories/queue starting at this id |
+| GET | /stories/new | story_new.html | story composer (YouTube music picker; no context lists anymore) |
+| POST | /music/preview | JSON {url} -> JSON {ok, video_id, title, artist, thumb} or {ok:false, error} | login required; extracts the video id (youtube_id_from) and gates on YouTube oEmbed (401/404/non-200 = not embeddable -> "That video can't be played inside HERE — try a different upload of the song.") |
+| GET | /music/popular | JSON {ok, songs:[{video_id,title,artist,thumb,uses}]} | login required; top ~10 YouTube songs by attachment count across stories (kind='youtube') + posts (music_video_id), uses >= 1 only |
+| POST | /stories/new | fields: media (file: jpg,png,gif,webp,mp4,mov,webm, max 25MB), caption (max 280), overlay_text (max 80), overlay_color (#rrggbb; invalid -> #ffffff when text present), overlay_pos ('top'|'middle'|'bottom'), lifetime ('5m'|'10m'|'15m'|'1h'|'custom' + custom_hours, or '24h'; total clamped 5–1440 min), music_url (pasted YouTube link) OR music_video_id (Popular pick — snapshot copied from an existing attachment, id shape re-checked), music_start (sec, 0–3600), music_len (5–30), music_volume (0–100), music_mute_orig ('1') | friends-only; caption + overlay text moderation-scanned together (flag, never block); music is YouTube-only and resolved BEFORE the media is saved — a song that can't be embedded fails the whole save (redirect back with the error, NO story created); legacy music_kind/music_ref/music_file fields are ignored entirely | -> redirect /home |
+| GET | /stories/queue | JSON {ok, groups} | full-screen viewer queue: groups = own first, then friends by latest story (tray order); stories oldest->newest per group; each story {id,media,is_video,caption,created_at,expires_at,mine,seen,overlay {text,color,pos}|null,music {kind:'youtube',video_id,title,artist,thumb,start,len,volume,mute_orig}|null (legacy catalog/upload stories -> null)}; only own + friends' unexpired stories; seen NEVER filters anything out (rewatch) |
+| GET | /story/{id} | story.html | full-screen viewer shell (author/friends only, unexpired; else post_gone); entering marks the story viewed (INSERT OR IGNORE story_views — analytics only); the viewer JS walks /stories/queue starting at this id; progress segments are tappable (jump to that story); the end card has "↻ Watch again" (restarts the queue); YouTube music plays in a VISIBLE mini player (200x113, bottom-left) via the IFrame API, segment loop/pause enforced client-side |
 | POST | /story/{id}/view | | JSON {ok}; marks the story viewed for the caller (idempotent); 404 JSON when the story isn't viewable by them |
 | GET | /story/{id}/viewers | | JSON {ok, viewers:[{id,name,avatar,viewed_at,when}]} — story owner only (404 otherwise); excludes the owner's own view row |
 | POST | /story/{id}/delete | | own story or owner; -> redirect /home |
@@ -274,6 +275,8 @@ kind/box anymore: any http(s) URL pasted in the body renders as a clickable
 link, and a YouTube/Vimeo URL in the body auto-embeds under the post. The
 link_url/video_url form fields are still accepted server-side (back-compat;
 old kind='link'/'video' posts render as before, incl. their 🔗 line/embed).
+Every wall post may also carry a YouTube song via the "🎵 Add music"
+picker (music_url / music_video_id / music_start — see "YouTube music").
 All POST to /posts (or /page/{id}/post
 when on a page, with hidden page context handled by the route itself).
 
@@ -303,3 +306,49 @@ chunks by save_upload (never fully in RAM). Uploads are served via the
 /uploads StaticFiles mount, which supports HTTP Range (video seek/streaming).
 
 Health check route: GET /healthz -> {"ok": true}.
+
+## YouTube music (stories + post wall)
+
+Music on HERE is YouTube-only: songs stream through YouTube's official
+embedded (IFrame) player — the artist's own upload under YouTube's
+licenses. There is NO preset catalog and NO MP3-upload path anymore
+(the Kevin MacLeod preset pack and the My Music upload were removed at
+the owner's order; the music_tracks / story_music_uploads tables remain
+as unused legacy). Spotify/Apple are never integrated (their terms
+forbid this use) and audio is never scraped or self-hosted.
+
+Attach flow (identical for the story composer and the wall composer):
+the user pastes a YouTube link (or taps a "🔥 Popular on HERE" row),
+the client asks POST /music/preview, the server extracts the video id
+with youtube_id_from() (bare id, watch, youtu.be, music.youtube.com,
+shorts, embed, live, m. — candidate must match ^[A-Za-z0-9_-]{11}$)
+and gates on youtube_oembed() (stdlib urllib, ~5s timeout; 401/404 =
+not embeddable). At save time _resolve_music() re-validates: a pasted
+link re-runs oEmbed; an id-only Popular pick re-checks the id shape
+and copies the title/artist/thumb snapshot from an existing attachment
+of the same video. A song that can't be embedded FAILS the save (no
+story/post is created) with the flash "That video can't be played
+inside HERE — try a different upload of the song." Only the validated
+11-char id + snapshot are ever stored, so no arbitrary URL can become
+an iframe src. Shared client wiring (hereLoadYT / hereMusicPicker)
+lives in base.html; the picker markup pattern (.music-picker with
+.mp-* hooks) is the same in story_new.html and home.html.
+
+Playback:
+- Story viewer: for kind='youtube' a VISIBLE mini player (200x113,
+  bottom-left, above the viewers bar, with a 🎵 title — artist label)
+  loads the id, seeks to music_start, sets music_volume, and plays;
+  a 250ms tick loops the segment under long video stories and pauses
+  it at the segment end otherwise; hold-to-pause pauses it; advancing
+  or closing destroys it. Photo-story display time stays the clip
+  length clamped to 5–30s. If audible autoplay is blocked, the 🔊
+  tap-for-sound chip appears and tapping plays + sets the volume.
+- Post wall: post_card.html renders a music bar (64px thumbnail,
+  🎵 title — artist, ▶/⏸). The first tap lazily creates the player in
+  a visible 16:9 area in the card (height capped at 200px) and plays
+  from music_start; only one post plays at a time (starting another
+  destroys the previous player). Unplayed posts load no iframes.
+  A bare YouTube link pasted in post TEXT still auto-embeds as before
+  — that behavior is separate and unchanged.
+- User audio POSTS (kind='audio' MP3 uploads) are a post type and are
+  untouched by all of the above.

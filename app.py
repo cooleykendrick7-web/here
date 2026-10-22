@@ -21,7 +21,9 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
+import urllib.error
+import urllib.request
+from urllib.parse import parse_qs, quote, urlparse
 
 import bcrypt
 from fastapi import FastAPI, HTTPException, Request, UploadFile
@@ -83,43 +85,6 @@ STORY_LIFETIME_PRESETS = {"5m": 5, "10m": 10, "15m": 15, "1h": 60,
                           "24h": 24 * 60}
 STORY_MIN_MINUTES = 5
 STORY_MAX_MINUTES = 24 * 60
-STORY_MUSIC_MAX_MB = 10
-STORY_MUSIC_LENS = (5, 10, 15, 30)
-# Built-in story-music catalog seed. Every track is CC0, public domain,
-# or CC-BY with the attribution stored alongside; files live in
-# static/music/ and a track is only seeded when its file is present.
-# Kevin MacLeod tracks: CC BY 4.0 (incompetech.com).
-_KM_ATTR = ("Kevin MacLeod (incompetech.com) — Licensed under Creative "
-            "Commons: By Attribution 4.0 License "
-            "http://creativecommons.org/licenses/by/4.0/")
-MUSIC_SEED = [
-    {"file_path": "music/carefree.mp3", "title": "Carefree",
-     "artist": "Kevin MacLeod", "genre": "Happy",
-     "license": "CC BY 4.0", "attribution": _KM_ATTR},
-    {"file_path": "music/investigations.mp3", "title": "Investigations",
-     "artist": "Kevin MacLeod", "genre": "Mystery",
-     "license": "CC BY 4.0", "attribution": _KM_ATTR},
-    {"file_path": "music/lobby-time.mp3", "title": "Lobby Time",
-     "artist": "Kevin MacLeod", "genre": "Jazz",
-     "license": "CC BY 4.0", "attribution": _KM_ATTR},
-    {"file_path": "music/monkeys-spinning-monkeys.mp3",
-     "title": "Monkeys Spinning Monkeys",
-     "artist": "Kevin MacLeod", "genre": "Comedy",
-     "license": "CC BY 4.0", "attribution": _KM_ATTR},
-    {"file_path": "music/sneaky-snitch.mp3", "title": "Sneaky Snitch",
-     "artist": "Kevin MacLeod", "genre": "Comedy",
-     "license": "CC BY 4.0", "attribution": _KM_ATTR},
-    {"file_path": "music/merry-go.mp3", "title": "Merry Go",
-     "artist": "Kevin MacLeod", "genre": "Happy",
-     "license": "CC BY 4.0", "attribution": _KM_ATTR},
-    {"file_path": "music/quirky-dog.mp3", "title": "Quirky Dog",
-     "artist": "Kevin MacLeod", "genre": "Comedy",
-     "license": "CC BY 4.0", "attribution": _KM_ATTR},
-    {"file_path": "music/local-forecast-elevator.mp3",
-     "title": "Local Forecast – Elevator",
-     "artist": "Kevin MacLeod", "genre": "Chill",
-     "license": "CC BY 4.0", "attribution": _KM_ATTR},
-]
 ONLINE_MINUTES = 5
 
 for _d in ("avatars", "posts", "pages", "backgrounds"):
@@ -258,6 +223,13 @@ def init_db():
         c.execute("ALTER TABLE posts ADD COLUMN shared_post_id INTEGER")
     if "page_id" not in _post_cols:
         c.execute("ALTER TABLE posts ADD COLUMN page_id INTEGER")
+    # --- post music: a YouTube song attached to the post (safe) ---
+    for _mc in ("music_video_id", "music_title", "music_artist",
+                "music_thumb"):
+        if _mc not in _post_cols:
+            c.execute(f"ALTER TABLE posts ADD COLUMN {_mc} TEXT DEFAULT ''")
+    if "music_start" not in _post_cols:
+        c.execute("ALTER TABLE posts ADD COLUMN music_start INTEGER DEFAULT 0")
     # --- stories (safe on existing DBs) ---
     c.execute("""CREATE TABLE IF NOT EXISTS stories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -288,7 +260,8 @@ def init_db():
             ("music_start", "ALTER TABLE stories ADD COLUMN music_start INTEGER DEFAULT 0"),
             ("music_len", "ALTER TABLE stories ADD COLUMN music_len INTEGER DEFAULT 15"),
             ("music_volume", "ALTER TABLE stories ADD COLUMN music_volume INTEGER DEFAULT 80"),
-            ("music_mute_orig", "ALTER TABLE stories ADD COLUMN music_mute_orig INTEGER DEFAULT 0")):
+            ("music_mute_orig", "ALTER TABLE stories ADD COLUMN music_mute_orig INTEGER DEFAULT 0"),
+            ("music_thumb", "ALTER TABLE stories ADD COLUMN music_thumb TEXT DEFAULT ''")):
         if _col not in _story_cols:
             c.execute(_ddl)
     # Backfill: any story with no expiry gets created_at + 24h (the old
@@ -303,7 +276,10 @@ def init_db():
             _exp = now_iso()
         c.execute("UPDATE stories SET expires_at=? WHERE id=?",
                   (_exp, _r["id"]))
-    # --- story music catalog + user music uploads (safe) ---
+    # --- legacy story-music tables (kept, unused) ---
+    # The preset catalog + MP3-upload era left these two tables behind.
+    # They are created only so old DBs keep their shape; nothing seeds
+    # or reads them anymore — story/post music is YouTube-only now.
     c.execute("""CREATE TABLE IF NOT EXISTS music_tracks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL, artist TEXT NOT NULL DEFAULT '',
@@ -314,23 +290,6 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL, file_path TEXT NOT NULL DEFAULT '',
         title TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
-    # Seed the catalog per track: insert any MUSIC_SEED track whose file
-    # actually shipped in static/music/ and that has no row yet (matched
-    # by file_path). Safe to re-run on every boot — it tops up tracks
-    # whose files landed after the first boot, never duplicates an
-    # existing file_path, and never touches existing rows.
-    for _t in MUSIC_SEED:
-        if not os.path.isfile(os.path.join(BASE, "static", _t["file_path"])):
-            continue
-        if c.execute("SELECT 1 FROM music_tracks WHERE file_path=?",
-                     (_t["file_path"],)).fetchone():
-            continue
-        c.execute(
-            "INSERT INTO music_tracks(title, artist, genre, file_path, "
-            "license_note, attribution, use_count, created_at) "
-            "VALUES(?,?,?,?,?,?,0,?)",
-            (_t["title"], _t["artist"], _t["genre"], _t["file_path"],
-             _t["license"], _t["attribution"], now_iso()))
     # --- reactions: likes.kind (safe on existing DBs) ---
     _like_cols = [r["name"] for r in c.execute("PRAGMA table_info(likes)").fetchall()]
     if "kind" not in _like_cols:
@@ -1485,6 +1444,14 @@ def post_card(p, viewer, owner_on=False):
         "embed_url": (video_embed_url(p["video_url"])
                       or video_embed_url(p["link_url"])
                       or first_embed_in_text(p["body"])),
+        # Attached song (YouTube): rendered as a music bar with a lazy
+        # player; the snapshot fields ride on the post row itself.
+        "music": ({"video_id": p.get("music_video_id"),
+                   "title": p.get("music_title") or "",
+                   "artist": p.get("music_artist") or "",
+                   "thumb": p.get("music_thumb") or "",
+                   "start": p.get("music_start") or 0}
+                  if p.get("music_video_id") else None),
         "created_at": fancy_time(p["created_at"]),
         "likes": likes, "liked": liked, "comments_count": cc,
         "my_reaction": my_reaction, "reactions_top": reactions_top,
@@ -1937,6 +1904,17 @@ def create_post_from_form(user, form, page_id=None):
                       and "vimeo" not in video_url):
         return None, "Video URL must be a YouTube or Vimeo link."
 
+    # --- music: a YouTube song may ride along on any post kind. Same
+    # rule as stories: a song that can't be embedded fails the save. ---
+    try:
+        music = _resolve_music(form)
+    except ValueError as e:
+        return None, str(e)
+    try:
+        music_start = max(0, min(3600, int(form.get("music_start") or 0)))
+    except (TypeError, ValueError):
+        music_start = 0
+
     media_file = form.get("media")
     allowed = IMG_EXTS | AUD_EXTS | VID_EXTS
     if kind in ("photo", "clothes"):
@@ -1957,9 +1935,17 @@ def create_post_from_form(user, form, page_id=None):
     conn = db()
     cur = conn.execute(
         "INSERT INTO posts(user_id, page_id, kind, body, feeling, link_url, "
-        "video_url, media, privacy, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "video_url, media, privacy, music_video_id, music_title, "
+        "music_artist, music_thumb, music_start, created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], page_id, kind, body, feeling, link_url, video_url,
-         media, privacy, now_iso()))
+         media, privacy,
+         music["video_id"] if music else "",
+         music["title"] if music else "",
+         music["artist"] if music else "",
+         music["thumb"] if music else "",
+         music_start if music else 0,
+         now_iso()))
     pid = cur.lastrowid
     conn.commit()
     conn.close()
@@ -2433,80 +2419,119 @@ def _can_view_story(user, s):
     return s["user_id"] in friend_id_set(user["id"])
 
 
-# ---- story music helpers ----
-def _music_catalog():
-    """Built-in licensed catalog, trending first (most used, then A-Z)."""
-    conn = db()
-    rows = conn.execute(
-        "SELECT * FROM music_tracks ORDER BY use_count DESC, title ASC").fetchall()
-    conn.close()
-    return [{"id": r["id"], "title": r["title"], "artist": r["artist"],
-             "genre": r["genre"], "url": "/static/" + r["file_path"],
-             "attribution": r["attribution"],
-             "license": r["license_note"]} for r in rows]
+# ---- YouTube music helpers ----
+# Story/post music is YouTube-only: the song streams through YouTube's
+# own embedded player (the artist's official upload, YouTube's license).
+# Only a strictly-validated 11-char video id is ever stored or embedded,
+# so a pasted link can never turn into an arbitrary iframe.
+_YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+MUSIC_EMBED_ERR = ("That video can't be played inside HERE — "
+                   "try a different upload of the song.")
 
 
-def _my_music(user_id):
-    """Music a user may attach: their story-music uploads plus the audio
-    files from their own audio posts. Each: {ref, title, url} where ref
-    is the uploads-relative path stored on the story."""
-    conn = db()
-    out, seen = [], set()
-    for r in conn.execute(
-            "SELECT file_path, title FROM story_music_uploads "
-            "WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall():
-        if r["file_path"] in seen:
-            continue
-        seen.add(r["file_path"])
-        out.append({"ref": r["file_path"], "title": r["title"] or "My music",
-                    "url": "/uploads/" + r["file_path"]})
-    for r in conn.execute(
-            "SELECT media, body FROM posts WHERE user_id=? AND kind='audio' "
-            "AND media != '' ORDER BY created_at DESC", (user_id,)).fetchall():
-        if r["media"] in seen:
-            continue
-        seen.add(r["media"])
-        out.append({"ref": r["media"],
-                    "title": (r["body"] or "").strip()[:40] or "Audio post",
-                    "url": "/uploads/" + r["media"]})
-    conn.close()
-    return out
-
-
-def _owned_music_title(user_id, ref):
-    """Title snapshot when ref is a music file user_id owns, else None.
-    This is the server-side ownership gate for music_kind='upload': a
-    story can never point at another user's file or an arbitrary path."""
-    if not ref or ".." in ref:
+def youtube_id_from(text):
+    """Extract an 11-char YouTube video id from a pasted link (watch,
+    youtu.be, music.youtube.com, shorts, embed, live, m.youtube.com)
+    or a bare id. Returns None for anything else."""
+    if not text:
         return None
-    conn = db()
-    r = conn.execute(
-        "SELECT title FROM story_music_uploads WHERE user_id=? AND file_path=?",
-        (user_id, ref)).fetchone()
-    if r:
-        conn.close()
-        return r["title"] or "My music"
-    r = conn.execute(
-        "SELECT body FROM posts WHERE user_id=? AND kind='audio' AND media=?",
-        (user_id, ref)).fetchone()
-    conn.close()
-    if r:
-        return (r["body"] or "").strip()[:40] or "Audio post"
+    t = str(text).strip()
+    if _YT_ID_RE.match(t):
+        return t
+    try:
+        u = urlparse(t)
+    except Exception:
+        return None
+    host = (u.netloc or "").lower().split("@")[-1].split(":")[0]
+    cand = None
+    if host == "youtu.be":
+        cand = (u.path or "").strip("/").split("/")[0]
+    elif host in ("youtube.com", "www.youtube.com", "music.youtube.com",
+                  "m.youtube.com"):
+        if u.path == "/watch":
+            cand = (parse_qs(u.query).get("v") or [None])[0]
+        else:
+            parts = [p for p in (u.path or "").split("/") if p]
+            if len(parts) >= 2 and parts[0] in ("shorts", "embed", "live"):
+                cand = parts[1]
+    if cand and _YT_ID_RE.match(cand):
+        return cand
     return None
 
 
-def _story_music_url(conn, s):
-    if s["music_kind"] == "catalog":
-        try:
-            tid = int(s["music_ref"])
-        except (TypeError, ValueError):
-            return ""
-        t = conn.execute("SELECT file_path FROM music_tracks WHERE id=?",
-                         (tid,)).fetchone()
-        return "/static/" + t["file_path"] if t else ""
-    if s["music_kind"] == "upload" and s["music_ref"]:
-        return "/uploads/" + s["music_ref"]
-    return ""
+def _oembed_fetch(video_id):
+    """Raw YouTube oEmbed fetch — the one network call, kept separate
+    so tests can stub it. Returns the parsed JSON dict, or None on any
+    failure. oEmbed answers 401/404 for videos that may not be embedded
+    or don't exist, which is exactly the gate music attach needs."""
+    url = ("https://www.youtube.com/oembed?url=" +
+           quote("https://www.youtube.com/watch?v=" + video_id, safe="") +
+           "&format=json")
+    req = urllib.request.Request(url, headers={"User-Agent": "HERE/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            if r.status != 200:
+                return None
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:
+        return None
+
+
+def youtube_oembed(video_id):
+    """{title, artist, thumb} for an embeddable video, else None."""
+    d = _oembed_fetch(video_id)
+    if not d or not d.get("title"):
+        return None
+    return {"title": str(d.get("title") or "")[:120],
+            "artist": str(d.get("author_name") or "")[:80],
+            "thumb": str(d.get("thumbnail_url") or "")[:300]}
+
+
+def _music_snapshot(video_id):
+    """Title/artist/thumb snapshot from an existing attachment of this
+    video (a story or a post), or None. 'Popular on HERE' picks reuse
+    it — the song is already playing on HERE, so no oEmbed call is
+    needed at save time."""
+    conn = db()
+    r = conn.execute(
+        "SELECT music_title AS t, music_artist AS a, music_thumb AS th "
+        "FROM stories WHERE music_kind='youtube' AND music_ref=? "
+        "AND music_title != '' LIMIT 1", (video_id,)).fetchone()
+    if not r:
+        r = conn.execute(
+            "SELECT music_title AS t, music_artist AS a, music_thumb AS th "
+            "FROM posts WHERE music_video_id=? AND music_title != '' "
+            "LIMIT 1", (video_id,)).fetchone()
+    conn.close()
+    if not r:
+        return None
+    return {"title": r["t"] or "", "artist": r["a"] or "",
+            "thumb": r["th"] or ""}
+
+
+def _resolve_music(form):
+    """Resolve a composer's music fields (music_url pasted link, or
+    music_video_id from a Popular pick) to a snapshot dict
+    {video_id, title, artist, thumb}. Returns None when no music was
+    asked for; raises ValueError with a user-facing message when a song
+    was asked for but can't be played inside HERE."""
+    url = (form.get("music_url") or "").strip()
+    picked = (form.get("music_video_id") or "").strip()
+    if not url and not picked:
+        return None
+    vid = youtube_id_from(url) if url else None
+    if vid is None and picked and _YT_ID_RE.match(picked):
+        vid = picked
+    if vid is None:
+        raise ValueError("That link doesn't look like a YouTube link.")
+    if not url:
+        snap = _music_snapshot(vid)
+        if snap:
+            return {"video_id": vid, **snap}
+    meta = youtube_oembed(vid)
+    if meta is None:
+        raise ValueError(MUSIC_EMBED_ERR)
+    return {"video_id": vid, **meta}
 
 
 def _story_payload(conn, s, viewer_id, seen):
@@ -2516,12 +2541,15 @@ def _story_payload(conn, s, viewer_id, seen):
         overlay = {"text": s["overlay_text"],
                    "color": s["overlay_color"] or "#ffffff",
                    "pos": s["overlay_pos"] or "bottom"}
+    # Music is YouTube-only now. Stories saved in the preset-catalog /
+    # MP3-upload era carry kind 'catalog'/'upload' — they render with
+    # NO music (their files are gone), never a broken audio element.
     music = None
-    murl = _story_music_url(conn, s)
-    if murl:
-        music = {"kind": s["music_kind"], "url": murl,
+    if s["music_kind"] == "youtube" and s["music_ref"]:
+        music = {"kind": "youtube", "video_id": s["music_ref"],
                  "title": s["music_title"] or "",
                  "artist": s["music_artist"] or "",
+                 "thumb": s["music_thumb"] or "",
                  "start": s["music_start"] or 0,
                  "len": s["music_len"] or 15,
                  "volume": s["music_volume"] if s["music_volume"] is not None else 80,
@@ -2601,15 +2629,63 @@ def _lifetime_flash(mins):
     return "Story posted — it disappears in 24 hours."
 
 
+@app.post("/music/preview")
+async def music_preview(request: Request):
+    """Validate a pasted YouTube link for the music picker: extract the
+    id and ask YouTube's oEmbed whether the video may be embedded."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    url = (data.get("url") or "") if isinstance(data, dict) else ""
+    vid = youtube_id_from(url)
+    if not vid:
+        return JSONResponse(
+            {"ok": False,
+             "error": "That link doesn't look like a YouTube link."})
+    meta = youtube_oembed(vid)
+    if meta is None:
+        return JSONResponse({"ok": False, "error": MUSIC_EMBED_ERR})
+    return JSONResponse({"ok": True, "video_id": vid,
+                         "title": meta["title"], "artist": meta["artist"],
+                         "thumb": meta["thumb"]})
+
+
+@app.get("/music/popular")
+async def music_popular(request: Request):
+    """Most-attached YouTube songs across stories + posts on HERE."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    rows = conn.execute(
+        "SELECT video_id, MAX(title) AS title, MAX(artist) AS artist, "
+        "MAX(thumb) AS thumb, COUNT(*) AS uses FROM ("
+        "  SELECT music_ref AS video_id, music_title AS title, "
+        "         music_artist AS artist, music_thumb AS thumb "
+        "  FROM stories WHERE music_kind='youtube' AND music_ref != '' "
+        "  UNION ALL "
+        "  SELECT music_video_id AS video_id, music_title AS title, "
+        "         music_artist AS artist, music_thumb AS thumb "
+        "  FROM posts WHERE music_video_id != ''"
+        ") GROUP BY video_id ORDER BY uses DESC, title ASC LIMIT 10"
+    ).fetchall()
+    conn.close()
+    return JSONResponse({"ok": True, "songs": [
+        {"video_id": r["video_id"], "title": r["title"] or "",
+         "artist": r["artist"] or "", "thumb": r["thumb"] or "",
+         "uses": r["uses"]} for r in rows]})
+
+
 @app.get("/stories/new", response_class=HTMLResponse)
 async def story_new_page(request: Request):
     user, err = require_login(request)
     if err:
         return err
-    return render(request, "story_new.html", {
-        "catalog": _music_catalog(),
-        "my_music": _my_music(user["id"]),
-    })
+    return render(request, "story_new.html", {})
 
 
 @app.post("/stories/new")
@@ -2640,70 +2716,37 @@ async def story_create(request: Request):
     music_len = _int_field("music_len", 5, 30, 15)
     music_volume = _int_field("music_volume", 0, 100, 80)
     music_mute_orig = 1 if (form.get("music_mute_orig") or "") == "1" else 0
-    # --- media first; a bad story file rejects the whole post ---
+    # --- music: YouTube only. Resolved BEFORE the media is saved, and
+    # a song that can't be embedded fails the whole save (no story is
+    # created) so the user picks a different upload of the song. ---
+    try:
+        music = _resolve_music(form)
+    except ValueError as e:
+        return redir("/stories/new", str(e))
+    # --- media; a bad story file rejects the whole post ---
     try:
         media = save_upload(form.get("media"), "stories", STORY_EXTS)
     except ValueError as e:
         return redir("/stories/new", str(e))
     if not media:
         return redir("/stories/new", "Choose a photo or short video.")
-    # --- music selection: a fresh upload beats a picked track ---
-    music_kind = music_ref = music_title = music_artist = None
-    up = form.get("music_file")
-    if up is not None and getattr(up, "filename", ""):
-        try:
-            ref = save_upload(up, "story_music", AUD_EXTS,
-                              max_mb=STORY_MUSIC_MAX_MB)
-        except ValueError as e:
-            return redir("/stories/new", str(e))
-        if ref:
-            title = os.path.splitext(os.path.basename(up.filename))[0]
-            title = re.sub(r"\s+", " ", title).strip()[:80] or "My music"
-            conn = db()
-            conn.execute(
-                "INSERT INTO story_music_uploads(user_id, file_path, title, "
-                "created_at) VALUES(?,?,?,?)",
-                (user["id"], ref, title, now_iso()))
-            conn.commit()
-            conn.close()
-            music_kind, music_ref = "upload", ref
-            music_title, music_artist = title, user["name"]
-    if music_kind is None:
-        want = (form.get("music_kind") or "").strip()
-        ref = (form.get("music_ref") or "").strip()
-        if want == "catalog" and ref:
-            try:
-                tid = int(ref)
-            except ValueError:
-                tid = None
-            if tid is not None:
-                conn = db()
-                t = conn.execute("SELECT * FROM music_tracks WHERE id=?",
-                                 (tid,)).fetchone()
-                conn.close()
-                if t:
-                    music_kind, music_ref = "catalog", str(tid)
-                    music_title, music_artist = t["title"], t["artist"]
-        elif want == "upload" and ref:
-            owned = _owned_music_title(user["id"], ref)
-            if owned is not None:
-                music_kind, music_ref = "upload", ref
-                music_title, music_artist = owned, user["name"]
     mins = _story_lifetime_minutes(form)
     conn = db()
     cur = conn.execute(
         "INSERT INTO stories(user_id, media, caption, created_at, expires_at, "
         "overlay_text, overlay_color, overlay_pos, music_kind, music_ref, "
-        "music_title, music_artist, music_start, music_len, music_volume, "
-        "music_mute_orig) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "music_title, music_artist, music_thumb, music_start, music_len, "
+        "music_volume, music_mute_orig) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], media, caption, now_iso(), story_expires_at(mins),
-         overlay_text, overlay_color, overlay_pos, music_kind, music_ref or "",
-         music_title or "", music_artist or "", music_start, music_len,
-         music_volume, music_mute_orig))
+         overlay_text, overlay_color, overlay_pos,
+         "youtube" if music else None,
+         music["video_id"] if music else "",
+         music["title"] if music else "",
+         music["artist"] if music else "",
+         music["thumb"] if music else "",
+         music_start, music_len, music_volume, music_mute_orig))
     sid = cur.lastrowid
-    if music_kind == "catalog":
-        conn.execute("UPDATE music_tracks SET use_count=use_count+1 WHERE id=?",
-                     (int(music_ref),))
     conn.commit()
     conn.close()
     flag_item("story", sid, user["id"], user["name"],
