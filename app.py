@@ -21,7 +21,7 @@ import shutil
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import urllib.error
 import urllib.request
 from urllib.parse import parse_qs, quote, urlparse
@@ -136,6 +136,134 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+# ---------------- Chicago time (daily challenge + streaks) ----------------
+# All stored timestamps are UTC, but the Daily Challenge runs on the
+# user's home days: America/Chicago. zoneinfo is stdlib; when tzdata
+# is present (verified in the venv) it handles CDT/CST exactly. The
+# manual fallback below applies US DST rules (2nd Sunday of March to
+# 1st Sunday of November = CDT, UTC-5; otherwise CST, UTC-6) so the
+# helpers still work on a host without tzdata.
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    CHICAGO_TZ = _ZoneInfo("America/Chicago")
+except Exception:  # pragma: no cover - tzdata present in practice
+    CHICAGO_TZ = None
+
+
+def _nth_weekday(year, month, weekday, n):
+    """The date of the n-th `weekday` (Mon=0) of a month."""
+    d = date(year, month, 1)
+    delta = (weekday - d.weekday()) % 7
+    return d + timedelta(days=delta + 7 * (n - 1))
+
+
+def _chicago_now():
+    if CHICAGO_TZ is not None:
+        return datetime.now(CHICAGO_TZ)
+    now_utc = datetime.now(timezone.utc)
+    dst_start = _nth_weekday(now_utc.year, 3, 6, 2)   # 2nd Sun of Mar
+    dst_end = _nth_weekday(now_utc.year, 11, 6, 1)    # 1st Sun of Nov
+    in_dst = dst_start <= now_utc.date() < dst_end
+    off = timedelta(hours=-5 if in_dst else -6)
+    return (now_utc + off).replace(tzinfo=timezone(off))
+
+
+def _today_chicago():
+    """Today's calendar date in America/Chicago."""
+    return _chicago_now().date()
+
+
+def _today_str():
+    """Today's Chicago date as an ISO string (YYYY-MM-DD)."""
+    return _today_chicago().isoformat()
+
+
+def _day_ordinal(day=None):
+    """Ordinal of a Chicago day (defaults to today) — the prompt pick."""
+    return (day or _today_chicago()).toordinal()
+
+
+# ---------------- welcome topics + daily prompts ----------------
+TOPICS = [("music", "Music 🎵"), ("cars", "Cars 🚗"),
+          ("comedy", "Comedy 😂"), ("faith", "Faith 🙏"),
+          ("sports", "Sports 🏈"), ("food", "Food 🍗"),
+          ("fashion", "Fashion 👟"), ("gaming", "Gaming 🎮"),
+          ("money", "Money 💰"), ("hometown", "Hometown Life 🏡")]
+TOPIC_KEYS = [k for k, _ in TOPICS]
+TOPIC_LABELS = dict(TOPICS)
+
+DAILY_PROMPTS = [
+    "Show your ride",
+    "Your Sunday plate",
+    "View from your porch",
+    "Your workspace",
+    "Something red",
+    "Your hometown in one shot",
+    "Your best friend on four legs",
+    "Fresh kicks check",
+    "Your people — who holds you down?",
+    "What's for breakfast?",
+    "Tonight's sunset",
+    "Tools of your trade",
+    "Your garden or your yard",
+    "Throwback — an old favorite photo",
+    "Your favorite corner of home",
+    "Your morning view",
+    "What's cooking?",
+    "Your ride-or-die song spot",
+    "Small-town gold — a local gem",
+    "Your workspace glow-up",
+    "Game day energy",
+]
+
+
+def daily_prompt(day=None):
+    """The one Daily Challenge prompt for a Chicago day (defaults to
+    today). Same result for everyone all Chicago day."""
+    d = day or _today_chicago()
+    return DAILY_PROMPTS[d.toordinal() % len(DAILY_PROMPTS)]
+
+
+# ---------------- activity days + streaks ----------------
+def record_activity(uid):
+    """Mark uid active on today's Chicago day (idempotent per day).
+    Opens its own connection so callers never thread one through."""
+    if not uid:
+        return
+    conn = db()
+    conn.execute(
+        "INSERT OR IGNORE INTO user_activity_days(user_id, day) "
+        "VALUES(?,?)", (uid, _today_str()))
+    conn.commit()
+    conn.close()
+
+
+def current_streak(uid):
+    """Consecutive active Chicago days ending today — or yesterday
+    when today hasn't happened yet (the streak is still alive)."""
+    if not uid:
+        return 0
+    conn = db()
+    rows = conn.execute(
+        "SELECT day FROM user_activity_days WHERE user_id=?",
+        (uid,)).fetchall()
+    conn.close()
+    days = {r["day"] for r in rows}
+    today = _today_chicago()
+    if today.isoformat() in days:
+        anchor = today
+    elif (today - timedelta(days=1)).isoformat() in days:
+        anchor = today - timedelta(days=1)
+    else:
+        return 0
+    n = 0
+    cur = anchor
+    while cur.isoformat() in days:
+        n += 1
+        cur -= timedelta(days=1)
+    return n
+
+
 # ---------------- hashtags ----------------
 # Parsed from post bodies at create time into post_hashtags (see
 # init_db for the table + the one-time video backfill). A tag is '#'
@@ -152,6 +280,25 @@ def parse_hashtags(body):
         if t not in out:
             out.append(t)
     return out
+
+
+# ---------------- invite codes ----------------
+# Every user carries a short, shareable invite code (users.invite_code).
+# The alphabet drops look-alike characters (I/L/O/0/1) so a code read
+# aloud or typed from a screenshot can't be mis-copied.
+INVITE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def gen_invite_code(conn):
+    """A fresh 8-char invite code not used by any user row visible on
+    `conn` (pass the caller's connection so uncommitted backfill /
+    insert work still collides correctly)."""
+    while True:
+        code = "".join(secrets.choice(INVITE_ALPHABET) for _ in range(8))
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE invite_code=?", (code,)).fetchone()
+        if not row:
+            return code
 
 
 def init_db():
@@ -618,6 +765,21 @@ def init_db():
     if "private_profile" not in _user_cols_now:
         c.execute("ALTER TABLE users ADD COLUMN private_profile "
                   "INTEGER NOT NULL DEFAULT 0")
+    # --- invites: per-user shareable code + who invited them (safe) ---
+    # invite_code is backfilled for every existing user below, then a
+    # UNIQUE index keeps codes one-per-person (new signups generate
+    # their code at insert time in POST /signup).
+    if "invite_code" not in _user_cols_now:
+        c.execute("ALTER TABLE users ADD COLUMN invite_code TEXT")
+    if "invited_by" not in _user_cols_now:
+        c.execute("ALTER TABLE users ADD COLUMN invited_by INTEGER")
+    for _urow in c.execute(
+            "SELECT id FROM users WHERE invite_code IS NULL "
+            "OR invite_code=''").fetchall():
+        c.execute("UPDATE users SET invite_code=? WHERE id=?",
+                  (gen_invite_code(conn), _urow["id"]))
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_invite_code "
+              "ON users(invite_code)")
     # --- My Views: hashtags, learning affinity, view events (safe) ---
     # post_hashtags: one row per (post, tag) parsed from the post body
     # at create time (hook in create_post_from_form covers EVERY new
@@ -656,6 +818,89 @@ def init_db():
         for _t in parse_hashtags(_bp["body"] or ""):
             c.execute("INSERT OR IGNORE INTO post_hashtags(post_id, tag) "
                       "VALUES(?,?)", (_bp["id"], _t))
+    # --- welcome flow + daily challenge (safe on existing DBs) ---
+    # users.onboarded: 0 = still owes the /welcome flow. The backfill
+    # runs exactly once, in the same pass that adds the column: every
+    # row that exists at migration time is a pre-existing account and
+    # is marked onboarded; new signups afterwards get DEFAULT 0.
+    _user_cols_w = [r["name"] for r in
+                    c.execute("PRAGMA table_info(users)").fetchall()]
+    if "onboarded" not in _user_cols_w:
+        c.execute("ALTER TABLE users ADD COLUMN onboarded "
+                  "INTEGER DEFAULT 0")
+        c.execute("UPDATE users SET onboarded=1")
+    c.execute("""CREATE TABLE IF NOT EXISTS user_topics (
+        user_id INTEGER NOT NULL, topic TEXT NOT NULL,
+        PRIMARY KEY(user_id, topic))""")
+    # posts.challenge_date: the Chicago day (YYYY-MM-DD) a post answered
+    # the Daily Challenge on; NULL on ordinary posts.
+    _post_cols_w = [r["name"] for r in
+                    c.execute("PRAGMA table_info(posts)").fetchall()]
+    if "challenge_date" not in _post_cols_w:
+        c.execute("ALTER TABLE posts ADD COLUMN challenge_date TEXT")
+    # user_activity_days: one row per (user, Chicago day) the user did
+    # something streak-worthy (visited home, posted, reacted, commented).
+    c.execute("""CREATE TABLE IF NOT EXISTS user_activity_days (
+        user_id INTEGER NOT NULL, day TEXT NOT NULL,
+        PRIMARY KEY(user_id, day))""")
+    # --- games pack (Build F): polls everywhere + the My Views
+    # contest (safe on existing DBs) ---
+    # Post polls: one poll per post (the post's body is the question),
+    # 2-4 options, one vote row per user (a re-vote UPDATES the row,
+    # so changing your pick never double-counts).
+    c.execute("""CREATE TABLE IF NOT EXISTS polls (
+        post_id INTEGER PRIMARY KEY)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS poll_options (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL, idx INTEGER NOT NULL,
+        text TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS poll_votes (
+        post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        option_id INTEGER NOT NULL,
+        PRIMARY KEY(post_id, user_id))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pollopts_post "
+              "ON poll_options(post_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pollvotes_post "
+              "ON poll_votes(post_id)")
+    # Story polls: binary by design — exactly two choices ('a'/'b').
+    c.execute("""CREATE TABLE IF NOT EXISTS story_polls (
+        story_id INTEGER PRIMARY KEY,
+        question TEXT NOT NULL, a_text TEXT NOT NULL,
+        b_text TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS story_poll_votes (
+        story_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        choice TEXT NOT NULL,
+        PRIMARY KEY(story_id, user_id))""")
+    # stories.ama: 1 = the story carries an "Ask me a question" box.
+    _story_cols_f = [r["name"] for r in
+                     c.execute("PRAGMA table_info(stories)").fetchall()]
+    if "ama" not in _story_cols_f:
+        c.execute("ALTER TABLE stories ADD COLUMN ama INTEGER DEFAULT 0")
+    # messages.ama: 1 = this story-linked message came in through the
+    # story's AMA box (thread/inbox label it as a question).
+    _msg_cols_f = [r["name"] for r in
+                   c.execute("PRAGMA table_info(messages)").fetchall()]
+    if "ama" not in _msg_cols_f:
+        c.execute("ALTER TABLE messages ADD COLUMN ama INTEGER DEFAULT 0")
+    # Live polls: binary too. correct NULL = a plain poll; 'a'/'b' =
+    # a trivia poll (the answer is NEVER sent to clients while the
+    # poll is active). Only ONE active poll per live — starting a new
+    # one closes the previous.
+    c.execute("""CREATE TABLE IF NOT EXISTS live_polls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, question TEXT NOT NULL,
+        a_text TEXT NOT NULL, b_text TEXT NOT NULL,
+        correct TEXT, created_by INTEGER NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_poll_votes (
+        poll_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        choice TEXT NOT NULL,
+        PRIMARY KEY(poll_id, user_id))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_livepolls_room "
+              "ON live_polls(live_id, active)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_livepollvotes_poll "
+              "ON live_poll_votes(poll_id)")
     conn.commit()
     conn.close()
 
@@ -852,11 +1097,13 @@ def render(request: Request, name, ctx=None):
         v_style, v_classes = viewer_spot_for(u)
         ctx.setdefault("viewer_spot_style", v_style)
         ctx.setdefault("viewer_spot_classes", v_classes)
+        ctx.setdefault("viewer_gold", is_gold_inviter(u["id"]))
     else:
         ctx["user"] = None
         ctx["pending_count"] = 0
         ctx["unread_count"] = 0
         ctx["unread_msgs"] = 0
+        ctx.setdefault("viewer_gold", False)
         ctx.setdefault("page_bg", "")
         ctx.setdefault("viewer_spot_style", "")
         ctx.setdefault("viewer_spot_classes", "")
@@ -1213,6 +1460,41 @@ def following_count(uid):
     return n
 
 
+# ---------------- invites ----------------
+def invite_count(uid):
+    """How many people joined HERE from uid's invite link."""
+    conn = db()
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM users WHERE invited_by=?",
+        (uid,)).fetchone()["c"]
+    conn.close()
+    return n
+
+
+def is_gold_inviter(uid):
+    """Gold frame milestone: 3+ people joined from uid's invite."""
+    return invite_count(uid) >= 3
+
+
+def is_insider(uid):
+    """HERE Insider milestone: 10+ people joined from uid's invite."""
+    return invite_count(uid) >= 10
+
+
+def ensure_invite_code(conn, user_row):
+    """The user's invite code, generating + saving one on `conn` when
+    the row doesn't have one yet (rows predating the column, or any
+    insert path that skipped it)."""
+    code = _uget(user_row, "invite_code") or ""
+    if str(code).strip():
+        return str(code).strip()
+    code = gen_invite_code(conn)
+    conn.execute("UPDATE users SET invite_code=? WHERE id=?",
+                 (code, _uget(user_row, "id")))
+    conn.commit()
+    return code
+
+
 def is_following(follower_id, followee_id):
     if not follower_id or not followee_id or follower_id == followee_id:
         return False
@@ -1538,6 +1820,40 @@ def can_view_post(viewer, p, owner_on=False):
     return False  # onlyme
 
 
+def _poll_for_post(conn, pid, viewer):
+    """The games-pack poll attached to a post, shaped for the post
+    card / post page and for the vote endpoint's JSON: every option
+    with its vote count + percentage + whether it's the VIEWER's pick,
+    plus the total and the viewer's pick. None when the post has no
+    poll. Percentages are whole numbers (0 when nobody has voted)."""
+    row = conn.execute("SELECT post_id FROM polls WHERE post_id=?",
+                       (pid,)).fetchone()
+    if not row:
+        return None
+    counts = {r["option_id"]: r["c"] for r in conn.execute(
+        "SELECT option_id, COUNT(*) c FROM poll_votes WHERE post_id=? "
+        "GROUP BY option_id", (pid,)).fetchall()}
+    total = sum(counts.values())
+    my_pick = None
+    if viewer:
+        mr = conn.execute(
+            "SELECT option_id FROM poll_votes WHERE post_id=? "
+            "AND user_id=?", (pid, viewer["id"])).fetchone()
+        if mr:
+            my_pick = mr["option_id"]
+    options = []
+    for o in conn.execute(
+            "SELECT * FROM poll_options WHERE post_id=? "
+            "ORDER BY idx ASC, id ASC", (pid,)).fetchall():
+        n = counts.get(o["id"], 0)
+        options.append({
+            "id": o["id"], "text": o["text"], "votes": n,
+            "pct": int(round(100.0 * n / total)) if total else 0,
+            "mine": my_pick is not None and o["id"] == my_pick})
+    return {"options": options, "total": total,
+            "my_option_id": my_pick, "voted": my_pick is not None}
+
+
 def post_card(p, viewer, owner_on=False):
     """Build the post-card dict the partials/post_card.html template expects.
     Share rows (shared_post_id set) render the ORIGINAL post's content with a
@@ -1638,6 +1954,9 @@ def post_card(p, viewer, owner_on=False):
         s = conn.execute("SELECT name FROM users WHERE id=?",
                          (share["by_id"],)).fetchone()
         shared_by_name = s["name"] if s else "Deleted user"
+    # Games pack: a poll rides under the post body when one is attached
+    # (share rows resolve to the original above, so its poll shows).
+    poll_data = _poll_for_post(conn, p["id"], viewer)
     conn.close()
     media = p["media"] or ""
     avatar = ""
@@ -1699,6 +2018,7 @@ def post_card(p, viewer, owner_on=False):
         "is_mine": bool(viewer and viewer["id"] == p["user_id"] and not share),
         "can_edit_audience": bool(viewer and viewer["id"] == p["user_id"]
                                   and not share),
+        "poll": poll_data,
     }
 
 
@@ -1899,12 +2219,31 @@ async def root(request: Request):
     return redir("/login")
 
 
+def _inviter_for_code(code):
+    """The user who owns an invite code, or None. Exact match after
+    stripping — codes are stored uppercase from INVITE_ALPHABET."""
+    code = (code or "").strip()
+    if not code:
+        return None
+    conn = db()
+    r = conn.execute("SELECT * FROM users WHERE invite_code=?",
+                     (code,)).fetchone()
+    conn.close()
+    return dict(r) if r else None
+
+
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request):
     if current_user(request):
         return redir("/home")
+    inviter = None
+    inv = _inviter_for_code(request.cookies.get("here_invite", ""))
+    if inv:
+        inviter = {"name": inv["name"],
+                   "avatar": avatar_url(inv.get("avatar", ""))}
     return render(request, "auth/signup.html",
-                  {"error": request.query_params.get("error", "")})
+                  {"error": request.query_params.get("error", ""),
+                   "inviter": inviter})
 
 
 @app.post("/signup")
@@ -1919,16 +2258,42 @@ async def signup(request: Request):
     conn = db()
     try:
         cur = conn.execute(
-            "INSERT INTO users(name, email, pw_hash, created_at) VALUES(?,?,?,?)",
-            (name, email, pw_hash, now_iso()))
+            "INSERT INTO users(name, email, pw_hash, created_at, invite_code) "
+            "VALUES(?,?,?,?,?)",
+            (name, email, pw_hash, now_iso(), gen_invite_code(conn)))
         uid = cur.lastrowid
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
         return redir("/signup?error=" + "That email is already registered.")
     conn.close()
+    # Invite credit — ONLY after a successful insert (a duplicate-email
+    # failure above returns early: no credit, and the invite cookie is
+    # left in place so the visitor can retry with another email).
+    inviter = _inviter_for_code(request.cookies.get("here_invite", ""))
+    credited = False
+    if inviter and inviter["id"] != uid:
+        conn = db()
+        conn.execute("UPDATE users SET invited_by=? WHERE id=?",
+                     (inviter["id"], uid))
+        conn.commit()
+        conn.close()
+        credited = True
+        notify(inviter["id"], "invite",
+               f"🎉 {name} joined HERE from your invite!", "/invite",
+               actor_id=uid)
     token = new_session(uid)
-    resp = redir("/home")
+    # Fresh accounts (onboarded=0) land on the welcome flow first;
+    # everyone else keeps the plain /home landing.
+    conn = db()
+    _ob = conn.execute("SELECT onboarded FROM users WHERE id=?",
+                       (uid,)).fetchone()
+    conn.close()
+    onboarded = _ob["onboarded"] if _ob and "onboarded" in _ob.keys() \
+        else 0
+    resp = redir("/home" if onboarded else "/welcome")
+    if credited or request.cookies.get("here_invite"):
+        resp.delete_cookie("here_invite", path="/")
     return set_session_cookie(resp, token, SESSION_COOKIE)
 
 
@@ -1966,6 +2331,450 @@ async def logout(request: Request):
     resp = redir("/login")
     resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
+
+
+# ---------------- public pages + invites (growth door) ----------------
+# The ONLY anonymous surface beyond /, /login and /signup: /p/{post},
+# /l/{live} and /u/{user} render a public face ONLY when the content is
+# genuinely public (see the gates in each route); everything else gets
+# the join teaser, which leaks nothing — no body, no author name, no
+# media. The teaser and the public pages are standalone templates (no
+# base.html): a logged-out visitor has no nav to render.
+def _public_teaser(request: Request, logged_in):
+    return render(request, "public_teaser.html",
+                  {"logged_in": bool(logged_in)})
+
+
+def _abs_url(request: Request, path):
+    return str(request.base_url).rstrip("/") + path
+
+
+@app.get("/p/{post_id}", response_class=HTMLResponse)
+async def public_post(request: Request, post_id: int):
+    viewer = current_user(request)
+    conn = db()
+    row = conn.execute("SELECT * FROM posts WHERE id=?",
+                       (post_id,)).fetchone()
+    p = dict(row) if row else None
+    author = None
+    if p:
+        arow = conn.execute("SELECT * FROM users WHERE id=?",
+                            (p["user_id"],)).fetchone()
+        author = dict(arow) if arow else None
+    if not p or p.get("shared_post_id") or not author \
+            or (p.get("privacy") or "public") != "public" \
+            or author.get("private_profile"):
+        conn.close()
+        return _public_teaser(request, viewer)
+    like_count = conn.execute(
+        "SELECT COUNT(*) c FROM likes WHERE post_id=?",
+        (p["id"],)).fetchone()["c"]
+    comment_count = conn.execute(
+        "SELECT COUNT(*) c FROM comments WHERE post_id=?",
+        (p["id"],)).fetchone()["c"]
+    conn.close()
+    media = p.get("media") or ""
+    media_url = "/uploads/" + media if media else ""
+    media_kind = ""
+    if media:
+        ext = media.rsplit(".", 1)[-1].lower() if "." in media else ""
+        if ext in IMG_EXTS:
+            media_kind = "photo"
+        elif ext in VID_EXTS:
+            media_kind = "video"
+        elif ext in AUD_EXTS:
+            media_kind = "audio"
+    embed_url = (video_embed_url(p.get("video_url"))
+                 or video_embed_url(p.get("link_url"))
+                 or first_embed_in_text(p.get("body")))
+    music_embed = ""
+    if p.get("music_video_id"):
+        music_embed = ("https://www.youtube.com/embed/"
+                       + str(p["music_video_id"]))
+    author_ctx = {"id": author["id"], "name": author["name"],
+                  "avatar": avatar_url(author.get("avatar", ""))}
+    og_image = ""
+    if media_kind == "photo" and media_url:
+        og_image = _abs_url(request, media_url)
+    elif author_ctx["avatar"]:
+        og_image = _abs_url(request, author_ctx["avatar"])
+    return render(request, "public_post.html", {
+        "author": author_ctx,
+        "body": p.get("body") or "",
+        "media_url": media_url, "media_kind": media_kind,
+        "embed_url": embed_url, "music_embed": music_embed,
+        "like_count": like_count, "comment_count": comment_count,
+        "created": fancy_time(p.get("created_at")),
+        "excerpt": (p.get("body") or "")[:160],
+        "og_image": og_image,
+        "logged_in": bool(viewer),
+    })
+
+
+@app.get("/l/{live_id}", response_class=HTMLResponse)
+async def public_live(request: Request, live_id: int):
+    viewer = current_user(request)
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, live_id)
+    host = get_user(live["host_id"]) if live else None
+    if not live or live.get("status") != "live" or not host \
+            or host.get("private_profile"):
+        conn.close()
+        return _public_teaser(request, viewer)
+    viewers = _live_viewer_count(conn, live_id)
+    conn.close()
+    host_ctx = {"id": host["id"], "name": host["name"],
+                "avatar": avatar_url(host.get("avatar", ""))}
+    og_image = (_abs_url(request, host_ctx["avatar"])
+                if host_ctx["avatar"] else "")
+    return render(request, "public_live.html", {
+        "live": {"id": live["id"], "title": live.get("title") or ""},
+        "host": host_ctx, "viewers": viewers,
+        "og_image": og_image,
+        "logged_in": bool(viewer),
+    })
+
+
+@app.get("/u/{user_id}", response_class=HTMLResponse)
+async def public_profile(request: Request, user_id: int):
+    viewer = current_user(request)
+    prof = get_user(user_id)
+    if not prof or prof.get("private_profile"):
+        return _public_teaser(request, viewer)
+    conn = db()
+    prows = conn.execute(
+        "SELECT id, media FROM posts WHERE user_id=? AND page_id IS NULL "
+        "AND shared_post_id IS NULL AND (privacy IS NULL OR privacy='' "
+        "OR privacy='public') "
+        "AND media IS NOT NULL AND media != '' "
+        "ORDER BY created_at DESC LIMIT 30", (user_id,)).fetchall()
+    conn.close()
+    photos = []
+    for r in prows:
+        media = r["media"] or ""
+        ext = media.rsplit(".", 1)[-1].lower() if "." in media else ""
+        if ext in IMG_EXTS:
+            kind = "photo"
+        elif ext in VID_EXTS:
+            kind = "video"
+        else:
+            continue
+        photos.append({"post_id": r["id"], "kind": kind,
+                       "url": "/uploads/" + media})
+    prof_ctx = {"id": prof["id"], "name": prof["name"],
+                "avatar": avatar_url(prof.get("avatar", "")),
+                "spot_name": (prof.get("spot_name") or "").strip(),
+                "follower_count": follower_count(user_id),
+                "following_count": following_count(user_id)}
+    og_image = (_abs_url(request, prof_ctx["avatar"])
+                if prof_ctx["avatar"] else "")
+    return render(request, "public_profile.html", {
+        "profile": prof_ctx, "photos": photos,
+        "og_image": og_image,
+        "logged_in": bool(viewer),
+    })
+
+
+@app.get("/join/{code}")
+async def join_invite(request: Request, code: str):
+    inviter = _inviter_for_code(code)
+    if not inviter:
+        return redir("/signup")
+    resp = redir("/signup")
+    resp.set_cookie("here_invite", (code or "").strip(), httponly=True,
+                    samesite="lax", max_age=30 * 86400, path="/")
+    return resp
+
+
+@app.get("/invite", response_class=HTMLResponse)
+async def invite_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    code = ensure_invite_code(conn, user)
+    rows = conn.execute(
+        "SELECT id, name, avatar, created_at FROM users "
+        "WHERE invited_by=? ORDER BY created_at DESC",
+        (user["id"],)).fetchall()
+    conn.close()
+    invitees = [{"id": r["id"], "name": r["name"],
+                 "avatar": avatar_url(r["avatar"]),
+                 "joined": fancy_time(r["created_at"])} for r in rows]
+    count = len(invitees)
+    link = _abs_url(request, "/join/" + code)
+    return render(request, "invite.html", {
+        "invite_link": link,
+        "qr_src": ("https://api.qrserver.com/v1/create-qr-code/"
+                   "?size=180x180&data=" + quote(link, safe="")),
+        "invitees": invitees, "count": count,
+        "gold_at": 3, "insider_at": 10,
+        "gold_pct": min(100, int(count * 100 / 3)),
+        "insider_pct": min(100, int(count * 100 / 10)),
+        "is_gold": count >= 3, "is_insider": count >= 10,
+    })
+
+
+# ---------------- welcome flow + daily challenge ----------------
+def _saved_topics(conn, uid):
+    return [r["topic"] for r in conn.execute(
+        "SELECT topic FROM user_topics WHERE user_id=?", (uid,)).fetchall()]
+
+
+def _welcome_suggestions(viewer):
+    """People-to-follow payload for /welcome (also served as JSON).
+    Ranked by (a) distinct hashtags on the author's posts from the
+    last 30 days matching MY saved topics, desc; (b) follower count
+    desc; (c) most recent post, newest first (no posts last). Self
+    and anyone blocked either way with me never appear."""
+    conn = db()
+    my_topics = _saved_topics(conn, viewer["id"])
+    my_set = set(my_topics)
+    blocked = blocked_id_set(viewer["id"])
+    following = following_ids(viewer["id"])
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=30)).isoformat()
+    rows = conn.execute("SELECT id, name, avatar FROM users WHERE id!=?",
+                        (viewer["id"],)).fetchall()
+    out = []
+    for u in rows:
+        if u["id"] in blocked:
+            continue
+        matched = []
+        if my_set:
+            ph = ",".join("?" * len(my_set))
+            hit = {r["tag"] for r in conn.execute(
+                "SELECT DISTINCT ph.tag FROM post_hashtags ph "
+                "JOIN posts p ON p.id=ph.post_id "
+                f"WHERE p.user_id=? AND p.created_at>=? AND ph.tag IN ({ph})",
+                (u["id"], cutoff, *sorted(my_set))).fetchall()}
+            matched = [k for k in TOPIC_KEYS if k in hit]
+        fc = conn.execute(
+            "SELECT COUNT(*) c FROM follows WHERE followee_id=?",
+            (u["id"],)).fetchone()["c"]
+        last = conn.execute(
+            "SELECT MAX(created_at) m FROM posts WHERE user_id=?",
+            (u["id"],)).fetchone()["m"] or ""
+        out.append({"id": u["id"], "name": u["name"],
+                    "avatar": avatar_url(u["avatar"]),
+                    "follower_count": fc, "matched_topics": matched,
+                    "matched_labels": [TOPIC_LABELS.get(k, k)
+                                       for k in matched],
+                    "following": u["id"] in following,
+                    "_match_n": len(matched), "_fc": fc, "_last": last})
+    conn.close()
+    # Stable sorts, least significant key first: recency, then
+    # followers, then topic matches (the primary key) last.
+    out.sort(key=lambda x: x["_last"], reverse=True)
+    out.sort(key=lambda x: -x["_fc"])
+    out.sort(key=lambda x: -x["_match_n"])
+    for o in out:
+        del o["_match_n"], o["_fc"], o["_last"]
+    return out[:8]
+
+
+def _welcome_trending(viewer):
+    """Top 6 trending My Views for the welcome page: feed-viewable
+    videos from the last 14 days, scored 2*reactions + 3*comments
+    (ties: newest first). Video URL mirrors _views_feed exactly."""
+    conn = db()
+    cands = _views_candidates(conn, viewer)
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=14)).isoformat()
+    scored = []
+    for p in cands:
+        if (p.get("created_at") or "") < cutoff:
+            continue
+        rc = conn.execute(
+            "SELECT COUNT(*) c FROM likes WHERE post_id=?",
+            (p["id"],)).fetchone()["c"]
+        cc = conn.execute(
+            "SELECT COUNT(*) c FROM comments WHERE post_id=?",
+            (p["id"],)).fetchone()["c"]
+        scored.append({"post_id": p["id"],
+                       "video_url": "/uploads/" + p["media"],
+                       "poster_url": "/uploads/" + p["media"],
+                       "media": "/uploads/" + p["media"],
+                       "reaction_count": rc, "comment_count": cc,
+                       "_score": 2 * rc + 3 * cc,
+                       "_created": p["created_at"],
+                       "_author_id": p["user_id"]})
+    conn.close()
+    scored.sort(key=lambda it: it["_created"], reverse=True)
+    scored.sort(key=lambda it: -it["_score"])
+    out = []
+    for it in scored[:6]:
+        a = get_user(it["_author_id"])
+        out.append({"post_id": it["post_id"],
+                    "video_url": it["video_url"],
+                    "poster_url": it["poster_url"],
+                    "media": it["media"],
+                    "author_id": it["_author_id"],
+                    "author_name": a["name"] if a else "Deleted user",
+                    "author_avatar": (avatar_url(a["avatar"])
+                                      if a else ""),
+                    "reaction_count": it["reaction_count"],
+                    "comment_count": it["comment_count"]})
+    return out
+
+
+@app.get("/welcome", response_class=HTMLResponse)
+async def welcome_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    saved = _saved_topics(conn, user["id"])
+    conn.close()
+    topics = [{"key": k, "label": label, "selected": k in saved}
+              for k, label in TOPICS]
+    return render(request, "welcome.html", {
+        "topics": topics, "saved_topics": saved,
+        "suggestions": _welcome_suggestions(user),
+        "trending": _welcome_trending(user),
+        "onboarded": bool(user.get("onboarded")),
+    })
+
+
+@app.post("/welcome/topics")
+async def welcome_topics(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    raw = []
+    if isinstance(data, dict) and "topics" in data:
+        raw = data.get("topics") or []
+    if not raw:
+        try:
+            form = await request.form()
+            vals = form.getlist("topics")
+            if len(vals) == 1:
+                v = (vals[0] or "").strip()
+                if v.startswith("["):
+                    try:
+                        raw = json.loads(v)
+                    except Exception:
+                        raw = [v]
+                elif v:
+                    raw = [x.strip() for x in v.split(",")]
+            elif vals:
+                raw = list(vals)
+        except Exception:
+            raw = []
+    if isinstance(raw, str):
+        raw = [raw]
+    saved = []
+    for t in raw if isinstance(raw, (list, tuple)) else []:
+        k = str(t).strip().lower()
+        if k in TOPIC_KEYS and k not in saved:
+            saved.append(k)
+        if len(saved) >= 5:
+            break
+    conn = db()
+    conn.execute("DELETE FROM user_topics WHERE user_id=?", (user["id"],))
+    for k in saved:
+        conn.execute(
+            "INSERT OR IGNORE INTO user_topics(user_id, topic) VALUES(?,?)",
+            (user["id"], k))
+        _affinity_bump(conn, user["id"], "tag", k, 4.0)
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "topics": saved})
+
+
+@app.get("/welcome/suggestions.json")
+async def welcome_suggestions_json(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    return JSONResponse({"ok": True,
+                         "suggestions": _welcome_suggestions(user)})
+
+
+@app.post("/welcome/done")
+async def welcome_done(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("UPDATE users SET onboarded=1 WHERE id=?", (user["id"],))
+    conn.commit()
+    conn.close()
+    return redir("/home")
+
+
+def _daily_visible_posts(viewer, day_str, owner_on):
+    """Post rows answering the challenge on `day_str` that the viewer
+    may see: can_view_post passes and the author is neither blocked
+    either way with the viewer nor muted by the viewer (feed rules).
+    Newest first."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM posts WHERE challenge_date=? "
+        "ORDER BY created_at DESC", (day_str,)).fetchall()
+    conn.close()
+    blocked = blocked_id_set(viewer["id"])
+    muted = muted_id_set(viewer["id"])
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d["user_id"] in blocked or d["user_id"] in muted:
+            continue
+        if not can_view_post(viewer, d, owner_on):
+            continue
+        out.append(d)
+    return out
+
+
+@app.get("/daily", response_class=HTMLResponse)
+async def daily_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    owner_on = is_owner(request)
+    today = _today_chicago()
+    yday = today - timedelta(days=1)
+    answers = []
+    for d in _daily_visible_posts(user, _today_str(), owner_on):
+        card = post_card(d, user, owner_on)
+        if card:
+            answers.append(card)
+    ycount = len(_daily_visible_posts(user, yday.isoformat(), owner_on))
+    blocked = blocked_id_set(user["id"])
+    conn = db()
+    cand_ids = [r["user_id"] for r in conn.execute(
+        "SELECT DISTINCT user_id FROM user_activity_days").fetchall()]
+    conn.close()
+    board = []
+    for uid in cand_ids:
+        if uid in blocked:
+            continue
+        s = current_streak(uid)
+        if s <= 0:
+            continue
+        u = get_user(uid)
+        if not u:
+            continue
+        board.append({"id": uid, "name": u["name"],
+                      "avatar": avatar_url(u.get("avatar", "")),
+                      "streak": s})
+    board.sort(key=lambda x: x["name"].lower())
+    board.sort(key=lambda x: -x["streak"])
+    return render(request, "daily.html", {
+        "prompt": daily_prompt(today),
+        "daily_date": today.strftime("%A, %B %d, %Y"),
+        "daily_today": _today_str(),
+        "streak": current_streak(user["id"]),
+        "leaderboard": board[:5],
+        "answers": answers, "answers_count": len(answers),
+        "yesterday_prompt": daily_prompt(yday),
+        "yesterday_count": ycount,
+    })
 
 
 # ---------------- home / posts ----------------
@@ -2067,6 +2876,7 @@ async def home(request: Request):
     user, err = require_login(request)
     if err:
         return err
+    record_activity(user["id"])
     owner_on = is_owner(request)
     posts = _home_posts(user, owner_on)
     fids = friend_id_set(user["id"])
@@ -2092,6 +2902,9 @@ async def home(request: Request):
                    "live_now": live_now_for(user["id"], owner_on),
                    "discover_people": discover_people(user["id"], 3),
                    "trends": trending_topics(5, user["id"]),
+                   "daily_prompt": daily_prompt(),
+                   "daily_streak": current_streak(user["id"]),
+                   "daily_today": _today_str(),
                    "composer_friends": cfriends, "composer_pages": cpages})
 
 
@@ -2105,6 +2918,21 @@ def create_post_from_form(user, form, page_id=None):
     # KINDS list are untouched; only creation is closed.
     if kind in ("clothes", "audio"):
         return None, "That post type is no longer available."
+    # --- games pack: kind='poll' — the body is the question and the
+    # option1..option4 form fields carry the choices. A poll post is a
+    # plain text post (no media) with poll rows attached after the
+    # insert. Fewer than 2 non-empty options refuses the whole post:
+    # nothing is created. Options are trimmed, capped at 60 chars. ---
+    poll_options = None
+    if kind == "poll":
+        poll_options = []
+        for _i in (1, 2, 3, 4):
+            _t = (form.get(f"option{_i}") or "").strip()[:60]
+            if _t:
+                poll_options.append(_t)
+        if len(poll_options) < 2:
+            return None, "A poll needs at least 2 options."
+        kind = "text"
     if kind not in KINDS:
         return None, "Invalid post kind."
     privacy = (form.get("privacy") or "public").strip()
@@ -2116,6 +2944,13 @@ def create_post_from_form(user, form, page_id=None):
     feeling = (form.get("feeling") or "").strip()
     link_url = (form.get("link_url") or "").strip()
     video_url = (form.get("video_url") or "").strip()
+    # Daily Challenge answer: the composer on /daily posts challenge=1.
+    # The #HereDaily tag rides in the body itself (added BEFORE the
+    # insert so the hashtag hook below stores it like any other tag;
+    # parse_hashtags lowercases it to 'heredaily').
+    challenge = (form.get("challenge") or "").strip() in ("1", "true", "on")
+    if challenge and "heredaily" not in parse_hashtags(body):
+        body = (body + " #HereDaily").strip()
 
     # link_url / video_url are no longer offered in the composer (any link
     # pasted in the body just works, and YouTube/Vimeo links auto-embed),
@@ -2152,10 +2987,13 @@ def create_post_from_form(user, form, page_id=None):
     _mname = getattr(media_file, "filename", "") or ""
     _mext = _mname.rsplit(".", 1)[-1].lower() if "." in _mname else ""
     cap = POST_VIDEO_MAX_MB if _mext in VID_EXTS else 0
-    try:
-        media = save_upload(media_file, "posts", allowed, max_mb=cap)
-    except ValueError as e:
-        return None, str(e)
+    if poll_options is not None:
+        media = ""  # polls are text-only by design; any file is ignored
+    else:
+        try:
+            media = save_upload(media_file, "posts", allowed, max_mb=cap)
+        except ValueError as e:
+            return None, str(e)
 
     conn = db()
     cur = conn.execute(
@@ -2178,6 +3016,15 @@ def create_post_from_form(user, form, page_id=None):
         conn.execute(
             "INSERT OR IGNORE INTO post_hashtags(post_id, tag) "
             "VALUES(?,?)", (pid, _t))
+    if challenge:
+        conn.execute("UPDATE posts SET challenge_date=? WHERE id=?",
+                     (_today_str(), pid))
+    if poll_options is not None:
+        conn.execute("INSERT INTO polls(post_id) VALUES(?)", (pid,))
+        for _idx, _t in enumerate(poll_options):
+            conn.execute(
+                "INSERT INTO poll_options(post_id, idx, text) "
+                "VALUES(?,?,?)", (pid, _idx, _t))
     conn.commit()
     conn.close()
     # --- hide-from list + tags: validated server-side. Only friends can be
@@ -2214,6 +3061,7 @@ def create_post_from_form(user, form, page_id=None):
                f"/post/{pid}", actor_id=user["id"])
     flag_item("post", pid, user["id"], user["name"],
               " ".join(x for x in (body, feeling, link_url, video_url) if x))
+    record_activity(user["id"])
     return pid, None
 
 
@@ -2409,6 +3257,7 @@ async def add_comment(request: Request, pid: int):
         notify(p["user_id"], "comment",
                f"{user['name']} commented on your post.", f"/post/{pid}",
                actor_id=user["id"])
+    record_activity(user["id"])
     return redir(f"/post/{pid}")
 
 
@@ -2599,8 +3448,73 @@ async def react_post(request: Request, pid: int):
            if r["kind"] in REACTION_EMOJI]
     conn.commit()
     conn.close()
+    if my_kind is not None:
+        record_activity(user["id"])
     return JSONResponse({"ok": True, "likes": likes, "reacted": my_kind is not None,
                          "kind": my_kind, "top": top})
+
+
+@app.post("/post/{pid}/poll/vote")
+async def poll_vote(request: Request, pid: int):
+    """Vote in a post's poll. JSON {option_id}. Login + can_view_post
+    gate exactly like reactions (unviewable = 404); the post must
+    carry a poll and the option must belong to it. One row per user —
+    voting again CHANGES the pick (the PK upsert never doubles).
+    Votes send no notification, but they do count as streak activity
+    (record_activity), like a reaction that lands."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        option_id = int((data or {}).get("option_id") or 0)
+    except (TypeError, ValueError):
+        option_id = 0
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    if p and p["shared_post_id"]:
+        # Votes land on the original post, not the share pointer.
+        p = conn.execute("SELECT * FROM posts WHERE id=?",
+                         (p["shared_post_id"],)).fetchone()
+    if not p:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    p = dict(p)
+    if not can_view_post(user, p, is_owner(request)):
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    pid = p["id"]
+    if not conn.execute("SELECT 1 FROM polls WHERE post_id=?",
+                        (pid,)).fetchone():
+        conn.close()
+        return JSONResponse({"ok": False, "error": "No poll on this post."},
+                            status_code=404)
+    opt = conn.execute(
+        "SELECT id FROM poll_options WHERE id=? AND post_id=?",
+        (option_id, pid)).fetchone()
+    if not opt:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "Unknown option."},
+                            status_code=400)
+    conn.execute(
+        "INSERT INTO poll_votes(post_id, user_id, option_id) "
+        "VALUES(?,?,?) ON CONFLICT(post_id, user_id) DO UPDATE SET "
+        "option_id=excluded.option_id",
+        (pid, user["id"], option_id))
+    conn.commit()
+    poll = _poll_for_post(conn, pid, user)
+    conn.close()
+    record_activity(user["id"])
+    return JSONResponse({"ok": True, "poll": poll,
+                         "total": poll["total"],
+                         "my_option_id": poll["my_option_id"],
+                         "options": poll["options"]})
 
 
 # ---------------- My Views (vertical video feed) ----------------
@@ -2847,8 +3761,16 @@ async def views_trending(request: Request):
             counts[r["tag"]] = r["c"]
     conn.close()
     top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
-    return JSONResponse({"ok": True,
-                         "tags": [{"tag": t, "count": c} for t, c in top]})
+    tags = [{"tag": t, "count": c} for t, c in top]
+    # Games pack: this week's contest tag is pinned FIRST in trending
+    # (the My Views top bar renders a "contest": true chip as a 🏆
+    # link to /contest instead of a filter). Its count is the number
+    # of entered videos THIS viewer can see.
+    _ctag = contest_tag()
+    tags = [t for t in tags if t["tag"] != _ctag]
+    tags.insert(0, {"tag": _ctag, "count": counts.get(_ctag, 0),
+                    "contest": True})
+    return JSONResponse({"ok": True, "tags": tags})
 
 
 def _views_gate(request, pid):
@@ -2981,6 +3903,158 @@ async def views_comments(request: Request, pid: int):
     conn.close()
     return JSONResponse({"ok": True, "comments": comments,
                          "comment_blocked": blocked})
+
+
+# ---------------- My Views weekly contest (games pack) ----------------
+# A rotating hashtag runs a week-long contest over My Views videos.
+# The tag for an ISO week is CONTEST_TAGS[iso_week % len] — the same
+# tag for everyone all week, flipping on Chicago Mondays. A video is
+# ENTERED when it carries the week's tag, has an uploaded video file,
+# and passes the My Views candidate rules for the viewer (the winner
+# of a finished week is computed globally — see _contest_winner).
+# Score, counted INSIDE the week's Chicago window (Mon 00:00:00 –
+# Sun 23:59:59 America/Chicago, compared in UTC):
+#   completed views (view_events 'completed') × 1
+# + reactions (likes rows) × 2
+# + comments × 3
+# Ties break to the EARLIEST post. See ROUTE_CONTRACT.md.
+CONTEST_TAGS = ["hereshow", "myride", "sundayplate", "porchview",
+                "redcarpet", "hometownhero", "freshkicks", "goldenhour"]
+
+
+def contest_tag(for_date=None):
+    """The contest hashtag for the ISO week containing for_date
+    (a date; defaults to today, Chicago). Deterministic per week."""
+    d = for_date or _today_chicago()
+    return CONTEST_TAGS[d.isocalendar()[1] % len(CONTEST_TAGS)]
+
+
+def week_bounds(for_date=None):
+    """(monday, sunday) dates of the week containing for_date
+    (defaults to today, Chicago)."""
+    d = for_date or _today_chicago()
+    monday = d - timedelta(days=d.weekday())
+    return monday, monday + timedelta(days=6)
+
+
+def _week_window_utc(for_date=None):
+    """The week's Chicago window as aware UTC datetimes:
+    Mon 00:00:00 through Sun 23:59:59 America/Chicago."""
+    monday, sunday = week_bounds(for_date)
+    tz = _chicago_now().tzinfo
+    start = datetime(monday.year, monday.month, monday.day, tzinfo=tz)
+    end = datetime(sunday.year, sunday.month, sunday.day,
+                   23, 59, 59, tzinfo=tz)
+    return (start.astimezone(timezone.utc),
+            end.astimezone(timezone.utc))
+
+
+def _contest_parts(conn, pid, start, end):
+    """One post's contest score parts inside a UTC window: completed
+    views + 2×reactions + 3×comments, each counted from its own
+    table's created_at (parsed, so any stored ISO shape compares
+    correctly against the window)."""
+    def _count(table, extra=""):
+        n = 0
+        for r in conn.execute(
+                f"SELECT created_at FROM {table} "
+                f"WHERE post_id=?{extra}", (pid,)).fetchall():
+            ts = _parse_ts(r["created_at"])
+            if ts is not None and start <= ts <= end:
+                n += 1
+        return n
+    views = _count("view_events", " AND kind='completed'")
+    likes = _count("likes")
+    comments = _count("comments")
+    return {"views": views, "likes": likes, "comments": comments,
+            "score": views + 2 * likes + 3 * comments}
+
+
+def _contest_entry(conn, p, start, end):
+    """A leaderboard/winner entry dict for post row p."""
+    parts = _contest_parts(conn, p["id"], start, end)
+    a = get_user(p["user_id"])
+    return {"post_id": p["id"], "user_id": p["user_id"],
+            "author_name": a["name"] if a else "Deleted user",
+            "author_avatar": avatar_url(a["avatar"]) if a else "",
+            "media": "/uploads/" + p["media"] if p["media"] else "",
+            "body": p["body"] or "",
+            "created_at": p["created_at"], **parts}
+
+
+def _contest_rank(entries):
+    """Best first: score DESC, then earliest post (created_at, id)."""
+    entries.sort(key=lambda e: (e["created_at"] or "", e["post_id"]))
+    entries.sort(key=lambda e: -e["score"])
+    return entries
+
+
+def _contest_entries_for_viewer(conn, viewer, for_date=None):
+    """This week's entered videos FOR a viewer: the My Views
+    candidate rules with the week's contest tag, ranked."""
+    tag = contest_tag(for_date)
+    start, end = _week_window_utc(for_date)
+    entries = [_contest_entry(conn, p, start, end)
+               for p in _views_candidates(conn, viewer, tag)]
+    return _contest_rank(entries)
+
+
+def _contest_winner(for_date=None):
+    """The winning entry of the week containing for_date (any date in
+    that week), computed globally — every non-share post with an
+    uploaded video file carrying that week's tag, whatever its
+    privacy (the profile chip is a public fact about the AUTHOR).
+    None when the week had no entries."""
+    tag = contest_tag(for_date)
+    start, end = _week_window_utc(for_date)
+    conn = db()
+    rows = conn.execute(
+        "SELECT p.* FROM posts p JOIN post_hashtags h "
+        "ON h.post_id = p.id WHERE h.tag=? AND p.media != '' "
+        "AND p.shared_post_id IS NULL", (tag,)).fetchall()
+    entries = []
+    for r in rows:
+        p = dict(r)
+        if _media_ext(p["media"]) not in VID_EXTS:
+            continue
+        entries.append(_contest_entry(conn, p, start, end))
+    conn.close()
+    if not entries:
+        return None
+    return _contest_rank(entries)[0]
+
+
+def _last_week_winner():
+    """The winner of the most recently COMPLETED week (last week's
+    Sunday sits in last week, so it names the week + its tag)."""
+    monday, _ = week_bounds()
+    return _contest_winner(monday - timedelta(days=1))
+
+
+def contest_winner_user_id():
+    """The user id who won the most recently completed week, or None."""
+    w = _last_week_winner()
+    return w["user_id"] if w else None
+
+
+@app.get("/contest", response_class=HTMLResponse)
+async def contest_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    monday, sunday = week_bounds()
+    conn = db()
+    entries = _contest_entries_for_viewer(conn, user)[:10]
+    conn.close()
+    for i, e in enumerate(entries):
+        e["rank"] = i + 1
+    winner = _last_week_winner()
+    return render(request, "contest.html", {
+        "contest_tag": contest_tag(),
+        "week_sunday": sunday,
+        "entries": entries,
+        "winner": winner,
+        "last_tag": contest_tag(monday - timedelta(days=1))})
 
 
 # ---------------- stories (friends-only, custom lifetimes) ----------------
@@ -3182,6 +4256,26 @@ def _story_payload(conn, s, viewer_id, seen):
                  "len": s["music_len"] or 15,
                  "volume": s["music_volume"] if s["music_volume"] is not None else 80,
                  "mute_orig": bool(s["music_mute_orig"])}
+    # Games pack: the story's binary poll (when one is attached) rides
+    # the same payload — counts for both choices + the VIEWER's pick,
+    # so the viewer can render buttons or result bars without another
+    # fetch. ama is the "Ask me a question" flag.
+    poll = None
+    prow = conn.execute("SELECT * FROM story_polls WHERE story_id=?",
+                        (s["id"],)).fetchone()
+    if prow:
+        counts = {r["choice"]: r["c"] for r in conn.execute(
+            "SELECT choice, COUNT(*) c FROM story_poll_votes "
+            "WHERE story_id=? GROUP BY choice", (s["id"],)).fetchall()}
+        mine = conn.execute(
+            "SELECT choice FROM story_poll_votes WHERE story_id=? "
+            "AND user_id=?", (s["id"], viewer_id)).fetchone()
+        poll = {"question": prow["question"],
+                "a_text": prow["a_text"], "b_text": prow["b_text"],
+                "a_votes": counts.get("a", 0),
+                "b_votes": counts.get("b", 0),
+                "total": counts.get("a", 0) + counts.get("b", 0),
+                "my_choice": mine["choice"] if mine else None}
     return {
         "id": s["id"], "media": media_url,
         "is_video": (s["media"] or "").lower().endswith((".mp4", ".mov", ".webm")),
@@ -3189,6 +4283,8 @@ def _story_payload(conn, s, viewer_id, seen):
         "created_at": s["created_at"], "expires_at": s["expires_at"],
         "mine": s["user_id"] == viewer_id, "seen": bool(seen),
         "overlay": overlay, "music": music,
+        "poll": poll,
+        "ama": bool(s["ama"]) if "ama" in s.keys() else False,
     }
 
 
@@ -3344,6 +4440,21 @@ async def story_create(request: Request):
     music_len = _int_field("music_len", 5, 30, 15)
     music_volume = _int_field("music_volume", 0, 100, 80)
     music_mute_orig = 1 if (form.get("music_mute_orig") or "") == "1" else 0
+    # --- games pack: story poll + AMA (validated BEFORE anything is
+    # saved — a partial poll refuses the whole story, nothing created).
+    # The poll is all-or-nothing: question + BOTH choices, or none of
+    # the three fields may be filled in. ---
+    poll_q = (form.get("poll_question") or "").strip()[:120]
+    poll_a = (form.get("poll_a") or "").strip()[:40]
+    poll_b = (form.get("poll_b") or "").strip()[:40]
+    story_poll = None
+    if poll_q or poll_a or poll_b:
+        if not (poll_q and poll_a and poll_b):
+            return redir("/stories/new",
+                         "Finish the poll — a question and both "
+                         "choices — or leave all three blank.")
+        story_poll = (poll_q, poll_a, poll_b)
+    story_ama = 1 if (form.get("ama") or "") in ("1", "true", "on") else 0
     # --- music: YouTube only. Resolved BEFORE the media is saved, and
     # a song that can't be embedded fails the whole save (no story is
     # created) so the user picks a different upload of the song. ---
@@ -3364,8 +4475,8 @@ async def story_create(request: Request):
         "INSERT INTO stories(user_id, media, caption, created_at, expires_at, "
         "overlay_text, overlay_color, overlay_pos, music_kind, music_ref, "
         "music_title, music_artist, music_thumb, music_start, music_len, "
-        "music_volume, music_mute_orig) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "music_volume, music_mute_orig, ama) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], media, caption, now_iso(), story_expires_at(mins),
          overlay_text, overlay_color, overlay_pos,
          "youtube" if music else None,
@@ -3373,8 +4484,14 @@ async def story_create(request: Request):
          music["title"] if music else "",
          music["artist"] if music else "",
          music["thumb"] if music else "",
-         music_start, music_len, music_volume, music_mute_orig))
+         music_start, music_len, music_volume, music_mute_orig,
+         story_ama))
     sid = cur.lastrowid
+    if story_poll:
+        conn.execute(
+            "INSERT INTO story_polls(story_id, question, a_text, b_text) "
+            "VALUES(?,?,?,?)", (sid, story_poll[0], story_poll[1],
+                                story_poll[2]))
     conn.commit()
     conn.close()
     flag_item("story", sid, user["id"], user["name"],
@@ -3569,6 +4686,102 @@ async def story_react(request: Request, sid: int):
     return JSONResponse({"ok": True, "id": mid})
 
 
+def _story_poll_json(conn, sid, viewer_id):
+    """A story poll's tallies for the viewer: both counts, the total,
+    whole-number percentages, and the viewer's own pick."""
+    counts = {r["choice"]: r["c"] for r in conn.execute(
+        "SELECT choice, COUNT(*) c FROM story_poll_votes "
+        "WHERE story_id=? GROUP BY choice", (sid,)).fetchall()}
+    a_votes, b_votes = counts.get("a", 0), counts.get("b", 0)
+    total = a_votes + b_votes
+    mine = conn.execute(
+        "SELECT choice FROM story_poll_votes WHERE story_id=? "
+        "AND user_id=?", (sid, viewer_id)).fetchone()
+    return {"a_votes": a_votes, "b_votes": b_votes, "total": total,
+            "a_pct": int(round(100.0 * a_votes / total)) if total else 0,
+            "b_pct": int(round(100.0 * b_votes / total)) if total else 0,
+            "my_choice": mine["choice"] if mine else None}
+
+
+@app.post("/story/{sid}/poll/vote")
+async def story_poll_vote(request: Request, sid: int):
+    """Vote in a story's binary poll. JSON {choice: 'a'|'b'}. Gates
+    are the story-interact gate exactly (blocked pair 403, own story
+    400, non-friend / expired story 404 — the same rules the story
+    viewer applies). One row per user; voting again CHANGES the pick."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    gate, resp = _story_interact_gate(user, sid)
+    if resp:
+        return resp
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    choice = str((data or {}).get("choice") or "").strip()
+    if choice not in ("a", "b"):
+        return JSONResponse({"ok": False, "error": "Pick a side."},
+                            status_code=400)
+    conn = db()
+    if not conn.execute("SELECT 1 FROM story_polls WHERE story_id=?",
+                        (sid,)).fetchone():
+        conn.close()
+        return JSONResponse({"ok": False, "error": "No poll on this story."},
+                            status_code=404)
+    conn.execute(
+        "INSERT INTO story_poll_votes(story_id, user_id, choice) "
+        "VALUES(?,?,?) ON CONFLICT(story_id, user_id) DO UPDATE SET "
+        "choice=excluded.choice", (sid, user["id"], choice))
+    conn.commit()
+    out = _story_poll_json(conn, sid, user["id"])
+    conn.close()
+    return JSONResponse({"ok": True, **out})
+
+
+@app.post("/story/{sid}/ama")
+async def story_ama(request: Request, sid: int):
+    """Ask the story's author a question: rides the EXISTING story
+    reply path (_deliver_message with the shared story clip) so it
+    lands in the author's inbox thread as a story message — marked
+    ama=1, which is what makes the thread/inbox label it
+    "❓ Question about your story:". Gates are the story-reply gate
+    exactly (_story_interact_gate: blocked/stranger/own-story rules
+    identical); text rules mirror replies (trimmed, empty refused)
+    plus the message composer's 2000-char cap. The story must carry
+    the AMA box (stories.ama=1)."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    gate, resp = _story_interact_gate(user, sid)
+    if resp:
+        return resp
+    s, owner = gate
+    if not (s.get("ama") if isinstance(s, dict) else s["ama"]):
+        return JSONResponse(
+            {"ok": False, "error": "This story isn't taking questions."},
+            status_code=400)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    body = str((data or {}).get("text") or (data or {}).get("body")
+               or "").strip()
+    if not body:
+        return JSONResponse({"ok": False,
+                             "error": "Write something first."},
+                            status_code=400)
+    if len(body) > 2000:
+        return JSONResponse({"ok": False, "error": "That's too long."},
+                            status_code=400)
+    conn = db()
+    clip = _story_clip_for_replies(conn, s)
+    conn.close()
+    mid = _deliver_message(user, owner["id"], body, story_id=sid,
+                           story_media=clip, ama=1)
+    return JSONResponse({"ok": True, "id": mid})
+
+
 @app.post("/story/{sid}/delete")
 async def story_delete(request: Request, sid: int):
     user, err = require_login(request)
@@ -3580,6 +4793,8 @@ async def story_delete(request: Request, sid: int):
         return redir("/home", "Story not found.")
     conn = db()
     conn.execute("DELETE FROM story_views WHERE story_id=?", (sid,))
+    conn.execute("DELETE FROM story_polls WHERE story_id=?", (sid,))
+    conn.execute("DELETE FROM story_poll_votes WHERE story_id=?", (sid,))
     conn.execute("DELETE FROM stories WHERE id=?", (sid,))
     conn.commit()
     conn.close()
@@ -4020,6 +5235,11 @@ async def profile(request: Request, uid: int):
         "friend_count": fcount,
         "follower_count": follower_count(uid),
         "following_count": following_count(uid),
+        "invite_count": invite_count(uid),
+        "is_gold_inviter": is_gold_inviter(uid),
+        "is_insider": is_insider(uid),
+        "streak": current_streak(uid),
+        "contest_winner": contest_winner_user_id() == uid,
         "viewer_follows": bool(user["id"] != uid
                                and is_following(user["id"], uid)),
         "is_self": user["id"] == uid,
@@ -4663,19 +5883,22 @@ async def unblock_user(request: Request, uid: int):
 
 # ---------------- messages ----------------
 def _deliver_message(sender, receiver_id, body, story_id=None,
-                     story_media=""):
+                     story_media="", ama=0):
     """THE message insert path. POST /messages/{fid} and the story
     reply/react endpoints all land here, so every message gets the
     identical treatment: the row insert, the moderation scan, the bell
     notification, and the push (silence/block-gated inside notify() /
     notifications_allowed). Story-linked messages additionally carry
     story_id + the shared clip copy path (see _story_clip_for_replies);
-    plain messages leave both empty. Returns the new message id."""
+    plain messages leave both empty. ama=1 marks a message that came
+    in through a story's "Ask me a question" box (still a story-linked
+    message in every other way). Returns the new message id."""
     conn = db()
     cur = conn.execute(
         "INSERT INTO messages(sender_id, receiver_id, body, created_at, "
-        "story_id, story_media) VALUES(?,?,?,?,?,?)",
-        (sender["id"], receiver_id, body, now_iso(), story_id, story_media))
+        "story_id, story_media, ama) VALUES(?,?,?,?,?,?,?)",
+        (sender["id"], receiver_id, body, now_iso(), story_id, story_media,
+         1 if ama else 0))
     mid = cur.lastrowid
     conn.commit()
     conn.close()
@@ -4689,12 +5912,17 @@ def _deliver_message(sender, receiver_id, body, story_id=None,
     return mid
 
 
-def _msg_preview(body, story_id):
+def _msg_preview(body, story_id, ama=0):
     """Inbox/Sent preview text for one message row. Story-linked
     messages announce themselves: a reply reads "📖 Story reply: …"
     and a reaction (body is exactly one reaction emoji) reads
-    "📖 {emoji} reacted to a story". Plain messages preview as-is."""
+    "📖 {emoji} reacted to a story". A story AMA question reads
+    "❓ Question about your story: …" (checked first — an AMA message
+    is story-linked too, but the question label wins). Plain messages
+    preview as-is."""
     b = (body or "").strip()
+    if ama:
+        return f"❓ Question about your story: {b}"
     if story_id:
         if b in REACTION_EMOJI.values():
             return f"📖 {b} reacted to a story"
@@ -4750,7 +5978,9 @@ async def inbox(request: Request):
                  "presence": presence_of(
                      {"last_seen_at": r["rlast"], "status_mode": r["rmode"],
                       "inbox_status": r["rinbox"]}, inbox=True),
-                 "body": _msg_preview(r["body"], r["story_id"]),
+                 "body": _msg_preview(
+                     r["body"], r["story_id"],
+                     r["ama"] if "ama" in r.keys() else 0),
                  "created_at": fancy_time(r["created_at"])}
                 for r in rows if r["receiver_id"] not in blocked]
         return render(request, "inbox.html",
@@ -4772,7 +6002,7 @@ async def inbox(request: Request):
             "SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
             "FROM users WHERE id=?", (fid,)).fetchone()
         last = conn.execute(
-            "SELECT m.body, m.created_at, m.story_id FROM messages m WHERE "
+            "SELECT m.body, m.created_at, m.story_id, m.ama FROM messages m WHERE "
             "((m.sender_id=? AND m.receiver_id=?) OR "
             "(m.sender_id=? AND m.receiver_id=?))" + _vis_frag("m") +
             " ORDER BY m.created_at DESC LIMIT 1",
@@ -4788,7 +6018,9 @@ async def inbox(request: Request):
             "friend_name": f["name"] if f else "Deleted user",
             "friend_avatar": avatar_url(f["avatar"]) if f and f["avatar"] else "",
             "presence": presence_of(f, inbox=True) if f else None,
-            "last_body": _msg_preview(last["body"], last["story_id"])
+            "last_body": _msg_preview(
+                last["body"], last["story_id"],
+                last["ama"] if "ama" in last.keys() else 0)
             if last else "",
             "last_at": fancy_time(last["created_at"]) if last else "",
             "unread": unread,
@@ -4842,7 +6074,15 @@ async def thread(request: Request, fid: int):
             # IS the emoji; anything else is a reply. The receiver of a
             # story message is always the story's owner.
             reacted = (r["body"] or "").strip() in REACTION_EMOJI.values()
-            if d["mine"]:
+            is_ama = bool(r["ama"]) if "ama" in r.keys() else False
+            if is_ama:
+                # AMA question (mirror the reply labels, question-style):
+                # the receiver reads the ❓ label verbatim, the sender
+                # reads who they asked.
+                label = (f"❓ You asked {friend['name']} a question "
+                         f"about their story" if d["mine"] else
+                         "❓ Question about your story")
+            elif d["mine"]:
                 label = (f"You reacted to {friend['name']}'s story"
                          if reacted else
                          f"You replied to {friend['name']}'s story")
@@ -5645,6 +6885,10 @@ def _end_live_row(conn, live):
     conn.execute(
         "UPDATE live_admins SET revoked_at=? WHERE live_id=? AND "
         "revoked_at IS NULL", (stamp, live["id"]))
+    # Games pack: an active poll closes with the room.
+    conn.execute(
+        "UPDATE live_polls SET active=0 WHERE live_id=? AND active=1",
+        (live["id"],))
 
 
 def _live_get(conn, lid):
@@ -6402,8 +7646,247 @@ async def live_state(request: Request, lid: int):
     if mine:
         out["my_join"] = {"id": mine["id"], "status": mine["status"],
                           "decided_at": mine["decided_at"]}
+    # Games pack: the room's poll standing. active_poll NEVER carries
+    # the trivia answer while the poll is live. last_closed_poll is
+    # the most recently closed poll — trivia answer + winners_count
+    # revealed — and rides along only while no new poll is active: a
+    # new poll starting replaces it (see ROUTE_CONTRACT.md).
+    _active_poll = conn.execute(
+        "SELECT * FROM live_polls WHERE live_id=? AND active=1 "
+        "ORDER BY id DESC LIMIT 1", (lid,)).fetchone()
+    out["active_poll"] = (
+        _live_poll_json(conn, dict(_active_poll), user["id"])
+        if _active_poll else None)
+    if _active_poll:
+        out["last_closed_poll"] = None
+    else:
+        _closed_poll = conn.execute(
+            "SELECT * FROM live_polls WHERE live_id=? AND active=0 "
+            "ORDER BY id DESC LIMIT 1", (lid,)).fetchone()
+        out["last_closed_poll"] = (
+            _live_poll_json(conn, dict(_closed_poll), user["id"],
+                            reveal=True)
+            if _closed_poll else None)
     conn.close()
     return JSONResponse(out)
+
+
+# ---------------- live polls + trivia (games pack) ----------------
+# Binary polls inside a live room. correct NULL = a plain poll;
+# 'a'/'b' = a trivia poll — the answer is NEVER included in the
+# active_poll state payload; it is revealed only on the closed poll
+# (last_closed_poll) together with winners_count.
+TRIVIA_BANK = [
+    {"q": "How many sides does a stop sign have?",
+     "a": "Eight", "b": "Six", "correct": "a"},
+    {"q": "What color do you get when you mix blue and yellow paint?",
+     "a": "Green", "b": "Purple", "correct": "a"},
+    {"q": "Which animal is called man's best friend?",
+     "a": "Cat", "b": "Dog", "correct": "b"},
+    {"q": "How many days are in a leap year?",
+     "a": "365", "b": "366", "correct": "b"},
+    {"q": "What do bees make?",
+     "a": "Honey", "b": "Jam", "correct": "a"},
+    {"q": "Which season comes right after summer?",
+     "a": "Spring", "b": "Fall", "correct": "b"},
+    {"q": "How many legs does a spider have?",
+     "a": "Eight", "b": "Ten", "correct": "a"},
+    {"q": "What is the main ingredient in guacamole?",
+     "a": "Tomato", "b": "Avocado", "correct": "b"},
+    {"q": "Which planet is known as the Red Planet?",
+     "a": "Mars", "b": "Venus", "correct": "a"},
+    {"q": "How many wheels does a bicycle have?",
+     "a": "Three", "b": "Two", "correct": "b"},
+    {"q": "What do caterpillars turn into?",
+     "a": "Butterflies", "b": "Bees", "correct": "a"},
+    {"q": "Which meal do you eat in the morning?",
+     "a": "Dinner", "b": "Breakfast", "correct": "b"},
+    {"q": "What is H2O more commonly known as?",
+     "a": "Salt", "b": "Water", "correct": "b"},
+    {"q": "How many continents are there on Earth?",
+     "a": "Seven", "b": "Five", "correct": "a"},
+    {"q": "Which bird cannot fly but can swim?",
+     "a": "Eagle", "b": "Penguin", "correct": "b"},
+]
+
+
+def _live_poll_json(conn, poll, viewer_id, reveal=False):
+    """One live poll for the state payload / vote responses: tallies
+    for both choices + the viewer's pick. `correct` is included ONLY
+    when reveal=True (a closed trivia poll) — never while active."""
+    counts = {r["choice"]: r["c"] for r in conn.execute(
+        "SELECT choice, COUNT(*) c FROM live_poll_votes "
+        "WHERE poll_id=? GROUP BY choice", (poll["id"],)).fetchall()}
+    a_votes, b_votes = counts.get("a", 0), counts.get("b", 0)
+    mine = conn.execute(
+        "SELECT choice FROM live_poll_votes WHERE poll_id=? "
+        "AND user_id=?", (poll["id"], viewer_id)).fetchone()
+    out = {"id": poll["id"], "question": poll["question"],
+           "a_text": poll["a_text"], "b_text": poll["b_text"],
+           "a_votes": a_votes, "b_votes": b_votes,
+           "total": a_votes + b_votes,
+           "my_choice": mine["choice"] if mine else None,
+           "is_trivia": poll["correct"] is not None,
+           "active": bool(poll["active"])}
+    if reveal and poll["correct"] is not None:
+        correct = poll["correct"]
+        out["correct"] = correct
+        out["correct_text"] = (poll["a_text"] if correct == "a"
+                               else poll["b_text"])
+        out["winners_count"] = conn.execute(
+            "SELECT COUNT(*) c FROM live_poll_votes WHERE poll_id=? "
+            "AND choice=?", (poll["id"], correct)).fetchone()["c"]
+    return out
+
+
+def _live_poll_mod_gate(request, lid):
+    """(user, live, err) for poll creation/end: the live-access gate
+    plus the host-or-admin role (the live section's role helpers)."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return None, None, err
+    conn = db()
+    allowed = live["host_id"] == user["id"] or _live_is_admin(
+        conn, lid, user["id"])
+    conn.close()
+    if not allowed:
+        return None, None, JSONResponse(
+            {"ok": False,
+             "error": "Only the host or an admin can do that."},
+            status_code=403)
+    return user, live, None
+
+
+async def _live_poll_body(request):
+    """JSON body, falling back to form fields (the live comment
+    endpoint's pattern)."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict) or not data:
+        try:
+            form = await request.form()
+            data = {"question": form.get("question"),
+                    "a": form.get("a"), "b": form.get("b"),
+                    "correct": form.get("correct"),
+                    "choice": form.get("choice")}
+        except Exception:
+            data = {}
+    return data if isinstance(data, dict) else {}
+
+
+@app.post("/live/{lid}/poll")
+async def live_poll_create(request: Request, lid: int):
+    """Start a poll (host/admin only). Starting one auto-closes the
+    room's previous active poll — only ONE active poll per live.
+    question ≤120 chars, options ≤40. correct 'a'/'b' makes it a
+    trivia poll; absent/empty makes it a plain poll."""
+    user, live, err = _live_poll_mod_gate(request, lid)
+    if err:
+        return err
+    data = await _live_poll_body(request)
+    question = str(data.get("question") or "").strip()[:120]
+    a_text = str(data.get("a") or "").strip()[:40]
+    b_text = str(data.get("b") or "").strip()[:40]
+    correct = data.get("correct")
+    if correct in ("", None):
+        correct = None
+    if correct not in (None, "a", "b"):
+        return JSONResponse({"ok": False, "error": "Bad trivia answer."},
+                            status_code=400)
+    if not question or not a_text or not b_text:
+        return JSONResponse(
+            {"ok": False,
+             "error": "A poll needs a question and two choices."},
+            status_code=400)
+    conn = db()
+    conn.execute("UPDATE live_polls SET active=0 WHERE live_id=? "
+                 "AND active=1", (lid,))
+    cur = conn.execute(
+        "INSERT INTO live_polls(live_id, question, a_text, b_text, "
+        "correct, created_by, active, created_at) "
+        "VALUES(?,?,?,?,?,?,1,?)",
+        (lid, question, a_text, b_text, correct, user["id"], now_iso()))
+    poll_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM live_polls WHERE id=?",
+                       (poll_id,)).fetchone()
+    out = _live_poll_json(conn, dict(row), user["id"])
+    conn.close()
+    return JSONResponse({"ok": True, "poll": out})
+
+
+@app.post("/live/{lid}/poll/{poll_id}/end")
+async def live_poll_end(request: Request, lid: int, poll_id: int):
+    """Close a poll (host/admin only). The response + subsequent
+    state polls carry it as last_closed_poll with the trivia answer
+    (when any) revealed."""
+    user, live, err = _live_poll_mod_gate(request, lid)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute("SELECT * FROM live_polls WHERE id=? AND live_id=?",
+                       (poll_id, lid)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    conn.execute("UPDATE live_polls SET active=0 WHERE id=?", (poll_id,))
+    conn.commit()
+    row = conn.execute("SELECT * FROM live_polls WHERE id=?",
+                       (poll_id,)).fetchone()
+    out = _live_poll_json(conn, dict(row), user["id"], reveal=True)
+    conn.close()
+    return JSONResponse({"ok": True, "poll": out})
+
+
+@app.post("/live/{lid}/poll/{poll_id}/vote")
+async def live_poll_vote(request: Request, lid: int, poll_id: int):
+    """Vote in the room's active poll. The voter must be IN the room
+    — the same gate as live commenting (_live_access: host / panel /
+    watcher who may watch this live). One vote per user, changeable
+    while the poll is active; a closed poll refuses with 409."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    data = await _live_poll_body(request)
+    choice = str(data.get("choice") or "").strip()
+    if choice not in ("a", "b"):
+        return JSONResponse({"ok": False, "error": "Pick a side."},
+                            status_code=400)
+    conn = db()
+    row = conn.execute("SELECT * FROM live_polls WHERE id=? AND live_id=?",
+                       (poll_id, lid)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if not row["active"]:
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "This poll has ended."},
+                            status_code=409)
+    conn.execute(
+        "INSERT INTO live_poll_votes(poll_id, user_id, choice) "
+        "VALUES(?,?,?) ON CONFLICT(poll_id, user_id) DO UPDATE SET "
+        "choice=excluded.choice", (poll_id, user["id"], choice))
+    conn.commit()
+    out = _live_poll_json(conn, dict(row), user["id"])
+    conn.close()
+    return JSONResponse({"ok": True, "poll": out, **out})
+
+
+@app.get("/live/{lid}/trivia")
+async def live_trivia(request: Request, lid: int):
+    """A random question from the built-in trivia bank, for the
+    manage sheet's 🎲 prefill button (host/admin only, like creating)."""
+    user, live, err = _live_poll_mod_gate(request, lid)
+    if err:
+        return err
+    q = secrets.choice(TRIVIA_BANK)
+    return JSONResponse({"ok": True, "question": q["q"], "a": q["a"],
+                         "b": q["b"], "correct": q["correct"]})
 
 
 @app.post("/live/{lid}/comment")
@@ -7227,9 +8710,22 @@ async def discover(request: Request):
     user, err = require_login(request)
     if err:
         return err
+    conn = db()
+    irows = conn.execute(
+        "SELECT invited_by AS uid, COUNT(*) AS c FROM users "
+        "WHERE invited_by IS NOT NULL GROUP BY invited_by "
+        "HAVING COUNT(*) >= 10 ORDER BY COUNT(*) DESC").fetchall()
+    conn.close()
+    insiders = []
+    for r in irows[:12]:
+        iu = get_user(r["uid"])
+        if iu:
+            insiders.append({"id": iu["id"], "name": iu["name"],
+                             "avatar": avatar_url(iu.get("avatar", ""))})
     return render(request, "discover.html",
                   {"people": discover_people(user["id"], 20),
-                   "trends": trending_topics(15, user["id"])})
+                   "trends": trending_topics(15, user["id"]),
+                   "insiders": insiders})
 
 
 # ---------------- search ----------------
