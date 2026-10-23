@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}🔥 Daily Challenge — HERE{% endblock %}
+{% block content %}
+
+<div class="card" style="text-align:center;padding:28px 20px">
+  <div style="font-size:14px;color:var(--muted)">{{ daily_date|e }} · Daily Challenge</div>
+  <h2 style="font-size:34px;margin:10px 0 6px">{{ prompt|e }}</h2>
+  <div style="font-size:17px;margin-top:8px">🔥 Your streak: {{ streak }} day{{ 's' if streak != 1 }}</div>
+</div>
+
+<div class="card">
+  <div class="section-title">🏆 Top streaks</div>
+  {% for p in leaderboard %}
+  <div class="row-item">
+    {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ p.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow" style="flex:1;min-width:0">
+      <div class="nm"><a href="/user/{{ p.id }}">{{ p.name|e }}</a></div>
+    </div>
+    <span class="kind-tag">🔥 {{ p.streak }}</span>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px;margin-top:8px">No streaks yet — answer today's challenge to start one!</p>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="section-title">📸 Answer it</div>
+  <form action="/posts" method="post" enctype="multipart/form-data" style="margin-top:10px">
+    <input type="hidden" name="challenge" value="1">
+    <input type="hidden" name="next" value="/daily">
+    <input type="hidden" name="kind" id="daily-kind" value="text">
+    <textarea name="body" placeholder="Show us: {{ prompt|e }}" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;min-height:70px"></textarea>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+      <label class="fld" style="margin:0;font-size:14px">Add a photo or video
+        <input type="file" name="media" id="daily-media" accept="image/*,video/*,.mp4,.mov,.webm">
+      </label>
+      <label class="fld" style="margin:0;font-size:14px">👁
+        <select name="privacy" style="border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:14px">
+          <option value="public">🌍 Public</option>
+          <option value="friends">👥 Friends</option>
+          <option value="onlyme">🔒 Only me</option>
+        </select>
+      </label>
+      <button type="submit" class="btn">Post my answer</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="section-title">💬 {{ answers_count }} answer{{ 's' if answers_count != 1 }} today</div>
+</div>
+
+{% for post in answers %}
+  {% include "partials/post_card.html" %}
+{% else %}
+<div class="card"><p style="color:var(--muted)">No answers yet today — yours could be first!</p></div>
+{% endfor %}
+
+<div class="card">
+  <p style="color:var(--muted);font-size:14px;margin:0">Yesterday: {{ yesterday_prompt|e }} — {{ yesterday_count }} answer{{ 's' if yesterday_count != 1 }}</p>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var media = document.getElementById('daily-media');
+  var kind = document.getElementById('daily-kind');
+  if (media && kind) {
+    media.addEventListener('change', function () {
+      var f = media.files && media.files[0];
+      if (!f) { kind.value = 'text'; return; }
+      kind.value = (f.type && f.type.indexOf('video') === 0) ? 'video' : 'photo';
+    });
+  }
+})();
+</script>
+{% endblock %}

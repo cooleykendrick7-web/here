@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Welcome to HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div style="display:flex;align-items:flex-start;gap:10px">
+    <h2 style="margin:0;flex:1">Welcome to HERE 👋</h2>
+    <form action="/welcome/done" method="post" style="margin:0">
+      <button type="submit" class="btn">Start exploring →</button>
+    </form>
+  </div>
+  <p style="color:var(--muted);margin-top:6px">Three quick steps and your feed is already yours.</p>
+</div>
+
+<div class="card">
+  <div class="section-title">Step 1 · What are you into?</div>
+  <p style="color:var(--muted);font-size:14px;margin-top:6px">Pick up to 5 — <span id="topic-count">{{ saved_topics|length }}</span>/5 picked. Your picks tune your My Views feed.</p>
+  <div id="topic-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+    {% for t in topics %}
+    <button type="button" class="chip topic-chip{% if t.selected %} topic-on{% endif %}" data-topic="{{ t.key|e }}" style="padding:9px 14px;border-radius:999px;border:2px solid var(--border);background:#fff;cursor:pointer;font-size:15px{% if t.selected %};background:var(--red);color:#fff;border-color:var(--red){% endif %}">{{ t.label|e }}</button>
+    {% endfor %}
+  </div>
+  <div style="margin-top:14px;display:flex;align-items:center;gap:10px">
+    <button type="button" class="btn" id="topics-save">Save my picks</button>
+    <span id="topics-saved" style="color:var(--muted);font-size:14px" hidden>Saved ✓</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">Step 2 · People to follow</div>
+  <div id="sugg-list" style="margin-top:10px">
+    {% for s in suggestions %}
+    <div class="row-item sugg-row" data-uid="{{ s.id }}">
+      {% if s.avatar %}<img class="avatar av-40" src="{{ s.avatar|e }}" alt="">
+      {% else %}<span class="av-ph av-40">{{ s.name[:1]|upper|e }}</span>{% endif %}
+      <div class="grow" style="flex:1;min-width:0">
+        <div class="nm"><a href="/user/{{ s.id }}">{{ s.name|e }}</a></div>
+        <div class="sub">{{ s.follower_count }} followers{% if s.matched_labels %} · into {{ s.matched_labels|join(', ') }}{% endif %}</div>
+      </div>
+      <button type="button" class="btn-ghost btn-sm sugg-btn" data-uid="{{ s.id }}" data-following="{{ '1' if s.following else '0' }}">{{ '✓ Following' if s.following else '➕ Follow' }}</button>
+    </div>
+    {% else %}
+    <p style="color:var(--muted);font-size:14px">Nobody to suggest yet — you're early!</p>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">Step 3 · Trending on My Views</div>
+  {% if trending %}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px">
+    {% for v in trending %}
+    <a href="/views" style="display:block">
+      <video preload="metadata" muted playsinline src="{{ v.video_url|e }}" style="width:100%;border-radius:8px;background:#111;aspect-ratio:9/16;object-fit:cover"></video>
+      <div style="font-size:13px;margin-top:4px">{{ v.author_name|e }} · ❤️ {{ v.reaction_count }} · 💬 {{ v.comment_count }}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px;margin-top:8px">No videos yet — be the first! <a href="/views">Open My Views →</a></p>
+  {% endif %}
+</div>
+
+<div class="card" style="text-align:center">
+  <form action="/welcome/done" method="post" style="margin:0 0 8px">
+    <button type="submit" class="btn">Start exploring →</button>
+  </form>
+  <form action="/welcome/done" method="post" style="margin:0">
+    <button type="submit" class="btn-ghost btn-sm">skip for now</button>
+  </form>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var TOPIC_LABELS = {{ topics|map(attribute='label')|list|tojson }};
+  var TOPIC_KEYS = {{ topics|map(attribute='key')|list|tojson }};
+  var picked = [];
+  document.querySelectorAll('.topic-chip').forEach(function (ch) {
+    if (ch.classList.contains('topic-on')) picked.push(ch.dataset.topic);
+  });
+  var countEl = document.getElementById('topic-count');
+  var savedEl = document.getElementById('topics-saved');
+  function paint(ch) {
+    var on = picked.indexOf(ch.dataset.topic) >= 0;
+    ch.classList.toggle('topic-on', on);
+    ch.style.background = on ? 'var(--red)' : '#fff';
+    ch.style.color = on ? '#fff' : '';
+    ch.style.borderColor = on ? 'var(--red)' : 'var(--border)';
+    if (countEl) countEl.textContent = String(picked.length);
+  }
+  document.querySelectorAll('.topic-chip').forEach(function (ch) {
+    ch.addEventListener('click', function () {
+      var k = ch.dataset.topic;
+      var i = picked.indexOf(k);
+      if (i >= 0) { picked.splice(i, 1); }
+      else {
+        if (picked.length >= 5) return;
+        picked.push(k);
+      }
+      paint(ch);
+    });
+  });
+  var saveBtn = document.getElementById('topics-save');
+  if (saveBtn) saveBtn.addEventListener('click', function () {
+    fetch('/welcome/topics', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({topics: picked})
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok) {
+        picked = d.topics || picked;
+        document.querySelectorAll('.topic-chip').forEach(paint);
+        if (savedEl) { savedEl.hidden = false; }
+        refreshSuggestions();
+      }
+    }).catch(function () {});
+  });
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+  function labelFor(k) {
+    var i = TOPIC_KEYS.indexOf(k);
+    return i >= 0 ? TOPIC_LABELS[i] : k;
+  }
+  function wireFollow(btn) {
+    btn.addEventListener('click', function () {
+      var uid = btn.dataset.uid;
+      var on = btn.dataset.following === '1';
+      fetch((on ? '/unfollow/' : '/follow/') + uid, {method: 'POST'})
+        .then(function () { refreshSuggestions(); })
+        .catch(function () {});
+    });
+  }
+  document.querySelectorAll('.sugg-btn').forEach(wireFollow);
+  function refreshSuggestions() {
+    fetch('/welcome/suggestions.json').then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok) return;
+        var list = document.getElementById('sugg-list');
+        if (!list) return;
+        list.innerHTML = '';
+        (d.suggestions || []).forEach(function (s) {
+          var row = document.createElement('div');
+          row.className = 'row-item sugg-row';
+          row.dataset.uid = s.id;
+          var av = s.avatar
+            ? '<img class="avatar av-40" src="' + esc(s.avatar) + '" alt="">'
+            : '<span class="av-ph av-40">' + esc((s.name || '?').charAt(0).toUpperCase()) + '</span>';
+          var matched = (s.matched_topics && s.matched_topics.length)
+            ? ' · into ' + s.matched_topics.map(labelFor).join(', ') : '';
+          row.innerHTML = av
+            + '<div class="grow" style="flex:1;min-width:0"><div class="nm"><a href="/user/'
+            + s.id + '">' + esc(s.name) + '</a></div><div class="sub">'
+            + s.follower_count + ' followers' + esc(matched) + '</div></div>'
+            + '<button type="button" class="btn-ghost btn-sm sugg-btn" data-uid="'
+            + s.id + '" data-following="' + (s.following ? '1' : '0') + '">'
+            + (s.following ? '✓ Following' : '➕ Follow') + '</button>';
+          list.appendChild(row);
+          wireFollow(row.querySelector('.sugg-btn'));
+        });
+        if (!list.children.length) {
+          list.innerHTML = '<p style="color:var(--muted);font-size:14px">Nobody to suggest yet — you\'re early!</p>';
+        }
+      }).catch(function () {});
+  }
+})();
+</script>
+{% endblock %}

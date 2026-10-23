@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0a">
+<title>{% if profile.spot_name %}{{ profile.spot_name|e }} · {% endif %}{{ profile.name|e }} on HERE</title>
+<meta property="og:title" content="{{ profile.name|e }} on HERE">
+<meta property="og:description" content="{{ profile.name|e }} is on HERE — join to see more">
+{% if og_image %}<meta property="og:image" content="{{ og_image|e }}">{% endif %}
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 24px 110px}
+.brand{font-size:52px;font-weight:900;color:#d41f2e;letter-spacing:-2px;text-shadow:0 0 40px rgba(212,31,46,.45)}
+.card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:24px;width:100%;max-width:560px;box-shadow:0 8px 32px rgba(212,31,46,.15);margin-top:20px;text-align:center}
+.avatar{border-radius:50%;object-fit:cover;width:100px;height:100px;background:#ccc;margin:0 auto;display:block}
+.av-ph{border-radius:50%;background:#d41f2e;color:#fff;font-weight:800;width:100px;height:100px;display:flex;align-items:center;justify-content:center;font-size:40px;margin:0 auto}
+.spot{font-size:26px;font-weight:900;margin-top:14px}
+.nm{font-weight:800;font-size:20px;margin-top:14px}
+.spot + .nm{margin-top:2px;font-size:16px;color:#ccc}
+.meta{color:#9a9a9a;font-size:14px;margin-top:6px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:18px}
+.cell{display:block;aspect-ratio:1/1;overflow:hidden;border-radius:8px;background:#1f1f1f}
+.cell img,.cell video{width:100%;height:100%;object-fit:cover;display:block}
+.cta{position:fixed;left:0;right:0;bottom:0;background:#111;border-top:1px solid #2a2a2a;padding:14px 20px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:8px;padding:12px 26px;font-size:16px;font-weight:800;text-decoration:none}
+.btn:hover{background:#a8151f}
+.cta a.login{color:#f0f0f0;font-weight:700}
+.back{margin-top:14px;font-size:14px}
+.back a{color:#f0f0f0;font-weight:600}
+</style>
+</head>
+<body>
+<div class="brand">HERE</div>
+<div class="card">
+  {% if profile.avatar %}<img class="avatar" src="{{ profile.avatar|e }}" alt="">
+  {% else %}<span class="av-ph">{{ profile.name[:1]|upper|e }}</span>{% endif %}
+  {% if profile.spot_name %}<div class="spot">{{ profile.spot_name|e }}</div>{% endif %}
+  <div class="nm">{{ profile.name|e }}</div>
+  <div class="meta">{{ profile.follower_count }} Followers · {{ profile.following_count }} Following</div>
+  {% if photos %}
+  <div class="grid">
+    {% for ph in photos %}
+    <a class="cell" href="/p/{{ ph.post_id }}">
+      {% if ph.kind == 'video' %}<video preload="metadata" muted playsinline src="{{ ph.url|e }}"></video>
+      {% else %}<img src="{{ ph.url|e }}" alt="">{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% if logged_in %}<div class="back"><a href="/home">← Back to HERE</a></div>{% endif %}
+<div class="cta">
+  <a class="btn" href="/signup">Join HERE</a>
+  <a class="login" href="/login">Log in</a>
+</div>
+</body>
+</html>

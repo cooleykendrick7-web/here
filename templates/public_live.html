@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0a">
+<title>{{ host.name|e }} is live on HERE</title>
+<meta property="og:title" content="{{ host.name|e }} is live on HERE">
+<meta property="og:description" content="This live is happening now on HERE — join free to watch and join the panel">
+{% if og_image %}<meta property="og:image" content="{{ og_image|e }}">{% endif %}
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 24px 110px}
+.brand{font-size:52px;font-weight:900;color:#d41f2e;letter-spacing:-2px;text-shadow:0 0 40px rgba(212,31,46,.45)}
+.card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:24px;width:100%;max-width:560px;box-shadow:0 8px 32px rgba(212,31,46,.15);margin-top:20px;text-align:center}
+.who{display:flex;gap:12px;align-items:center;justify-content:center;margin-bottom:14px}
+.avatar{border-radius:50%;object-fit:cover;width:56px;height:56px;background:#ccc}
+.av-ph{border-radius:50%;background:#d41f2e;color:#fff;font-weight:800;width:56px;height:56px;display:flex;align-items:center;justify-content:center;font-size:24px}
+.nm{font-weight:800;font-size:19px;text-align:left}
+.badge{display:inline-block;background:#d41f2e;color:#fff;font-weight:800;border-radius:6px;padding:4px 10px;font-size:14px;margin-bottom:12px}
+.title{font-size:20px;font-weight:700;margin-bottom:10px;word-wrap:break-word}
+.copy{color:#ccc;line-height:1.5;margin-bottom:8px}
+.meta{color:#9a9a9a;font-size:14px}
+.cta{position:fixed;left:0;right:0;bottom:0;background:#111;border-top:1px solid #2a2a2a;padding:14px 20px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:8px;padding:12px 26px;font-size:16px;font-weight:800;text-decoration:none}
+.btn:hover{background:#a8151f}
+.cta a.login{color:#f0f0f0;font-weight:700}
+.back{margin-top:14px;font-size:14px}
+.back a{color:#f0f0f0;font-weight:600}
+</style>
+</head>
+<body>
+<div class="brand">HERE</div>
+<div class="card">
+  <div><span class="badge">🔴 LIVE</span></div>
+  <div class="who">
+    {% if host.avatar %}<img class="avatar" src="{{ host.avatar|e }}" alt="">
+    {% else %}<span class="av-ph">{{ host.name[:1]|upper|e }}</span>{% endif %}
+    <div class="nm">{{ host.name|e }}</div>
+  </div>
+  {% if live.title %}<div class="title">{{ live.title|e }}</div>{% endif %}
+  <p class="copy">This live is happening now on HERE — join free to watch and join the panel</p>
+  <div class="meta">👁 {{ viewers }} watching</div>
+</div>
+{% if logged_in %}<div class="back"><a href="/home">← Back to HERE</a></div>{% endif %}
+<div class="cta">
+  <a class="btn" href="/signup">Join HERE</a>
+  <a class="login" href="/login">Log in</a>
+</div>
+</body>
+</html>

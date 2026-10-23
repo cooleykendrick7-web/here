@@ -79,6 +79,7 @@ img{max-width:100%}
 .avatar{border-radius:50%;object-fit:cover;flex-shrink:0;background:#ccc;display:block}
 .av-ph{border-radius:50%;background:var(--red);color:#fff;font-weight:800;flex-shrink:0;
   display:flex;align-items:center;justify-content:center}
+.av-gold{border:3px solid #FFD700;box-shadow:0 0 10px rgba(255,215,0,.85);box-sizing:border-box}
 .av-40{width:40px;height:40px;font-size:16px}
 .av-32{width:32px;height:32px;font-size:13px}
 .av-100{width:100px;height:100px;font-size:40px}
@@ -360,6 +361,21 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .post-video{position:relative;width:100%;padding-bottom:56.25%;margin-bottom:10px}
 .post-video iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0;border-radius:8px}
 .post-video-file{width:100%;border-radius:8px;margin-bottom:10px;display:block;background:#000}
+/* post polls (games pack): tappable options before voting, result
+   bars after (or for the author) — my pick highlighted red */
+.post-poll{margin:4px 0 12px;display:flex;flex-direction:column;gap:7px}
+.poll-opt-btn{text-align:left;background:#f5f6f7;border:1px solid var(--border);
+  border-radius:10px;padding:10px 13px;font-size:15px;font-weight:600;cursor:pointer;width:100%}
+.poll-opt-btn:hover{border-color:var(--red);background:var(--red-soft)}
+.poll-row{position:relative;border:1px solid var(--border);border-radius:10px;
+  overflow:hidden;padding:9px 13px;font-size:14.5px;display:flex;gap:8px;align-items:center}
+.poll-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(212,31,46,.14);z-index:0}
+.poll-row.mine{border-color:var(--red);font-weight:700}
+.poll-row.mine .poll-fill{background:rgba(212,31,46,.3)}
+.poll-row .poll-opt-text{position:relative;z-index:1;flex:1;min-width:0}
+.poll-row .poll-pct{position:relative;z-index:1;color:var(--muted);font-size:13.5px;white-space:nowrap}
+.poll-row.mine .poll-pct{color:var(--red-dark)}
+.poll-total{font-size:12.5px;color:var(--muted)}
 .post-stats{display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--border);
   color:var(--muted);font-size:14px}
 .post-stats a:hover{color:var(--red)}
@@ -451,6 +467,29 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
   border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:9px 15px;
   font-size:15px;outline:none}
 #sv-reply-input::placeholder{color:rgba(255,255,255,.6)}
+/* story poll card + AMA box (games pack): the poll floats over the
+   stage's bottom area; the AMA form rides inside the reply bar */
+#sv-poll{position:absolute;left:14px;right:14px;bottom:70px;z-index:6;
+  background:rgba(0,0,0,.72);border:1px solid rgba(255,255,255,.25);
+  border-radius:14px;padding:12px 14px;color:#fff}
+#sv-poll .sv-poll-q{font-weight:800;font-size:16px;margin-bottom:9px}
+.sv-poll-btn{display:block;width:100%;text-align:left;background:rgba(255,255,255,.14);
+  color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:10px;
+  padding:10px 13px;font-size:15px;font-weight:700;cursor:pointer;margin-top:7px}
+.sv-poll-btn:hover{background:rgba(212,31,46,.55)}
+.sv-poll-row{position:relative;border:1px solid rgba(255,255,255,.3);border-radius:10px;
+  overflow:hidden;padding:9px 13px;margin-top:7px;font-size:14.5px;
+  display:flex;gap:8px;align-items:center}
+.sv-poll-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(212,31,46,.45);z-index:0}
+.sv-poll-row .t{position:relative;z-index:1;flex:1;min-width:0}
+.sv-poll-row .p{position:relative;z-index:1;font-size:13.5px;color:rgba(255,255,255,.85);white-space:nowrap}
+.sv-poll-row.mine{border-color:#ff5b6a;font-weight:800}
+#sv-poll .sv-poll-total{font-size:12.5px;color:rgba(255,255,255,.7);margin-top:8px}
+#sv-ama-form{display:flex;gap:8px}
+#sv-ama-input{flex:1;min-width:0;background:rgba(255,255,255,.12);color:#fff;
+  border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:9px 15px;
+  font-size:15px;outline:none}
+#sv-ama-input::placeholder{color:rgba(255,255,255,.6)}
 /* story clip card inside a message thread (reply/reaction bubbles) */
 .story-card{display:inline-block;text-align:left;max-width:190px;margin-bottom:4px}
 .story-card .story-clip{width:190px;max-height:250px;object-fit:cover;display:block;
@@ -677,8 +716,8 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <button class="nav-ic menu-toggle" title="Menu" aria-label="Menu" onclick="document.getElementById('mobmenu').classList.toggle('open')">☰</button>
     {% if user %}
     <a class="nav-av" href="/user/{{ user.id }}" title="{{ user.name|e }}">
-      {% if user.avatar %}<img src="{{ user.avatar|e }}" alt="me">
-      {% else %}<span class="av-ph av-40">{{ user.name[:1]|upper|e }}</span>{% endif %}
+      {% if user.avatar %}<img src="{{ user.avatar|e }}" alt="me"{% if viewer_gold %} class="av-gold"{% endif %}>
+      {% else %}<span class="av-ph av-40{% if viewer_gold %} av-gold{% endif %}">{{ user.name[:1]|upper|e }}</span>{% endif %}
     </a>
     {% endif %}
   </nav>
@@ -702,6 +741,9 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   <a href="/hidden"><span>🙈</span> Hidden</a>
   <a href="/notifications"><span>🔔</span> Notifications</a>
   <a href="/app"><span>📱</span> Get the app</a>
+  <a href="/invite"><span>🎟</span> Invite</a>
+  <a href="/daily"><span>🔥</span> Daily</a>
+  <a href="/contest"><span>🏆</span> Contest</a>
   <a href="/logout"><span>🚪</span> Logout</a>
 </div>
 
@@ -724,6 +766,9 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <a class="menu-item" href="/hidden"><span class="menu-ic">🙈</span> Hidden</a>
     <a class="menu-item" href="/notifications"><span class="menu-ic">🔔</span> Notifications</a>
     <a class="menu-item" href="/app"><span class="menu-ic">📱</span> Get the app</a>
+    <a class="menu-item" href="/invite"><span class="menu-ic">🎟</span> Invite</a>
+    <a class="menu-item" href="/daily"><span class="menu-ic">🔥</span> Daily</a>
+    <a class="menu-item" href="/contest"><span class="menu-ic">🏆</span> Contest</a>
     <a class="menu-item" href="/logout"><span class="menu-ic">🚪</span> Logout</a>
   </aside>
 
@@ -2309,6 +2354,55 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(function () {});
   });
 }
+</script>
+<script>
+document.addEventListener('click', function (e) {
+  var b = e.target && e.target.closest ? e.target.closest('[data-copy-path]') : null;
+  if (!b) return;
+  var url = location.origin + b.getAttribute('data-copy-path');
+  var done = function () {
+    var old = b.textContent;
+    b.textContent = '✓ Link copied';
+    setTimeout(function () { b.textContent = old; }, 1600);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done).catch(done);
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = url;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (err) {}
+    document.body.removeChild(ta);
+    done();
+  }
+});
+</script>
+<script>
+/* Post polls (games pack): one delegated handler for every poll
+   option button on any page that renders a post card. A successful
+   vote reloads the page so the card re-renders as result bars with
+   the viewer's pick highlighted (the server is the source of truth
+   for counts). */
+document.addEventListener('click', function (e) {
+  var b = e.target && e.target.closest ? e.target.closest('.poll-opt-btn') : null;
+  if (!b) return;
+  var pid = b.getAttribute('data-post');
+  var oid = b.getAttribute('data-option');
+  if (!pid || !oid) return;
+  b.disabled = true;
+  fetch('/post/' + pid + '/poll/vote', {
+    method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({option_id: parseInt(oid, 10)})
+  }).then(function (r) { return r.json().catch(function () { return {}; }); })
+    .then(function (d) {
+      if (d && d.ok) { location.reload(); return; }
+      b.disabled = false;
+      alert((d && d.error) || 'Could not vote.');
+    })
+    .catch(function () { b.disabled = false; });
+});
 </script>
 </body>
 </html>

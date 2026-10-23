@@ -345,6 +345,21 @@
       tagsEl.innerHTML = '';
       d.tags.forEach(function (t) {
         if (!t || !t.tag) return;
+        if (t.contest) {
+          /* The weekly contest tag is pinned first as a 🏆 LINK to
+             /contest — not a filter chip. */
+          var a = document.createElement('a');
+          a.className = 'mv-tag';
+          a.href = '/contest';
+          a.style.textDecoration = 'none';
+          a.textContent = '🏆 #' + t.tag + ' ';
+          var ccnt = document.createElement('span');
+          ccnt.className = 'cnt';
+          ccnt.textContent = t.count;
+          a.appendChild(ccnt);
+          tagsEl.appendChild(a);
+          return;
+        }
         var b = document.createElement('button');
         b.type = 'button';
         b.className = 'mv-tag';
@@ -567,6 +582,34 @@
     moreItem.appendChild(moreBtn);
     rail.appendChild(moreItem);
     moreBtn.addEventListener('click', function () { openMenu(entry); });
+
+    var shareItem = document.createElement('div');
+    shareItem.className = 'mv-rail-item';
+    var shareBtn = document.createElement('button');
+    shareBtn.type = 'button';
+    shareBtn.className = 'mv-rail-btn';
+    shareBtn.textContent = '🔗';
+    shareBtn.title = 'Share';
+    shareItem.appendChild(shareBtn);
+    rail.appendChild(shareItem);
+    shareBtn.addEventListener('click', function () {
+      var url = location.origin + '/p/' + item.post_id;
+      var done = function () {
+        shareBtn.textContent = '✓';
+        setTimeout(function () { shareBtn.textContent = '🔗'; }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done).catch(done);
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = url;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+        done();
+      }
+    });
 
     cell.appendChild(rail);
 

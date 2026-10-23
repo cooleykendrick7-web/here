@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Invite friends — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">🎟 Invite friends</div>
+  <p style="color:var(--muted);font-size:14px">Share your personal link — when someone joins HERE from it, they show up here and you earn milestones.</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+    <input type="text" readonly value="{{ invite_link|e }}" id="invite-link-input" style="flex:1;min-width:220px;background:#f0f2f5;border:1px solid var(--border);border-radius:6px;padding:9px 12px;font-size:14px">
+    <button type="button" class="btn" id="invite-copy-btn">Copy link</button>
+    <button type="button" class="btn-ghost" id="invite-share-btn">📲 Share</button>
+  </div>
+  <div style="margin-top:16px;text-align:center">
+    <img src="{{ qr_src|e }}" alt="QR code for your invite link" width="180" height="180">
+    <div class="post-meta">Point a phone camera here to open your invite link</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">📈 Your invites</div>
+  <p style="font-size:15px"><strong>{{ count }}</strong> {{ 'person has' if count == 1 else 'people have' }} joined from your invite</p>
+  <div style="margin-top:14px">
+    <div>🥇 Gold frame at {{ gold_at }} — {{ count }}/{{ gold_at }}{% if is_gold %} ✓ Earned{% endif %}</div>
+    <div style="background:#e4e6eb;border-radius:6px;height:10px;margin-top:6px;overflow:hidden"><div style="background:#FFD700;height:100%;width:{{ gold_pct }}%"></div></div>
+  </div>
+  <div style="margin-top:14px">
+    <div>⭐ HERE Insider at {{ insider_at }} — {{ count }}/{{ insider_at }}{% if is_insider %} ✓ Earned{% endif %}</div>
+    <div style="background:#e4e6eb;border-radius:6px;height:10px;margin-top:6px;overflow:hidden"><div style="background:var(--red);height:100%;width:{{ insider_pct }}%"></div></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">🎉 Joined from your invite</div>
+  {% for p in invitees %}
+  <div class="row-item">
+    {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ p.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ p.id }}">{{ p.name|e }}</a></div>
+      <div class="sub">Joined {{ p.joined|e }}</div>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">Nobody yet — share your link!</p>
+  {% endfor %}
+</div>
+
+<script>
+(function () {
+  var link = {{ invite_link|tojson }};
+  var copyBtn = document.getElementById('invite-copy-btn');
+  function copied(btn) {
+    var old = btn.textContent;
+    btn.textContent = '✓ Link copied';
+    setTimeout(function () { btn.textContent = old; }, 1600);
+  }
+  function copyLink(btn) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(function () { copied(btn); }).catch(function () { copied(btn); });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = link;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
+      copied(btn);
+    }
+  }
+  if (copyBtn) copyBtn.addEventListener('click', function () { copyLink(copyBtn); });
+  var shareBtn = document.getElementById('invite-share-btn');
+  if (shareBtn) shareBtn.addEventListener('click', function () {
+    if (navigator.share) {
+      navigator.share({title: 'HERE', text: 'Join me on HERE', url: link}).catch(function () {});
+    } else {
+      copyLink(shareBtn);
+    }
+  });
+})();
+</script>
+
+{% endblock %}

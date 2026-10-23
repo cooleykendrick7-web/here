@@ -159,6 +159,7 @@
 
 <div class="live-controls" id="live-controls">
   <button type="button" class="live-like-btn" id="ctl-like">❤️ <span id="live-like-count">0</span></button>
+  <button type="button" class="live-like-btn" id="ctl-share" data-copy-path="/l/{{ live.id }}">🔗 Share this live</button>
   <!-- panel members -->
   <button type="button" class="live-ctl" id="ctl-mute" hidden>🎤 Mute</button>
   <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
@@ -170,7 +171,18 @@
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔇 Sound off</button>
   <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
   <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
+  <button type="button" class="live-ctl" id="ctl-poll" hidden>📊 Poll / Trivia</button>
   <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
+</div>
+<div class="live-panel" id="live-poll-card" hidden style="border-color:var(--red)">
+  <div style="font-weight:800;margin-bottom:8px">📊 <span id="live-poll-q"></span></div>
+  <div id="live-poll-actions" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  <div id="live-poll-results" hidden></div>
+  <div id="live-poll-note" style="font-size:13px;color:var(--muted);margin-top:6px"></div>
+</div>
+<div class="live-panel" id="live-poll-closed" hidden style="background:var(--red-soft);border-color:#f3c2c7">
+  <div id="live-poll-closed-text" style="font-weight:700"></div>
+  <div id="live-poll-closed-detail" style="font-size:13.5px;margin-top:4px"></div>
 </div>
 <div id="live-join-msg" style="font-size:13px;color:var(--muted);margin:-6px 0 10px" hidden></div>
 <div id="live-muted-note" class="live-muted-note" hidden>🔇 You were muted by the host/admin — your mic is off for everyone until they unmute you.</div>
@@ -243,6 +255,8 @@ var LIVE_BOOT = {{ boot|safe }};
   var isHost = (B.me === (B.host && B.host.id));
   var likeCount = 0, lastLikeCursor = 0, ownLikesPending = 0;
   var pendingInvites = [];
+  var activePoll = null;          /* state payload's active_poll */
+  var closedPoll = null;          /* state payload's last_closed_poll */
 
   var peers = {};   /* uid -> {pc, iceQ, offered, helloSent, remoteKind, videoEl} */
   var tiles = {};   /* uid -> {el, video, ph, labelName, badges, menuBtn, member} */
@@ -1125,6 +1139,175 @@ var LIVE_BOOT = {{ boot|safe }};
   }
   $('ctl-invite-others').addEventListener('click', openInviteSheet);
 
+  /* ---------------- live polls + trivia (games pack) ----------------
+     The state poll carries active_poll (never with the trivia
+     answer) and last_closed_poll (answer + winners revealed once
+     closed, until a new poll starts). Voting posts to the room's
+     poll endpoint; the next state poll re-renders from the server. */
+  function pollPct(n, total){ return total ? Math.round(100 * n / total) : 0; }
+  function renderPollResults(container, p){
+    container.innerHTML = '';
+    [['a', p.a_text, p.a_votes], ['b', p.b_text, p.b_votes]]
+      .forEach(function (row) {
+        var wrap = document.createElement('div');
+        wrap.style.marginTop = '7px';
+        var head = document.createElement('div');
+        head.style.cssText = 'display:flex;gap:8px;font-size:14px';
+        var t = document.createElement('span');
+        t.style.flex = '1';
+        t.style.fontWeight = p.my_choice === row[0] ? '800' : '600';
+        t.textContent = row[1] + (p.my_choice === row[0] ? ' ✓ your pick' : '');
+        var pc = document.createElement('span');
+        pc.textContent = pollPct(row[2], p.total) + '% · ' + row[2];
+        head.appendChild(t);
+        head.appendChild(pc);
+        var track = document.createElement('div');
+        track.style.cssText = 'height:9px;background:#e4e6eb;border-radius:99px;overflow:hidden;margin-top:3px';
+        var fill = document.createElement('div');
+        fill.style.cssText = 'height:100%;background:var(--red);width:'
+          + pollPct(row[2], p.total) + '%';
+        track.appendChild(fill);
+        wrap.appendChild(head);
+        wrap.appendChild(track);
+        container.appendChild(wrap);
+      });
+  }
+  function renderLivePoll(){
+    var card = $('live-poll-card'), closed = $('live-poll-closed');
+    var p = activePoll;
+    if (p) {
+      closed.hidden = true;
+      card.hidden = false;
+      $('live-poll-q').textContent = p.question + (p.is_trivia ? ' 🎲' : '');
+      var actions = $('live-poll-actions');
+      var results = $('live-poll-results');
+      var note = $('live-poll-note');
+      actions.innerHTML = '';
+      [['a', p.a_text], ['b', p.b_text]].forEach(function (row) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'live-ctl';
+        b.style.cssText = 'flex:1;font-size:16px;padding:13px 10px'
+          + (p.my_choice === row[0] ? ';background:var(--red);border-color:var(--red-dark)' : '');
+        b.textContent = row[1];
+        b.addEventListener('click', function () { voteLivePoll(row[0]); });
+        actions.appendChild(b);
+      });
+      if (p.my_choice) {
+        results.hidden = false;
+        renderPollResults(results, p);
+        note.textContent = p.total + (p.total === 1 ? ' vote' : ' votes')
+          + ' — tap the other side any time to change your vote.';
+      } else {
+        results.hidden = true;
+        note.textContent = 'Tap a side to vote.';
+      }
+    } else {
+      card.hidden = true;
+      if (closedPoll) {
+        var cp = closedPoll;
+        closed.hidden = false;
+        if (cp.is_trivia && cp.correct) {
+          $('live-poll-closed-text').textContent =
+            '✅ Correct: ' + cp.correct_text + ' — ' + cp.winners_count + ' got it 👑';
+        } else {
+          $('live-poll-closed-text').textContent = '📊 Poll closed: ' + cp.question;
+        }
+        $('live-poll-closed-detail').textContent =
+          cp.a_text + ': ' + cp.a_votes + ' · ' + cp.b_text + ': '
+          + cp.b_votes + ' (' + cp.total + ' votes)';
+      } else {
+        closed.hidden = true;
+      }
+    }
+  }
+  function voteLivePoll(choice) {
+    if (!activePoll || ended) return;
+    post('/poll/' + activePoll.id + '/vote', {choice: choice})
+      .then(function (d) {
+        if (d && d.ok && d.poll) { activePoll = d.poll; renderLivePoll(); }
+        else toast((d && d.error) || 'Could not vote.');
+        pollState();
+      })
+      .catch(function () { toast('Could not vote.'); });
+  }
+  /* The create form rides the shared manage sheet: question + two
+     options + an optional trivia correct-answer selector + a 🎲
+     random-trivia prefill. "End poll" appears while one is active. */
+  function openPollSheet() {
+    sheetTitle.textContent = '📊 Poll / Trivia';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    function field(ph, max) {
+      var i = document.createElement('input');
+      i.type = 'text';
+      i.maxLength = max;
+      i.placeholder = ph;
+      i.style.cssText = 'width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px';
+      sheetActions.appendChild(i);
+      return i;
+    }
+    var qIn = field('Question (max 120)', 120);
+    var aIn = field('Choice A (max 40)', 40);
+    var bIn = field('Choice B (max 40)', 40);
+    var sel = document.createElement('select');
+    sel.style.cssText = 'width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px';
+    [['', 'Just a poll — no right answer'],
+     ['a', '🎲 Trivia: A is correct'],
+     ['b', '🎲 Trivia: B is correct']].forEach(function (o) {
+      var op = document.createElement('option');
+      op.value = o[0];
+      op.textContent = o[1];
+      sel.appendChild(op);
+    });
+    sheetActions.appendChild(sel);
+    var rnd = document.createElement('button');
+    rnd.type = 'button';
+    rnd.className = 'cmenu-item';
+    rnd.textContent = '🎲 Random trivia';
+    rnd.addEventListener('click', function () {
+      jget('/live/' + B.id + '/trivia').then(function (d) {
+        if (!d || !d.ok) { toast('Could not fetch trivia.'); return; }
+        qIn.value = d.question || '';
+        aIn.value = d.a || '';
+        bIn.value = d.b || '';
+        sel.value = d.correct || '';
+      }).catch(function () { toast('Could not fetch trivia.'); });
+    });
+    sheetActions.appendChild(rnd);
+    var start = document.createElement('button');
+    start.type = 'button';
+    start.className = 'cmenu-item';
+    start.textContent = '▶ Start poll';
+    start.addEventListener('click', function () {
+      var body = {question: qIn.value.trim(), a: aIn.value.trim(),
+                  b: bIn.value.trim()};
+      if (sel.value) body.correct = sel.value;
+      if (!body.question || !body.a || !body.b) {
+        toast('A poll needs a question and two choices.');
+        return;
+      }
+      closeSheet();
+      act('/poll', body, 'Poll started 📊');
+    });
+    sheetActions.appendChild(start);
+    if (activePoll) {
+      var end = document.createElement('button');
+      end.type = 'button';
+      end.className = 'cmenu-item danger';
+      end.textContent = '⏹ End poll';
+      end.addEventListener('click', function () {
+        var pid = activePoll.id;
+        closeSheet();
+        act('/poll/' + pid + '/end', {}, 'Poll ended.');
+      });
+      sheetActions.appendChild(end);
+    }
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('ctl-poll').addEventListener('click', openPollSheet);
+
   function renderInviteBanner(){
     var banner = $('live-invite-banner');
     var inv = pendingInvites[0];
@@ -1220,6 +1403,7 @@ var LIVE_BOOT = {{ boot|safe }};
     $('ctl-leave').hidden = member;
     $('ctl-join').hidden = member;
     $('ctl-invite-others').hidden = !canManage();
+    $('ctl-poll').hidden = !canManage();
     $('live-member-banner').hidden = !member;
   }
   function updateJoinButton(d){
@@ -1371,6 +1555,9 @@ var LIVE_BOOT = {{ boot|safe }};
         }
         isHost = !!myPanel.is_host;
         pendingInvites = d.pending_invites_for_me || [];
+        activePoll = d.active_poll || null;
+        closedPoll = d.last_closed_poll || null;
+        renderLivePoll();
         watchersList = d.watchers || [];
         inviteCandidates = d.invite_candidates || [];
         if (d.viewer_list)
@@ -1420,8 +1607,9 @@ var LIVE_BOOT = {{ boot|safe }};
     setStatus('📺 This live has ended.');
     $('live-comment-input').disabled = true;
     ['ctl-mute','ctl-cam','ctl-flip','ctl-end','ctl-panel-leave',
-     'ctl-join','ctl-like','live-requests-panel','live-people-panel',
-     'live-invite-banner','live-member-banner'].forEach(function(id){
+     'ctl-join','ctl-like','ctl-poll','live-requests-panel','live-people-panel',
+     'live-invite-banner','live-member-banner','live-poll-card',
+     'live-poll-closed'].forEach(function(id){
       var el = $(id);
       if (el) el.hidden = true;
     });

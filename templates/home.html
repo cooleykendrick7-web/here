@@ -32,6 +32,11 @@
 </div>
 {% endif %}
 
+<div class="card" id="daily-banner" data-today="{{ daily_today|e }}" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  <span>🔥 Today's Challenge: <b>{{ daily_prompt|e }}</b> · your streak: {{ daily_streak }} · <a href="/daily">Answer it →</a></span>
+  <button type="button" id="daily-dismiss" class="btn-ghost btn-sm" style="margin-left:auto" aria-label="Dismiss today's challenge">✕</button>
+</div>
+
 <div class="card composer">
   <form action="/posts" method="post" enctype="multipart/form-data">
     <input type="hidden" name="kind" id="kind-input" value="text">
@@ -40,6 +45,7 @@
       <button type="button" class="kind-tab" data-kind="photo">📷 Photo</button>
       <button type="button" class="kind-tab" data-kind="feeling">😊 Feeling</button>
       <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
+      <button type="button" class="kind-tab" data-kind="poll">📊 Poll</button>
     </div>
     <div class="composer-body-wrap">
       <textarea name="body" id="composer-body" placeholder="What's on your mind?"></textarea>
@@ -63,6 +69,14 @@
     <div id="fld-media" style="display:none">
       <label class="fld" for="media-file">Upload <span id="media-kind-label">photo</span> <span id="media-kind-hint">(jpg, png, gif, webp · max 25MB)</span></label>
       <input type="file" name="media" id="media-file" accept="image/*">
+    </div>
+
+    <div id="fld-poll" style="display:none">
+      <label class="fld">Poll options — your post text above is the question (2–4 options, 60 characters each)</label>
+      <input type="text" name="option1" maxlength="60" placeholder="Option 1" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option2" maxlength="60" placeholder="Option 2" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option3" maxlength="60" placeholder="Option 3 (optional)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option4" maxlength="60" placeholder="Option 4 (optional)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
     </div>
 
     <div class="composer-music" style="margin-top:10px">
@@ -132,11 +146,32 @@
 {% block scripts %}
 <script>
 (function(){
+  var banner = document.getElementById('daily-banner');
+  if (banner) {
+    var today = banner.dataset.today || '';
+    try {
+      if (window.localStorage && localStorage.getItem('here_daily_dismissed') === today) {
+        banner.style.display = 'none';
+      }
+    } catch (e) {}
+    var dismissBtn = document.getElementById('daily-dismiss');
+    if (dismissBtn) dismissBtn.addEventListener('click', function(){
+      try {
+        if (window.localStorage) localStorage.setItem('here_daily_dismissed', today);
+      } catch (e) {}
+      banner.style.display = 'none';
+    });
+  }
+})();
+</script>
+<script>
+(function(){
   var tabs = document.querySelectorAll('#kind-tabs .kind-tab');
   var kindInput = document.getElementById('kind-input');
   var bodyBox = document.getElementById('composer-body');
   var fFeeling = document.getElementById('fld-feeling');
   var fMedia = document.getElementById('fld-media');
+  var fPoll = document.getElementById('fld-poll');
   var mediaLbl = document.getElementById('media-kind-label');
   var mediaHint = document.getElementById('media-kind-hint');
   var mediaInput = document.getElementById('media-file');
@@ -144,7 +179,8 @@
     text: "What's on your mind?",
     photo: "Say something about this photo…",
     feeling: "What's going on?",
-    video: "What is this video about?"
+    video: "What is this video about?",
+    poll: "Ask a question…"
   };
   function setKind(kind){
     kindInput.value = kind;
@@ -152,6 +188,7 @@
     bodyBox.placeholder = placeholders[kind] || placeholders.text;
     fFeeling.style.display = (kind === 'feeling') ? 'block' : 'none';
     fMedia.style.display = (kind === 'photo' || kind === 'video') ? 'block' : 'none';
+    if (fPoll) fPoll.style.display = (kind === 'poll') ? 'block' : 'none';
     if (kind === 'video') { mediaLbl.textContent = 'video'; mediaHint.textContent = '(mp4, mov, webm · max 200MB)'; mediaInput.accept = 'video/*,.mp4,.mov,.webm'; }
     else { mediaLbl.textContent = 'photo'; mediaHint.textContent = '(jpg, png, gif, webp · max 25MB)'; mediaInput.accept = 'image/*'; }
   }

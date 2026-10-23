@@ -45,6 +45,7 @@
       <button type="button" class="kind-tab" data-kind="photo">📷 Photo</button>
       <button type="button" class="kind-tab" data-kind="feeling">😊 Feeling</button>
       <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
+      <button type="button" class="kind-tab" data-kind="poll">📊 Poll</button>
     </div>
     <div class="composer-body-wrap">
       <textarea name="body" id="composer-body" placeholder="Post to {{ page.name|e }}…"></textarea>
@@ -68,6 +69,14 @@
     <div id="fld-media" style="display:none">
       <label class="fld" for="media-file">Upload <span id="media-kind-label">photo</span> <span id="media-kind-hint">(jpg, png, gif, webp · max 25MB)</span></label>
       <input type="file" name="media" id="media-file" accept="image/*">
+    </div>
+
+    <div id="fld-poll" style="display:none">
+      <label class="fld">Poll options — your post text above is the question (2–4 options, 60 characters each)</label>
+      <input type="text" name="option1" maxlength="60" placeholder="Option 1" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option2" maxlength="60" placeholder="Option 2" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option3" maxlength="60" placeholder="Option 3 (optional)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option4" maxlength="60" placeholder="Option 4 (optional)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
     </div>
 
     {% if composer_friends %}
@@ -110,6 +119,7 @@
   var bodyBox = document.getElementById('composer-body');
   var fFeeling = document.getElementById('fld-feeling');
   var fMedia = document.getElementById('fld-media');
+  var fPoll = document.getElementById('fld-poll');
   var mediaLbl = document.getElementById('media-kind-label');
   var mediaHint = document.getElementById('media-kind-hint');
   var mediaInput = document.getElementById('media-file');
@@ -118,6 +128,7 @@
     tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.kind === kind); });
     fFeeling.style.display = (kind === 'feeling') ? 'block' : 'none';
     fMedia.style.display = (kind === 'photo' || kind === 'video') ? 'block' : 'none';
+    if (fPoll) fPoll.style.display = (kind === 'poll') ? 'block' : 'none';
     if (kind === 'video') { mediaLbl.textContent = 'video'; mediaHint.textContent = '(mp4, mov, webm · max 200MB)'; mediaInput.accept = 'video/*,.mp4,.mov,.webm'; }
     else { mediaLbl.textContent = 'photo'; mediaHint.textContent = '(jpg, png, gif, webp · max 25MB)'; mediaInput.accept = 'image/*'; }
   }

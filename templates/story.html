@@ -19,6 +19,11 @@
     <video id="sv-vid" playsinline hidden></video>
     <div class="sv-overlay" id="sv-overlay" hidden></div>
     <div class="sv-caption" id="sv-caption" hidden></div>
+    <div id="sv-poll" hidden>
+      <div class="sv-poll-q" id="sv-poll-q"></div>
+      <div id="sv-poll-body"></div>
+      <div class="sv-poll-total" id="sv-poll-total"></div>
+    </div>
   </div>
 
   <div id="sv-yt-wrap" hidden>
@@ -43,6 +48,10 @@
       <button type="button" data-kind="angry" title="Angry">😡</button>
       <span id="sv-reply-note" hidden></span>
     </div>
+    <form id="sv-ama-form" hidden>
+      <input id="sv-ama-input" type="text" maxlength="2000" autocomplete="off" placeholder="❓ Ask a question…">
+      <button class="sv-chipbtn" type="submit">Ask</button>
+    </form>
     <form id="sv-reply-form">
       <input id="sv-reply-input" type="text" maxlength="2000" autocomplete="off" placeholder="Reply…">
       <button class="sv-chipbtn" type="submit">Send</button>
@@ -90,6 +99,12 @@
   var novol = document.getElementById('sv-novol');
   var ytWrap = document.getElementById('sv-yt-wrap');
   var ytSlot = document.getElementById('sv-yt-slot');
+  var pollEl = document.getElementById('sv-poll');
+  var pollQ = document.getElementById('sv-poll-q');
+  var pollBody = document.getElementById('sv-poll-body');
+  var pollTotal = document.getElementById('sv-poll-total');
+  var amaForm = document.getElementById('sv-ama-form');
+  var amaInput = document.getElementById('sv-ama-input');
   var ytPlayer = null;
 
   var flat = [];        // [{g, s, gname...}] flattened queue
@@ -250,6 +265,74 @@
     });
   }
 
+  /* --- story poll (games pack): buttons until the viewer votes;
+     result bars for voters and for the story's owner. The payload
+     (queue JSON) carries counts + my_choice, so rendering is local;
+     a vote posts and re-renders from the server's tallies. --- */
+  function pollPct(n, total) {
+    return total ? Math.round(100 * n / total) : 0;
+  }
+  function renderPoll(s) {
+    var p = s.poll;
+    if (!p) { pollEl.hidden = true; pollBody.innerHTML = ''; return; }
+    pollEl.hidden = false;
+    pollQ.textContent = '📊 ' + p.question;
+    pollBody.innerHTML = '';
+    if (s.mine || p.my_choice) {
+      [['a', p.a_text, p.a_votes], ['b', p.b_text, p.b_votes]]
+        .forEach(function (row) {
+          var d = document.createElement('div');
+          d.className = 'sv-poll-row' + (p.my_choice === row[0] ? ' mine' : '');
+          var fill = document.createElement('div');
+          fill.className = 'sv-poll-fill';
+          fill.style.width = pollPct(row[2], p.total) + '%';
+          d.appendChild(fill);
+          var t = document.createElement('span');
+          t.className = 't';
+          t.textContent = row[1] + (p.my_choice === row[0] ? ' ✓' : '');
+          d.appendChild(t);
+          var pc = document.createElement('span');
+          pc.className = 'p';
+          pc.textContent = pollPct(row[2], p.total) + '% · ' + row[2];
+          d.appendChild(pc);
+          pollBody.appendChild(d);
+        });
+    } else {
+      [['a', p.a_text], ['b', p.b_text]].forEach(function (row) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'sv-poll-btn';
+        b.textContent = row[1];
+        b.addEventListener('click', function () { voteStoryPoll(row[0]); });
+        pollBody.appendChild(b);
+      });
+    }
+    pollTotal.textContent = p.total + (p.total === 1 ? ' vote' : ' votes');
+  }
+  function voteStoryPoll(choice) {
+    var item = flat[idx];
+    if (!item || !item.s.poll) return;
+    pauseClock();
+    postStoryAction('/story/' + item.s.id + '/poll/vote', {choice: choice})
+      .then(function (res) {
+        if (res.d && res.d.ok) {
+          item.s.poll.my_choice = res.d.my_choice;
+          item.s.poll.a_votes = res.d.a_votes;
+          item.s.poll.b_votes = res.d.b_votes;
+          item.s.poll.total = res.d.total;
+          renderPoll(item.s);
+          flashNote('Vote counted ✓');
+        } else {
+          flashNote((res.d && res.d.error) || 'Could not vote.');
+        }
+      })
+      .catch(function () { flashNote('Could not vote.'); });
+  }
+  /* Poll taps belong to the poll, never to stage navigation. */
+  ['pointerdown', 'pointerup', 'click'].forEach(function (ev) {
+    pollEl.addEventListener(ev, function (e) { e.stopPropagation(); });
+  });
+
   function loadViewers(sid) {
     viewersCount.textContent = '0';
     fetch('/story/' + sid + '/viewers')
@@ -342,6 +425,9 @@
       replyInput.placeholder = 'Reply to ' + g.name + '…';
       replyNote.hidden = true;
     }
+    renderPoll(s);
+    amaForm.hidden = !(s.ama && !s.mine);
+    if (amaForm.hidden) amaInput.value = '';
     if (!s.seen) {
       s.seen = true;
       fetch('/story/' + s.id + '/view', { method: 'POST' }).catch(function () {});
@@ -472,6 +558,30 @@
         }
       })
       .catch(function () { flashNote('Could not send.'); });
+  });
+  // --- AMA: the question rides the story-reply path server-side and
+  // lands in the author's inbox as a story message (marked as a
+  // question). Same in-bar feedback as replies. ---
+  amaForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var item = flat[idx];
+    var text = amaInput.value.trim();
+    if (!item || !text) return;
+    postStoryAction('/story/' + item.s.id + '/ama', { text: text })
+      .then(function (res) {
+        if (res.d && res.d.ok) {
+          amaInput.value = '';
+          flashNote('Question sent ✓');
+          amaInput.blur();
+        } else {
+          flashNote((res.d && res.d.error) || 'Could not send.');
+        }
+      })
+      .catch(function () { flashNote('Could not send.'); });
+  });
+  amaInput.addEventListener('focus', pauseClock);
+  amaInput.addEventListener('blur', function () {
+    if (viewersSheet.hidden) resumeClock();
   });
   // Typing must not watch the story run out from under you.
   replyInput.addEventListener('focus', pauseClock);

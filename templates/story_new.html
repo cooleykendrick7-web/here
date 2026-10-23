@@ -92,6 +92,21 @@
       </div>
     </div>
 
+    <!-- 📊 poll + ❓ ask me a question (games pack) -->
+    <div class="cmp-sec">
+      <h4>📊 Add a poll (optional)</h4>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 8px">All-or-nothing: a question and both choices, or leave all three blank.</p>
+      <input type="text" name="poll_question" maxlength="120" placeholder="Poll question (optional)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <input type="text" name="poll_a" maxlength="40" placeholder="Choice A" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+        <input type="text" name="poll_b" maxlength="40" placeholder="Choice B" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:14px">
+        <input type="checkbox" name="ama" value="1">
+        ❓ Ask me a question — let friends send you a question about this story
+      </label>
+    </div>
+
     <!-- ⏱ lifetime -->
     <div class="cmp-sec">
       <h4>⏱ How long should it stay up?</h4>

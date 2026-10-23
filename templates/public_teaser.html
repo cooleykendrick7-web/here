@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0a">
+<title>HERE — Join to see this</title>
+<meta property="og:title" content="HERE">
+<meta property="og:description" content="Someone's sharing on HERE — join to see it">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+.brand{font-size:72px;font-weight:900;color:#d41f2e;letter-spacing:-3px;text-shadow:0 0 40px rgba(212,31,46,.45)}
+.tagline{color:#9a9a9a;margin:6px 0 28px;font-size:16px;text-align:center}
+.card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:28px;width:100%;max-width:440px;box-shadow:0 8px 32px rgba(212,31,46,.15);text-align:center}
+.card p{font-size:17px;line-height:1.5;margin-bottom:20px}
+.btn{display:block;width:100%;background:#d41f2e;color:#fff;border:none;border-radius:8px;padding:13px;font-size:17px;font-weight:800;cursor:pointer;text-decoration:none;text-align:center}
+.btn:hover{background:#a8151f}
+.switch{margin-top:16px;text-align:center;font-size:14px;color:#9a9a9a}
+.switch a{color:#d41f2e;font-weight:700}
+.back{margin-top:14px;text-align:center;font-size:14px}
+.back a{color:#f0f0f0;font-weight:600}
+</style>
+</head>
+<body>
+<div class="brand">HERE</div>
+<div class="tagline">Your people. Your pages. Your world.</div>
+<div class="card">
+  <p>Someone's sharing on HERE — join to see it</p>
+  <a class="btn" href="/signup">Join HERE</a>
+  <div class="switch">Already on HERE? <a href="/login">Log in</a></div>
+  {% if logged_in %}<div class="back"><a href="/home">← Back to HERE</a></div>{% endif %}
+</div>
+</body>
+</html>

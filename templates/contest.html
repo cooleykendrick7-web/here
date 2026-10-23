@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}🏆 My Views Contest — HERE{% endblock %}
+{% block content %}
+
+<div class="card" style="text-align:center;padding:28px 20px">
+  <div style="font-size:44px">🏆</div>
+  <h2 style="font-size:30px;margin:8px 0 6px">My Views Contest</h2>
+  <div style="font-size:19px">This week's tag: <strong style="color:var(--red)">#{{ contest_tag|e }}</strong></div>
+  <p style="color:var(--muted);font-size:15px;margin-top:8px">Ends Sunday ({{ week_sunday.strftime('%B') }} {{ week_sunday.day }}) — a fresh tag drops every Monday.</p>
+  <p style="font-size:15px;margin-top:10px">How to enter: post a video with <strong>#{{ contest_tag|e }}</strong> in the caption.
+    Score = completed views ×1 + reactions ×2 + comments ×3, counted this week.</p>
+  <a class="btn" href="/views?tag={{ contest_tag|e }}" style="margin-top:12px;display:inline-block">🎬 Watch this week's entries</a>
+</div>
+
+{% if winner %}
+<div class="card" style="border:2px solid #e6b800;background:#fffbe8">
+  <div class="section-title">🏆 Last week's winner</div>
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:10px">
+    <a href="/views?tag={{ last_tag|e }}"><video preload="metadata" src="{{ winner.media|e }}" style="width:130px;height:130px;object-fit:cover;border-radius:12px;background:#000"></video></a>
+    <div style="flex:1;min-width:200px">
+      <div style="font-size:17px"><a href="/user/{{ winner.user_id }}">{{ winner.author_name|e }}</a> won with <strong>{{ winner.score }}</strong> points on #{{ last_tag|e }}</div>
+      {% if winner.body %}<p style="margin-top:6px;white-space:pre-wrap">{{ winner.body|e }}</p>{% endif %}
+      <div class="post-meta" style="margin-top:6px">👀 {{ winner.views }} completed views · ❤️ {{ winner.likes }} reactions · 💬 {{ winner.comments }} comments</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="section-title">🏆 This week's leaderboard — #{{ contest_tag|e }}</div>
+  {% for e in entries %}
+  <div class="row-item" style="align-items:center;gap:12px">
+    <span style="font-size:20px;font-weight:900;min-width:34px;text-align:center">#{{ e.rank }}</span>
+    <a href="/views?tag={{ contest_tag|e }}"><video preload="metadata" src="{{ e.media|e }}" style="width:74px;height:74px;object-fit:cover;border-radius:10px;background:#000"></video></a>
+    <div class="grow" style="flex:1;min-width:0">
+      <div class="nm"><a href="/user/{{ e.user_id }}">{{ e.author_name|e }}</a></div>
+      {% if e.body %}<div class="sub" style="white-space:pre-wrap">{{ e.body|e }}</div>{% endif %}
+      <div class="sub">👀 {{ e.views }} views · ❤️ {{ e.likes }} likes · 💬 {{ e.comments }} comments</div>
+    </div>
+    <span class="kind-tag" style="font-size:15px">⭐ {{ e.score }}</span>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:15px;margin-top:10px">No entries yet this week — post a video with #{{ contest_tag|e }} and take the top spot!</p>
+  {% endfor %}
+</div>
+
+{% endblock %}

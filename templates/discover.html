@@ -44,6 +44,21 @@
   {% endfor %}
 </div>
 
+{% if insiders %}
+<div class="card">
+  <div class="section-title">⭐ HERE Insiders</div>
+  {% for p in insiders %}
+  <div class="row-item">
+    {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ p.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ p.id }}">{{ p.name|e }}</a></div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="card">
   <div class="section-title">🔥 Trending this week</div>
   {% for t in trends %}

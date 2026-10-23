@@ -5,8 +5,8 @@
 <div class="spot-scope{% if profile.spot_classes %} {{ profile.spot_classes }}{% endif %}"{% if profile.spot_style %} style="{{ profile.spot_style }}"{% endif %}>
 <div class="card">
   <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-    {% if profile.avatar %}<img class="avatar av-100" src="{{ profile.avatar|e }}" alt="">
-    {% else %}<span class="av-ph av-100">{{ profile.name[:1]|upper|e }}</span>{% endif %}
+    {% if profile.avatar %}<img class="avatar av-100{% if profile.is_gold_inviter %} av-gold{% endif %}" src="{{ profile.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-100{% if profile.is_gold_inviter %} av-gold{% endif %}">{{ profile.name[:1]|upper|e }}</span>{% endif %}
     <div style="flex:1;min-width:200px">
       {% if profile.spot_name %}
       <h2 class="spot-title">{{ profile.spot_name|e }}</h2>
@@ -34,6 +34,9 @@
       {% if not profile.is_private_locked %}
       <div class="post-meta" style="margin-top:4px">{{ profile.friend_count }} friends · joined {{ profile.created_at|e }}</div>
       <div class="post-meta" style="margin-top:2px"><a href="/user/{{ profile.id }}/followers">{{ profile.follower_count }} Followers</a> · <a href="/user/{{ profile.id }}/following">{{ profile.following_count }} Following</a></div>
+      {% if profile.is_insider %}<span class="kind-tag">⭐ HERE Insider</span>{% elif profile.is_gold_inviter %}<span class="kind-tag">🥇 Gold Inviter</span>{% endif %}
+      {% if profile.streak and profile.streak >= 2 %}<span class="kind-tag">🔥 {{ profile.streak }} day streak</span>{% endif %}
+      {% if profile.contest_winner %}<span class="kind-tag">🏆 My Views Winner</span>{% endif %}
       {% endif %}
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
       {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
@@ -42,7 +45,9 @@
         <a class="btn" href="/live/{{ profile.live_id }}" style="background:var(--red);animation:livepulse 1.2s infinite">🔴 LIVE — watch now</a>
         {% endif %}
         <a class="btn-ghost" href="/lives">🔴 Lives</a>
+        <button type="button" class="btn-ghost btn-sm" data-copy-path="/u/{{ profile.id }}">🔗 Share profile</button>
         {% if profile.is_self %}
+        <a class="btn-ghost" href="/invite">🎟 Invite friends</a>
         <a class="btn-ghost" href="/settings/profile">✏️ Edit Profile</a>
         <a class="btn-ghost" href="/settings/profile#spot">🏠 Customize my spot</a>
         {% if profile.is_private %}<span class="kind-tag">🔒 Private</span>{% endif %}
