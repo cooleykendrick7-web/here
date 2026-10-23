@@ -136,6 +136,24 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+# ---------------- hashtags ----------------
+# Parsed from post bodies at create time into post_hashtags (see
+# init_db for the table + the one-time video backfill). A tag is '#'
+# followed by 1-50 of [A-Za-z0-9_]; stored normalized: lowercase, no '#'.
+HASHTAG_RE = re.compile(r"#([A-Za-z0-9_]{1,50})")
+
+
+def parse_hashtags(body):
+    """Normalized hashtags from a post body, de-duplicated in
+    first-seen order."""
+    out = []
+    for m in HASHTAG_RE.finditer(body or ""):
+        t = m.group(1).lower()
+        if t not in out:
+            out.append(t)
+    return out
+
+
 def init_db():
     conn = db()
     c = conn.cursor()
@@ -600,6 +618,44 @@ def init_db():
     if "private_profile" not in _user_cols_now:
         c.execute("ALTER TABLE users ADD COLUMN private_profile "
                   "INTEGER NOT NULL DEFAULT 0")
+    # --- My Views: hashtags, learning affinity, view events (safe) ---
+    # post_hashtags: one row per (post, tag) parsed from the post body
+    # at create time (hook in create_post_from_form covers EVERY new
+    # post, any kind — the wall can use them later; My Views filters
+    # and ranks on them now).
+    c.execute("""CREATE TABLE IF NOT EXISTS post_hashtags (
+        post_id INTEGER NOT NULL, tag TEXT NOT NULL,
+        PRIMARY KEY(post_id, tag))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_htags_tag "
+              "ON post_hashtags(tag)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_htags_post "
+              "ON post_hashtags(post_id)")
+    # user_affinity: the My Views learning scores — one row per
+    # (user, kind 'tag'|'author', key); score is nudged by watch /
+    # engage / interest events and read (clamped) by the feed ranker.
+    c.execute("""CREATE TABLE IF NOT EXISTS user_affinity (
+        user_id INTEGER NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
+        score REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, kind, key))""")
+    # view_events: per-viewer per-post watch facts for My Views —
+    # 'seen' (started playing; demotes the post in that viewer's feed),
+    # 'completed' (>=85% watched), 'hidden' (the viewer said
+    # "not interested" to THIS post; it leaves their feed entirely).
+    c.execute("""CREATE TABLE IF NOT EXISTS view_events (
+        user_id INTEGER NOT NULL, post_id INTEGER NOT NULL,
+        kind TEXT NOT NULL, created_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, post_id, kind))""")
+    # Hashtag backfill (one-time in effect): parse the bodies of
+    # EXISTING video posts that have no hashtag rows yet — they predate
+    # the create-time hook. Keyed on "no rows yet" so re-running is a
+    # no-op for anything already parsed.
+    for _bp in c.execute(
+            "SELECT id, body FROM posts WHERE kind='video' AND NOT EXISTS "
+            "(SELECT 1 FROM post_hashtags WHERE post_id=posts.id)"
+            ).fetchall():
+        for _t in parse_hashtags(_bp["body"] or ""):
+            c.execute("INSERT OR IGNORE INTO post_hashtags(post_id, tag) "
+                      "VALUES(?,?)", (_bp["id"], _t))
     conn.commit()
     conn.close()
 
@@ -2116,6 +2172,12 @@ def create_post_from_form(user, form, page_id=None):
          music_start if music else 0,
          now_iso()))
     pid = cur.lastrowid
+    # Hashtags: parsed from the body of EVERY new post (any kind) into
+    # post_hashtags. My Views consumes them now; the wall may later.
+    for _t in parse_hashtags(body):
+        conn.execute(
+            "INSERT OR IGNORE INTO post_hashtags(post_id, tag) "
+            "VALUES(?,?)", (pid, _t))
     conn.commit()
     conn.close()
     # --- hide-from list + tags: validated server-side. Only friends can be
@@ -2162,30 +2224,24 @@ async def create_post(request: Request):
         return err
     form = await request.form()
     pid, ferr = create_post_from_form(user, form)
+    # Optional same-origin 'next' (the My Views composer sends
+    # next=/views so posting a View lands back on the feed). Only a
+    # local path is honored — anything else falls back to /home.
+    nxt = (form.get("next") or "").strip()
+    if not (nxt.startswith("/") and not nxt.startswith("//")):
+        nxt = "/home"
     if ferr:
-        return redir("/home", ferr)
-    return redir("/home")
+        return redir(nxt, ferr)
+    return redir(nxt)
 
 
-@app.get("/post/{pid}", response_class=HTMLResponse)
-async def view_post(request: Request, pid: int):
-    user, err = require_login(request)
-    if err:
-        return err
-    owner_on = is_owner(request)
-    conn = db()
-    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
-    if not p:
-        conn.close()
-        return redir("/home", "Post not found.")
-    if p["shared_post_id"]:
-        # Share rows redirect to the original post.
-        orig_id = p["shared_post_id"]
-        conn.close()
-        return redir(f"/post/{orig_id}")
-    if not can_view_post(user, dict(p), is_owner(request)):
-        conn.close()
-        return render(request, "post_gone.html", {})
+def _thread_comments(conn, p, viewer, owner_on=False):
+    """The post page's comment thread, assembled ONCE here and shared
+    by GET /post/{id} (HTML) and GET /views/{id}/comments (JSON): same
+    query, same block filtering, same per-comment dicts (can_delete /
+    can_block / reply_prefix / one-level reply nesting). p is the post
+    row as a dict; viewer is the viewing user's dict."""
+    pid = p["id"]
     crows = conn.execute(
         "SELECT c.* FROM comments c WHERE c.post_id=? ORDER BY c.created_at ASC",
         (pid,)).fetchall()
@@ -2193,7 +2249,7 @@ async def view_post(request: Request, pid: int):
         # Comments from anyone in a block relationship with the viewer
         # (either direction) don't render for that viewer; everyone
         # else's view of the same thread is untouched.
-        _blocked_view = blocked_id_set(user["id"])
+        _blocked_view = blocked_id_set(viewer["id"])
         if _blocked_view:
             crows = [c for c in crows
                      if c["user_id"] not in _blocked_view]
@@ -2231,10 +2287,10 @@ async def view_post(request: Request, pid: int):
             # The ⋯ menu shows Delete to the comment's author and to
             # the post's author (and in the owner context); Block only
             # to the post's author, and never against their own comment.
-            "can_delete": bool(user["id"] == c["user_id"] or
-                               user["id"] == p["user_id"] or owner_on),
-            "can_block": bool(user["id"] == p["user_id"] and
-                              c["user_id"] != user["id"]),
+            "can_delete": bool(viewer["id"] == c["user_id"] or
+                               viewer["id"] == p["user_id"] or owner_on),
+            "can_block": bool(viewer["id"] == p["user_id"] and
+                              c["user_id"] != viewer["id"]),
             "reply_prefix": prefix,
             "replies": [],
         }
@@ -2255,6 +2311,29 @@ async def view_post(request: Request, pid: int):
                 # Orphaned reply (its top-level comment is gone): show
                 # it as a top-level comment rather than dropping it.
                 comments.append(d)
+    return comments
+
+
+@app.get("/post/{pid}", response_class=HTMLResponse)
+async def view_post(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    owner_on = is_owner(request)
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    if not p:
+        conn.close()
+        return redir("/home", "Post not found.")
+    if p["shared_post_id"]:
+        # Share rows redirect to the original post.
+        orig_id = p["shared_post_id"]
+        conn.close()
+        return redir(f"/post/{orig_id}")
+    if not can_view_post(user, dict(p), is_owner(request)):
+        conn.close()
+        return render(request, "post_gone.html", {})
+    comments = _thread_comments(conn, dict(p), user, owner_on)
     conn.close()
     pc = post_card(dict(p), user, owner_on)
     pc["comments"] = comments
@@ -2522,6 +2601,386 @@ async def react_post(request: Request, pid: int):
     conn.close()
     return JSONResponse({"ok": True, "likes": likes, "reacted": my_kind is not None,
                          "kind": my_kind, "top": top})
+
+
+# ---------------- My Views (vertical video feed) ----------------
+# HERE's Reels: full-screen vertical feed of UPLOADED video posts,
+# ranked per viewer by a small learning algorithm (documented in
+# ROUTE_CONTRACT.md — "My Views ranking"). YouTube/Vimeo link posts
+# (video_url set, no uploaded file) never appear here: they stay on
+# the wall. The only privacy gate is can_view_post, exactly like the
+# wall; muted and blocked authors are excluded on top of it.
+VIEWS_W_FRIEND = 30.0        # author is the viewer's friend
+VIEWS_W_FOLLOW = 25.0        # viewer follows the author
+VIEWS_AUTHOR_AFF_CAP = 40.0  # learned author affinity, clamped ±
+VIEWS_TAG_AFF_EACH_CAP = 30.0   # per-hashtag affinity clamp ±
+VIEWS_TAG_AFF_TOTAL_CAP = 45.0  # total tag contribution clamp ±
+VIEWS_POP_PER_REACTION = 2.0
+VIEWS_POP_PER_COMMENT = 3.0
+VIEWS_POP_CAP = 20.0
+VIEWS_RECENCY_MAX = 20.0     # a brand-new video gets +20, decaying daily
+VIEWS_SEEN_PENALTY = 35.0    # already-seen videos sink (not removed)
+# Learning deltas (user_affinity points)
+VIEWS_LEARN_SEEN_TAG, VIEWS_LEARN_SEEN_AUTHOR = 0.5, 0.5
+VIEWS_LEARN_COMPLETED_TAG, VIEWS_LEARN_COMPLETED_AUTHOR = 1.0, 1.0
+VIEWS_LEARN_REACT = 2.0      # tag AND author
+VIEWS_LEARN_COMMENT = 3.0    # tag AND author
+VIEWS_LEARN_INTEREST = 10.0  # +10 interested / -10 not interested
+
+
+def _media_ext(media):
+    m = media or ""
+    return m.rsplit(".", 1)[-1].lower() if "." in m else ""
+
+
+def _post_tag_list(conn, pid):
+    """A post's hashtags in the order they first appeared in the body
+    (post_hashtags rowid order = insertion order)."""
+    return [r["tag"] for r in conn.execute(
+        "SELECT tag FROM post_hashtags WHERE post_id=? ORDER BY rowid",
+        (pid,)).fetchall()]
+
+
+def _affinity_bump(conn, uid, kind, key, delta):
+    conn.execute(
+        "INSERT INTO user_affinity(user_id, kind, key, score, updated_at) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(user_id, kind, key) DO UPDATE SET "
+        "score = score + excluded.score, "
+        "updated_at = excluded.updated_at",
+        (uid, kind, key, float(delta), now_iso()))
+
+
+def _affinity_map(conn, uid, kind):
+    return {r["key"]: r["score"] for r in conn.execute(
+        "SELECT key, score FROM user_affinity WHERE user_id=? AND kind=?",
+        (uid, kind)).fetchall()}
+
+
+def _teach_from_post(conn, uid, post, tag_delta, author_delta):
+    """Apply a learning signal from one post to a viewer: each of the
+    post's hashtags gets tag_delta tag-affinity, the post's author
+    gets author_delta author-affinity. Your own posts teach nothing
+    about their author (you are not a signal about yourself)."""
+    if tag_delta:
+        for t in _post_tag_list(conn, post["id"]):
+            _affinity_bump(conn, uid, "tag", t, tag_delta)
+    if author_delta and post["user_id"] != uid:
+        _affinity_bump(conn, uid, "author", str(post["user_id"]),
+                       author_delta)
+
+
+def _views_candidates(conn, viewer, tag=None):
+    """Feed-eligible post rows (dicts) for a viewer, BEFORE ranking:
+    the post carries an uploaded VIDEO file (media ext in VID_EXTS —
+    kind is not the test; a text post with a video file counts, a
+    kind='video' link post does not), it is not a share row, the
+    viewer has not 'hidden' it (not-interested), the author is not
+    blocked either way with the viewer and not muted by the viewer,
+    and can_view_post passes. Optional single-hashtag filter."""
+    rows = conn.execute(
+        "SELECT * FROM posts WHERE media != '' AND shared_post_id IS NULL "
+        "ORDER BY created_at DESC").fetchall()
+    blocked = blocked_id_set(viewer["id"])
+    muted = muted_id_set(viewer["id"])
+    hidden = {r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM view_events WHERE user_id=? AND kind='hidden'",
+        (viewer["id"],)).fetchall()}
+    out = []
+    for r in rows:
+        p = dict(r)
+        if _media_ext(p["media"]) not in VID_EXTS:
+            continue
+        if p["id"] in hidden:
+            continue
+        if p["user_id"] in blocked or p["user_id"] in muted:
+            continue
+        if tag is not None and tag not in set(
+                _post_tag_list(conn, p["id"])):
+            continue
+        if not can_view_post(viewer, p):
+            continue
+        out.append(p)
+    return out
+
+
+def _views_feed(viewer, tag=None, offset=0, limit=10):
+    """Ranked My Views items for a viewer. Score (per candidate):
+      +30 friend author, +25 followed author,
+      + author affinity clamped ±40,
+      + the post's hashtag affinities, each clamped ±30, the total
+        tag contribution clamped ±45,
+      + popularity min(20, 2*reactions + 3*comments),
+      + recency max(0, 20 - age_in_days),
+      -35 when the viewer already has a 'seen' event for the post.
+    Order: score DESC, then created_at DESC. Page via offset/limit."""
+    conn = db()
+    posts = _views_candidates(conn, viewer, tag)
+    friends = friend_id_set(viewer["id"])
+    following = following_ids(viewer["id"])
+    tag_aff = _affinity_map(conn, viewer["id"], "tag")
+    author_aff = _affinity_map(conn, viewer["id"], "author")
+    seen = {r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM view_events WHERE user_id=? AND kind='seen'",
+        (viewer["id"],)).fetchall()}
+    now = datetime.now(timezone.utc)
+    items = []
+    for p in posts:
+        pid = p["id"]
+        tags = _post_tag_list(conn, pid)
+        rc = conn.execute(
+            "SELECT COUNT(*) c FROM likes WHERE post_id=?",
+            (pid,)).fetchone()["c"]
+        cc = conn.execute(
+            "SELECT COUNT(*) c FROM comments WHERE post_id=?",
+            (pid,)).fetchone()["c"]
+        mine = conn.execute(
+            "SELECT kind FROM likes WHERE post_id=? AND user_id=?",
+            (pid, viewer["id"])).fetchone()
+        score = 0.0
+        if p["user_id"] in friends:
+            score += VIEWS_W_FRIEND
+        if p["user_id"] in following:
+            score += VIEWS_W_FOLLOW
+        score += max(-VIEWS_AUTHOR_AFF_CAP, min(
+            VIEWS_AUTHOR_AFF_CAP,
+            author_aff.get(str(p["user_id"]), 0.0)))
+        tag_sum = sum(max(-VIEWS_TAG_AFF_EACH_CAP, min(
+            VIEWS_TAG_AFF_EACH_CAP, tag_aff.get(t, 0.0))) for t in tags)
+        score += max(-VIEWS_TAG_AFF_TOTAL_CAP,
+                     min(VIEWS_TAG_AFF_TOTAL_CAP, tag_sum))
+        score += min(VIEWS_POP_CAP,
+                     VIEWS_POP_PER_REACTION * rc
+                     + VIEWS_POP_PER_COMMENT * cc)
+        created = _parse_ts(p["created_at"])
+        age_days = ((now - created).total_seconds() / 86400.0
+                    if created else 365.0)
+        score += max(0.0, VIEWS_RECENCY_MAX - age_days)
+        if pid in seen:
+            score -= VIEWS_SEEN_PENALTY
+        a = get_user(p["user_id"])
+        items.append({
+            "post_id": pid,
+            "video_url": "/uploads/" + p["media"],
+            "poster_url": "/uploads/" + p["media"],
+            "author": {
+                "id": p["user_id"],
+                "name": a["name"] if a else "Deleted user",
+                "avatar": avatar_url(a["avatar"]) if a else "",
+                "is_friend": p["user_id"] in friends,
+                "following": p["user_id"] in following,
+                "is_self": p["user_id"] == viewer["id"],
+            },
+            "body": p["body"] or "",
+            "hashtags": tags,
+            "reaction_count": rc,
+            "my_reaction": (mine["kind"] or "like") if mine else None,
+            "comment_count": cc,
+            "created_at": p["created_at"],
+            "score": round(score, 2),
+            "_created": p["created_at"],
+        })
+    conn.close()
+    # Order: score DESC, then created_at DESC. Two stable passes —
+    # created first (ISO strings sort chronologically), then score —
+    # so equal scores keep newest-first order.
+    items.sort(key=lambda it: it["_created"], reverse=True)
+    items.sort(key=lambda it: -it["score"])
+    for it in items:
+        del it["_created"]
+    return items[offset:offset + limit]
+
+
+def _views_clean_tag(raw):
+    """Normalize a ?tag= / chip value to a stored-tag shape, or None."""
+    t = (raw or "").strip().lstrip("#").lower()
+    if t and re.fullmatch(r"[a-z0-9_]{1,50}", t):
+        return t
+    return None
+
+
+@app.get("/views", response_class=HTMLResponse)
+async def views_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    tag = _views_clean_tag(request.query_params.get("tag")) or ""
+    return render(request, "views.html", {"view_tag": tag})
+
+
+@app.get("/views.json")
+async def views_feed_json(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    q = request.query_params
+    tag = _views_clean_tag(q.get("tag"))
+    try:
+        offset = max(0, int(q.get("offset") or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(q.get("limit") or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(20, limit))
+    return JSONResponse({"ok": True, "tag": tag,
+                         "views": _views_feed(user, tag, offset, limit)})
+
+
+@app.get("/views/trending")
+async def views_trending(request: Request):
+    """Top 10 hashtags by number of feed-viewable videos for THIS
+    viewer (same candidate rules as the feed itself)."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    conn = db()
+    ids = [p["id"] for p in _views_candidates(conn, user)]
+    counts = {}
+    if ids:
+        ph = ",".join("?" * len(ids))
+        for r in conn.execute(
+                f"SELECT tag, COUNT(*) c FROM post_hashtags "
+                f"WHERE post_id IN ({ph}) GROUP BY tag", ids).fetchall():
+            counts[r["tag"]] = r["c"]
+    conn.close()
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+    return JSONResponse({"ok": True,
+                         "tags": [{"tag": t, "count": c} for t, c in top]})
+
+
+def _views_gate(request, pid):
+    """Shared gate for the /views/{id}/* endpoints: (user, post, err).
+    Login required; the post must exist (share rows resolve to their
+    original, like reactions do) and pass can_view_post — the same
+    'not found' face for missing and unviewable posts."""
+    user = current_user(request)
+    if not user:
+        return None, None, JSONResponse(
+            {"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?", (pid,)).fetchone()
+    if p and p["shared_post_id"]:
+        p = conn.execute("SELECT * FROM posts WHERE id=?",
+                         (p["shared_post_id"],)).fetchone()
+    conn.close()
+    if not p:
+        return None, None, JSONResponse(
+            {"ok": False, "error": "not found"}, status_code=404)
+    p = dict(p)
+    if not can_view_post(user, p, is_owner(request)):
+        return None, None, JSONResponse(
+            {"ok": False, "error": "not found"}, status_code=404)
+    return user, p, None
+
+
+def _views_record_event(request, pid, kind):
+    """'seen' / 'completed' watch events: idempotent (PK + INSERT OR
+    IGNORE); only the FIRST event teaches (seen: tags/author +0.5,
+    completed: +1/+1)."""
+    user, p, err = _views_gate(request, pid)
+    if err:
+        return err
+    conn = db()
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO view_events(user_id, post_id, kind, "
+        "created_at) VALUES(?,?,?,?)",
+        (user["id"], p["id"], kind, now_iso()))
+    first = cur.rowcount > 0
+    if first:
+        if kind == "seen":
+            _teach_from_post(conn, user["id"], p,
+                             VIEWS_LEARN_SEEN_TAG, VIEWS_LEARN_SEEN_AUTHOR)
+        elif kind == "completed":
+            _teach_from_post(conn, user["id"], p,
+                             VIEWS_LEARN_COMPLETED_TAG,
+                             VIEWS_LEARN_COMPLETED_AUTHOR)
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "first": first})
+
+
+@app.post("/views/{pid}/seen")
+async def views_seen(request: Request, pid: int):
+    return _views_record_event(request, pid, "seen")
+
+
+@app.post("/views/{pid}/completed")
+async def views_completed(request: Request, pid: int):
+    return _views_record_event(request, pid, "completed")
+
+
+@app.post("/views/{pid}/engage")
+async def views_engage(request: Request, pid: int):
+    """Companion learning signal for a reaction or comment the viewer
+    just made from the My Views UI (the react/comment POSTs themselves
+    are the wall's endpoints, untouched). The client reports the act;
+    the server trusts it the same way it trusts 'seen' — the deltas
+    are small and only ever tune the caller's own feed. react: tags
+    and author +2; comment: +3."""
+    user, p, err = _views_gate(request, pid)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    kind = (data or {}).get("kind")
+    if kind not in ("react", "comment"):
+        return JSONResponse({"ok": False, "error": "bad kind"},
+                            status_code=400)
+    delta = VIEWS_LEARN_REACT if kind == "react" else VIEWS_LEARN_COMMENT
+    conn = db()
+    _teach_from_post(conn, user["id"], p, delta, delta)
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/views/{pid}/interest")
+async def views_interest(request: Request, pid: int):
+    """The explicit teacher. interested=true: the post's hashtags and
+    its author get +10 affinity. interested=false: -10 AND this post
+    is 'hidden' for the viewer (it leaves their feed for good)."""
+    user, p, err = _views_gate(request, pid)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    interested = bool((data or {}).get("interested"))
+    delta = VIEWS_LEARN_INTEREST if interested else -VIEWS_LEARN_INTEREST
+    conn = db()
+    _teach_from_post(conn, user["id"], p, delta, delta)
+    if not interested:
+        conn.execute(
+            "INSERT OR IGNORE INTO view_events(user_id, post_id, kind, "
+            "created_at) VALUES(?,?,?,?)",
+            (user["id"], p["id"], "hidden", now_iso()))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "interested": interested})
+
+
+@app.get("/views/{pid}/comments")
+async def views_comments(request: Request, pid: int):
+    """The post's comment thread as JSON — the SAME assembly the post
+    page uses (_thread_comments: same query, block filtering, delete
+    rules), plus whether the viewer is comment-blocked on this post
+    (the post page's blocked-note rule, so the feed's sheet can swap
+    the composer for the note)."""
+    user, p, err = _views_gate(request, pid)
+    if err:
+        return err
+    conn = db()
+    comments = _thread_comments(conn, p, user, is_owner(request))
+    blocked = user["id"] in comment_blocked_ids(p["id"])
+    conn.close()
+    return JSONResponse({"ok": True, "comments": comments,
+                         "comment_blocked": blocked})
 
 
 # ---------------- stories (friends-only, custom lifetimes) ----------------
@@ -3464,6 +3923,30 @@ def viewer_spot_for(u):
     return style, classes
 
 
+def _album_photos(viewer, owner_id, owner_on=False, limit=None):
+    """Visible photo album for owner_id: personal posts (page_id IS NULL)
+    with image media, newest first, each gated by can_view_post."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM posts WHERE user_id=? AND page_id IS NULL "
+        "AND media != '' ORDER BY created_at DESC", (owner_id,)).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        media = d.get("media") or ""
+        ext = media.rsplit(".", 1)[-1].lower() if "." in media else ""
+        if ext not in IMG_EXTS:
+            continue
+        if not can_view_post(viewer, d, owner_on):
+            continue
+        out.append({"url": "/uploads/" + media, "post_id": d["id"],
+                    "when": fancy_time(d["created_at"])})
+        if limit is not None and len(out) >= limit:
+            break
+    return out
+
+
 # ---------------- profile / settings ----------------
 @app.get("/user/{uid}", response_class=HTMLResponse)
 async def profile(request: Request, uid: int):
@@ -3567,13 +4050,66 @@ async def profile(request: Request, uid: int):
             card = post_card(d, user, owner_on)
             if card:
                 posts.append(card)
+    if locked:
+        album_photos = []
+        album_count = 0
+    else:
+        _album_all = _album_photos(user, uid, owner_on)
+        album_photos = _album_all[:6]
+        album_count = len(_album_all)
     # On a profile page the PROFILE OWNER's background wins over the
     # viewer's own (render() only defaults page_bg when unset). Same for
     # the viewer's spot colors: blanked here, the owner's .spot-scope
     # vars rule the whole page.
     return render(request, "profile.html",
                   {"profile": profile_ctx, "posts": posts,
+                   "album_photos": album_photos,
+                   "album_count": album_count,
                    "page_bg": profile_ctx["background"],
+                   "viewer_spot_style": "", "viewer_spot_classes": ""})
+
+
+@app.get("/user/{uid}/photos", response_class=HTMLResponse)
+async def user_photos(request: Request, uid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    owner_on = is_owner(request)
+    prof = get_user(uid)
+    if not prof:
+        return redir("/home", "User not found.")
+    if user["id"] != uid and not owner_on \
+            and blocked_either_way(user["id"], uid):
+        return render(request, "profile_unavailable.html", {})
+    status = req_status(user["id"], uid)
+    locked = bool(prof.get("private_profile")) and user["id"] != uid \
+        and not owner_on and status != "friends"
+    _, spot_classes = spot_style_for(prof)
+    ctx = {"id": prof["id"], "name": prof["name"],
+           "avatar": avatar_url(prof.get("avatar", "")),
+           "is_self": user["id"] == uid,
+           "is_private_locked": locked,
+           "spot_style": spot_scope_style_for(prof),
+           "spot_classes": spot_classes}
+    if locked:
+        return render(request, "photos.html",
+                      {"profile": ctx, "cover": [], "photos": [],
+                       "photo_count": 0,
+                       "page_bg": avatar_url(prof.get("background", "")),
+                       "viewer_spot_style": "",
+                       "viewer_spot_classes": ""})
+    photos = _album_photos(user, uid, owner_on)
+    cover = []
+    av = avatar_url(prof.get("avatar", ""))
+    if av:
+        cover.append({"url": av, "label": "Profile picture"})
+    bg = avatar_url(prof.get("background", ""))
+    if bg:
+        cover.append({"url": bg, "label": "Cover photo"})
+    return render(request, "photos.html",
+                  {"profile": ctx, "cover": cover, "photos": photos,
+                   "photo_count": len(photos),
+                   "page_bg": avatar_url(prof.get("background", "")),
                    "viewer_spot_style": "", "viewer_spot_classes": ""})
 
 
@@ -5450,9 +5986,52 @@ def live_now_for(viewer_id, owner_on=False):
                     "name": host["name"], "avatar": host["avatar"],
                     "title": live["title"],
                     "viewers": _live_viewer_count(conn, live["id"]),
+                    "panel_count": 1 + len(_live_active_members(conn, live["id"])),
+                    "created_at": live["created_at"],
                     "is_self": live["host_id"] == viewer_id})
     conn.close()
     return out
+
+
+def _lives_page_list(viewer, owner_on=False):
+    """Lives for the /lives discovery page: live_now_for rows annotated
+    with "following" and ordered friends/following first, then viewers
+    DESC, then created_at DESC (most recent first)."""
+    viewer_id = viewer["id"] if isinstance(viewer, dict) else viewer
+    rows = live_now_for(viewer_id, owner_on=owner_on)
+    friends = friend_id_set(viewer_id)
+    following = following_ids(viewer_id)
+    for r in rows:
+        r["following"] = False if r.get("is_self") else bool(r["host_id"] in following)
+    # Python stable sorts compose the keys: apply in reverse priority order.
+    rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    rows.sort(key=lambda r: r.get("viewers") or 0, reverse=True)
+    rows.sort(key=lambda r: 0 if r["host_id"] in friends else (1 if r.get("following") else 2))
+    return rows
+
+
+@app.get("/lives", response_class=HTMLResponse)
+async def lives_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    return render(request, "lives.html",
+                  {"lives": _lives_page_list(user, is_owner(request))})
+
+
+@app.get("/lives.json")
+async def lives_json(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    rows = _lives_page_list(user, is_owner(request))
+    return JSONResponse({"ok": True, "lives": [
+        {"id": r["id"], "host_id": r["host_id"],
+         "host_name": r["name"], "host_avatar": r["avatar"],
+         "title": r["title"], "viewers": r["viewers"],
+         "panel_count": r["panel_count"], "following": r["following"],
+         "is_self": r["is_self"]} for r in rows]})
 
 
 @app.post("/live/start")
