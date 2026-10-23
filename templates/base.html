@@ -118,6 +118,40 @@ body.has-profile-bg .contact-item{color:#f2f2f2}
 body.has-profile-bg .contact-item:hover{background:rgba(255,255,255,.14)}
 body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 
+/* ===== Box Transparency: per-viewer box solidity =====
+   When the logged-in viewer has saved a box_opacity below 100,
+   render() puts the boxes-glass class + a --box-alpha var on <body>
+   and the rules below make the site's boxes see-through AT THAT
+   ALPHA — on the viewer's screen only; nobody else's view changes.
+   At 100 (the default) neither the class nor the var is emitted and
+   pages render pixel-identical to before this feature.
+   Spot interplay: a viewer's own Your Spot card tint is a separate,
+   deliberate color choice, so .card keeps the spot background when
+   the viewer has one (the :not(.viewer-spot-card) guards below) —
+   and the spot rules themselves multiply their alpha by
+   var(--box-alpha,1), so transparency still dims a spot card
+   proportionally instead of replacing its color. Profile pages are
+   ruled by the profile owner's .spot-scope (not guarded here, and
+   profile routes don't blank viewer_box_alpha): the generic boxes
+   below still go glass there, while spot-scoped cards keep the
+   owner's tint, likewise multiplied by --box-alpha. */
+body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass table.admin{background:rgba(255,255,255,var(--box-alpha))}
+body.boxes-glass:not(.viewer-spot-card) .card{background:rgba(255,255,255,var(--box-alpha))}
+body.boxes-glass:not(.viewer-spot-card) .comment .cbub{background:rgba(240,242,245,var(--box-alpha))}
+body.boxes-glass .topbar{background:rgba(17,17,17,var(--box-alpha))}
+body.boxes-glass .flashmsg div{background:rgba(253,238,240,var(--box-alpha))}
+body.boxes-glass .msg-theirs{background:rgba(228,230,235,var(--box-alpha))}
+body.boxes-glass .btn-ghost{background:rgba(228,230,235,var(--box-alpha))}
+body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet, body.boxes-glass .tag-suggest, body.boxes-glass .react-picker{background:rgba(255,255,255,var(--box-alpha))}
+body.boxes-glass #incoming-sheet, body.boxes-glass #request-sheet{background:rgba(17,17,17,var(--box-alpha))}
+body.boxes-glass .kind-tab, body.boxes-glass .picker-chip, body.boxes-glass .poll-opt-btn{background:rgba(245,246,247,var(--box-alpha))}
+body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
+@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ body.boxes-glass .card, body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass .topbar, body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet {backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)} }
+
+/* Box Transparency settings preview (Settings → Box Transparency) */
+.box-preview{border-radius:10px;padding:14px;margin-top:6px;background:linear-gradient(135deg,#d41f2e,#7a0f18 45%,#141419)}
+.box-preview-card{background:#fff;border-radius:8px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.1)}
+
 /* ===== Your Spot: per-profile name + theme =====
    Two layers share the same CSS vars (--spot-text / --spot-card-rgb /
    --spot-card-alpha):
@@ -138,20 +172,20 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 .spot-owner-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:3px}
 .spot-real-name{font-size:17px;font-weight:700}
 body .spot-scope.spot-has-card .card{
-  background:rgba(var(--spot-card-rgb,232,232,238),var(--spot-card-alpha,.55));
+  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--box-alpha,1)));
   backdrop-filter:blur(10px) saturate(1.25);-webkit-backdrop-filter:blur(10px) saturate(1.25)}
 body .spot-scope.spot-has-card .comment .cbub{
-  background:rgba(var(--spot-card-rgb,232,232,238),var(--spot-card-alpha,.55));
+  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--box-alpha,1)));
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 body .spot-scope.spot-has-text .card{color:var(--spot-text)}
 body .spot-scope.spot-has-text .card .post-meta,
 body .spot-scope.spot-has-text .card .comment .cmeta,
 body .spot-scope.spot-has-text .card .with-line{color:var(--spot-text);opacity:.72}
 body.viewer-spot-card .card{
-  background:rgba(var(--spot-card-rgb,232,232,238),var(--spot-card-alpha,.55));
+  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--box-alpha,1)));
   backdrop-filter:blur(10px) saturate(1.25);-webkit-backdrop-filter:blur(10px) saturate(1.25)}
 body.viewer-spot-card .comment .cbub{
-  background:rgba(var(--spot-card-rgb,232,232,238),var(--spot-card-alpha,.55));
+  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--box-alpha,1)));
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 body.viewer-spot-text .card{color:var(--spot-text)}
 body.viewer-spot-text .card .post-meta,
@@ -699,7 +733,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 </style>
 {% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}"{% if viewer_spot_style %} style="{{ viewer_spot_style }}"{% endif %}>
+<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}"{% if viewer_spot_style or viewer_box_alpha %} style="{% if viewer_spot_style %}{{ viewer_spot_style }};{% endif %}{% if viewer_box_alpha %}--box-alpha:{{ viewer_box_alpha }}{% endif %}"{% endif %}>
 
 <header class="topbar">
   <a class="logo" href="/home">HERE</a>
@@ -744,6 +778,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   <a href="/invite"><span>🎟</span> Invite</a>
   <a href="/daily"><span>🔥</span> Daily</a>
   <a href="/contest"><span>🏆</span> Contest</a>
+  <a href="/games"><span>🎮</span> Games</a>
   <a href="/logout"><span>🚪</span> Logout</a>
 </div>
 
@@ -769,6 +804,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <a class="menu-item" href="/invite"><span class="menu-ic">🎟</span> Invite</a>
     <a class="menu-item" href="/daily"><span class="menu-ic">🔥</span> Daily</a>
     <a class="menu-item" href="/contest"><span class="menu-ic">🏆</span> Contest</a>
+    <a class="menu-item" href="/games"><span class="menu-ic">🎮</span> Games</a>
     <a class="menu-item" href="/logout"><span class="menu-ic">🚪</span> Logout</a>
   </aside>
 

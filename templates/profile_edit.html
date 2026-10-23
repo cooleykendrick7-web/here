@@ -96,6 +96,33 @@
   </form>
 </div>
 
+<div class="card" id="boxes">
+  <div class="section-title">🪟 Box Transparency</div>
+  <p style="margin-top:8px;color:var(--muted)">This one is just for YOUR eyes — it changes how see-through the boxes are on your screen, on every page of HERE. It does not change what anybody else sees.</p>
+  <p style="margin-top:8px;color:var(--muted)">Lower = more see-through. This changes how boxes look on YOUR screen, everywhere on HERE.</p>
+  <form action="/settings/boxes" method="post" style="margin-top:12px">
+    <div class="field">
+      <label for="box-opacity">Box solidity — <span id="box-opacity-val">{{ profile.box_opacity if profile.box_opacity is not none else 100 }}%</span> solid</label>
+      <input type="range" id="box-opacity" name="box_opacity" min="30" max="100" step="1" value="{{ profile.box_opacity if profile.box_opacity is not none else 100 }}">
+      <div style="font-size:12px;color:var(--muted);margin-top:2px">100% = solid boxes · 30% = very see-through</div>
+    </div>
+    <div class="field">
+      <label>Preview — this is how boxes look on your screen</label>
+      <div class="box-preview">
+        <div class="box-preview-card" id="box-preview-card">
+          <div style="font-weight:700">A sample box</div>
+          <p style="margin-top:6px">This is how a box looks at the see-through level you picked.</p>
+          <div style="background:#f0f2f5;border-radius:8px;padding:8px 10px;margin-top:8px">
+            <div style="font-weight:700;font-size:13px">{{ profile.name|e }}</div>
+            <div style="font-size:13px">…and this is a sample comment bubble.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <button type="submit" class="btn">Save Transparency</button>
+  </form>
+</div>
+
 <div class="card">
   <div class="section-title">⚡ Status</div>
   <p style="margin-top:8px;color:var(--muted)">Your lightning bolt tells people if you're around: <span style="color:#22c55e">⚡ green</span> = active, <span style="color:#eab308">⚡ yellow</span> = away, <span style="color:#ef4444">⚡ red</span> = offline.</p>
@@ -229,6 +256,22 @@
       });
     });
   });
+  update();
+})();
+</script>
+<script>
+(function(){
+  var slider = document.getElementById('box-opacity');
+  if (!slider) return;
+  var val = document.getElementById('box-opacity-val');
+  var preview = document.getElementById('box-preview-card');
+  function update(){
+    var v = slider.value;
+    if (val) val.textContent = v + '%';
+    if (preview) preview.style.background = 'rgba(255,255,255,' + (v/100) + ')';
+  }
+  slider.addEventListener('input', update);
+  slider.addEventListener('change', update);
   update();
 })();
 </script>

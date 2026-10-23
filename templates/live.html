@@ -66,7 +66,8 @@
   font-weight:700;white-space:nowrap;text-shadow:0 1px 4px rgba(0,0,0,.8)}
 .live-statusline{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
   z-index:5;background:rgba(0,0,0,.72);color:#fff;border-radius:10px;
-  padding:10px 16px;font-size:14px;font-weight:600;text-align:center;max-width:86%}
+  padding:10px 16px;font-size:14px;font-weight:600;text-align:center;max-width:86%;
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
 .live-hearts{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:6}
 .live-heart{position:absolute;opacity:0;animation:heartfloat 2.4s ease-out forwards;
   text-shadow:0 2px 8px rgba(0,0,0,.4);will-change:transform,opacity}
@@ -74,8 +75,9 @@
   12%{opacity:1}100%{opacity:0;transform:translate(var(--dx,0px),-44vh) scale(1.15)}}
 /* ===== controls / action bar ===== */
 .live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
-.live-ctl{background:#1c1e21;color:#fff;border:1px solid #3a3b3d;border-radius:999px;
-  padding:9px 14px;font-size:14px;font-weight:700;cursor:pointer}
+.live-ctl{background:rgba(28,30,33,.72);color:#fff;border:1px solid #3a3b3d;border-radius:999px;
+  padding:9px 14px;font-size:14px;font-weight:700;cursor:pointer;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 .live-ctl.off{background:var(--red);border-color:var(--red-dark)}
 .live-ctl.danger{background:var(--red);border-color:var(--red-dark)}
 .live-ctl:disabled{opacity:.45;cursor:default}
@@ -83,8 +85,9 @@
   border-radius:999px;padding:12px 26px;font-size:19px;font-weight:800;cursor:pointer;
   box-shadow:0 4px 14px rgba(212,31,46,.4)}
 .live-like-btn:active{transform:scale(1.12)}
-.live-panel{background:var(--card);border:1px solid var(--border);border-radius:12px;
-  padding:12px;margin-bottom:12px}
+.live-panel{background:rgba(255,255,255,.78);border:1px solid var(--border);border-radius:12px;
+  padding:12px;margin-bottom:12px;
+  backdrop-filter:blur(8px) saturate(1.2);-webkit-backdrop-filter:blur(8px) saturate(1.2)}
 .live-comments{max-height:38vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
 .live-comment{display:flex;gap:8px;align-items:flex-start;font-size:14px}
 .live-comment .av-32{width:32px;height:32px;border-radius:50%;object-fit:cover;flex:none}
@@ -95,6 +98,14 @@
   border-radius:5px;padding:1px 5px;margin-left:4px;vertical-align:2px}
 .live-comment .del{margin-left:auto;background:none;border:none;cursor:pointer;
   font-size:13px;opacity:.65;flex:none}
+/* ===== floating comments over the stage ===== */
+.live-float{position:absolute;left:10px;bottom:25%;z-index:7;width:min(72%,420px);max-height:40%;display:flex;pointer-events:none}
+.live-float .live-comments{pointer-events:auto;width:100%;max-height:100%;overflow-y:auto;display:flex;flex-direction:column;gap:6px;background:transparent;padding-right:2px;scrollbar-width:thin}
+.live-float .live-comment{background:rgba(0,0,0,.45);border-radius:14px;padding:5px 10px 5px 6px;color:#fff;align-items:center;align-self:flex-start;max-width:100%;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+.live-float .live-comment .av-32, .live-float .live-comment .ph-32{width:24px;height:24px;font-size:12px}
+.live-float .live-comment .who{color:#ffb3ba}
+.live-float .live-comment .del{color:#fff}
+.live-notice{align-self:center;background:rgba(255,255,255,.20);color:#fff;border-radius:999px;padding:3px 12px;font-size:12.5px;font-weight:600;text-align:center;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
 .live-comment-form{display:flex;gap:8px;margin-top:10px}
 .live-comment-form input{flex:1;border:1px solid var(--border);border-radius:999px;
   padding:10px 14px;font-size:14px;min-width:0}
@@ -116,12 +127,13 @@
 #live-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
 #live-sheet-backdrop[hidden]{display:none}
 #live-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:min(92vw,340px);max-height:84vh;overflow-y:auto;background:#fff;
+  width:min(92vw,340px);max-height:84vh;overflow-y:auto;background:rgba(255,255,255,.94);
   border:1px solid var(--border);border-radius:12px;padding:14px;
-  box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left}
+  box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 #live-sheet[hidden]{display:none}
 #live-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:2100;
-  width:min(88vw,380px);background:rgba(28,28,30,.96);color:#fff;border:1px solid var(--red);
+  width:min(88vw,380px);background:rgba(28,28,30,.88);color:#fff;border:1px solid var(--red);
   border-radius:10px;padding:10px 14px;font-size:14px;text-align:center;
   box-shadow:0 8px 24px rgba(0,0,0,.4)}
 #live-toast[hidden]{display:none}
@@ -142,6 +154,7 @@
   </div>
   <div class="live-statusline" id="live-status">Connecting…</div>
   <div class="live-hearts" id="live-hearts"></div>
+  <div class="live-float" id="live-float"><div class="live-comments" id="live-comments"></div></div>
 </div>
 
 <div class="live-err" id="live-error" hidden>
@@ -149,7 +162,7 @@
   <button type="button" class="live-ctl" id="live-error-retry" style="margin-top:8px">🔁 Try again</button>
 </div>
 
-<div id="live-invite-banner" class="live-panel" hidden style="background:var(--red-soft);border-color:#f3c2c7">
+<div id="live-invite-banner" class="live-panel" hidden style="background:rgba(253,238,240,.78);border-color:#f3c2c7">
   <span id="live-invite-text"></span>
   <span style="display:inline-flex;gap:6px;margin-left:8px">
     <button type="button" class="btn btn-sm" id="live-invite-join">Join</button>
@@ -172,6 +185,7 @@
   <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
   <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
   <button type="button" class="live-ctl" id="ctl-poll" hidden>📊 Poll / Trivia</button>
+  <button type="button" class="live-ctl" id="ctl-games" hidden>🎮 Games</button>
   <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
 </div>
 <div class="live-panel" id="live-poll-card" hidden style="border-color:var(--red)">
@@ -180,13 +194,32 @@
   <div id="live-poll-results" hidden></div>
   <div id="live-poll-note" style="font-size:13px;color:var(--muted);margin-top:6px"></div>
 </div>
-<div class="live-panel" id="live-poll-closed" hidden style="background:var(--red-soft);border-color:#f3c2c7">
+<div class="live-panel" id="live-poll-closed" hidden style="background:rgba(253,238,240,.78);border-color:#f3c2c7">
   <div id="live-poll-closed-text" style="font-weight:700"></div>
   <div id="live-poll-closed-detail" style="font-size:13.5px;margin-top:4px"></div>
 </div>
+<div class="live-panel" id="live-game-card" hidden style="border-color:var(--red)">
+  <div style="font-weight:800;margin-bottom:8px" id="live-game-title"></div>
+  <div id="live-game-guess-ui" hidden>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="live-game-guess" type="number" min="1" max="100" placeholder="Your guess (1–100)"
+        style="flex:1;min-width:130px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:15px">
+      <button type="button" class="btn" id="live-game-guess-btn">Guess</button>
+    </div>
+  </div>
+  <div id="live-game-dice-ui" hidden>
+    <button type="button" class="btn" id="live-game-roll" style="font-size:18px;padding:12px 26px">🎲 Roll</button>
+  </div>
+  <div id="live-game-players" style="margin-top:8px"></div>
+  <div id="live-game-note" style="font-size:13px;color:var(--muted);margin-top:6px"></div>
+</div>
+<div class="live-panel" id="live-game-closed" hidden style="background:rgba(253,238,240,.78);border-color:#f3c2c7">
+  <div id="live-game-closed-text" style="font-weight:700"></div>
+  <div id="live-game-closed-detail" style="font-size:13.5px;margin-top:4px"></div>
+</div>
 <div id="live-join-msg" style="font-size:13px;color:var(--muted);margin:-6px 0 10px" hidden></div>
 <div id="live-muted-note" class="live-muted-note" hidden>🔇 You were muted by the host/admin — your mic is off for everyone until they unmute you.</div>
-<div id="live-member-banner" class="live-panel" hidden style="background:var(--red-soft);border-color:#f3c2c7">
+<div id="live-member-banner" class="live-panel" hidden style="background:rgba(253,238,240,.78);border-color:#f3c2c7">
   🎥 <strong>You're on the panel!</strong> Everyone watching can see and hear you.
 </div>
 
@@ -202,7 +235,6 @@
 
 <div class="live-panel">
   <div style="font-weight:800;margin-bottom:8px">💬 Live comments</div>
-  <div class="live-comments" id="live-comments"></div>
   <form class="live-comment-form" id="live-comment-form">
     <input id="live-comment-input" maxlength="300" autocomplete="off"
       placeholder="Say something nice…">
@@ -222,6 +254,23 @@
 
 <script>
 var LIVE_BOOT = {{ boot|safe }};
+</script>
+<script>
+/* Pure room-arrival diff: panel arrivals first, then watcher joins.
+   A person on the panel never also gets a join event; a null prev
+   (first snapshot) yields no events, so nobody is announced on load. */
+function liveRoomDiff(prev, next){
+  var events=[];
+  if(!prev || !next) return events;
+  var id;
+  for(id in next.panel){
+    if(!prev.panel[id]) events.push({kind:'panel', id:+id, name:next.panel[id]});
+  }
+  for(id in next.viewers){
+    if(!prev.viewers[id] && !next.panel[id]) events.push({kind:'join', id:+id, name:next.viewers[id]});
+  }
+  return events;
+}
 </script>
 <script>
 (function(){
@@ -257,6 +306,8 @@ var LIVE_BOOT = {{ boot|safe }};
   var pendingInvites = [];
   var activePoll = null;          /* state payload's active_poll */
   var closedPoll = null;          /* state payload's last_closed_poll */
+  var activeGame = null;          /* state payload's active_game */
+  var lastGame = null;            /* state payload's last_game */
 
   var peers = {};   /* uid -> {pc, iceQ, offered, helloSent, remoteKind, videoEl} */
   var tiles = {};   /* uid -> {el, video, ph, labelName, badges, menuBtn, member} */
@@ -264,6 +315,8 @@ var LIVE_BOOT = {{ boot|safe }};
   var myMicOn = true, myCamOn = true, forcedMuted = false;
   var soundOff = false;
   var lastSignal = 0, lastComment = 0, renderedComments = {};
+  var roomSnap = null;
+  var roomSnapHadViewers = false;
   var ended = false, startedAt = Date.now();
   try {
     var t0 = Date.parse(B.created_at);
@@ -1308,6 +1361,108 @@ var LIVE_BOOT = {{ boot|safe }};
   }
   $('ctl-poll').addEventListener('click', openPollSheet);
 
+  /* ---------------- live room games (Games Pack 2) ----------------
+     The state poll carries active_game (players + my_play — the
+     guess secret is NEVER in the payload while a game runs) and
+     last_game (winners + the revealed secret, only while no game
+     is active). Playing posts to the room's game endpoint; the
+     next state poll re-renders from the server. */
+  function renderLiveGame(){
+    var card = $('live-game-card'), closed = $('live-game-closed');
+    var g = activeGame;
+    if (g) {
+      closed.hidden = true;
+      card.hidden = false;
+      $('live-game-title').textContent = g.kind === 'guess'
+        ? "🔢 I'm thinking of a number 1–100…"
+        : '🎲 Dice Duel';
+      $('live-game-guess-ui').hidden = g.kind !== 'guess';
+      $('live-game-dice-ui').hidden = g.kind !== 'dice';
+      var list = $('live-game-players');
+      list.innerHTML = '';
+      (g.players || []).forEach(function (p) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;font-size:14.5px;padding:3px 0';
+        var nm = document.createElement('span');
+        nm.style.flex = '1';
+        nm.style.fontWeight = '600';
+        nm.textContent = p.name;
+        var dp = document.createElement('span');
+        dp.style.fontWeight = '800';
+        dp.textContent = p.display;
+        row.appendChild(nm);
+        row.appendChild(dp);
+        list.appendChild(row);
+      });
+      var note = $('live-game-note');
+      if (g.kind === 'guess') {
+        note.textContent = g.my_play != null
+          ? 'Your guess: ' + g.my_play + ' — guess again any time to change it. Closest wins!'
+          : 'Make your guess — closest to the number wins!';
+      } else {
+        note.textContent = g.my_play != null
+          ? 'Your best roll: ' + g.my_play + ' — keep rolling to beat it!'
+          : 'Roll the die — your best roll is your score!';
+      }
+    } else {
+      card.hidden = true;
+      if (lastGame) {
+        var lg = lastGame;
+        closed.hidden = false;
+        var names = (lg.winners || []).join(', ');
+        $('live-game-closed-text').textContent = names
+          ? '🏆 ' + names + ' win! ' + lg.summary
+          : '🎮 Game over — ' + lg.summary;
+        $('live-game-closed-detail').textContent =
+          lg.kind === 'guess' ? '🔢 Guess the Number' : '🎲 Dice Duel';
+      } else {
+        closed.hidden = true;
+      }
+    }
+  }
+  function playLiveGame(body) {
+    if (!activeGame || ended) return;
+    post('/game/play', body)
+      .then(function (d) {
+        if (d && d.ok && d.game) {
+          activeGame = d.game;
+          if (d.roll) toast('🎲 You rolled ' + d.roll + '!');
+          renderLiveGame();
+        } else toast((d && d.error) || 'Could not play.');
+        pollState();
+      })
+      .catch(function () { toast('Could not play.'); });
+  }
+  $('live-game-guess-btn').addEventListener('click', function () {
+    var v = parseInt($('live-game-guess').value, 10);
+    if (!v || v < 1 || v > 100) { toast('Guess a number 1–100.'); return; }
+    playLiveGame({guess: v});
+  });
+  $('live-game-roll').addEventListener('click', function () {
+    playLiveGame({});
+  });
+  /* The Games sheet rides the shared manage sheet: start either
+     game (starting one ends the running game) + End game. */
+  function openGameSheet() {
+    sheetTitle.textContent = '🎮 Games';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    sheetBtn('🔢 Guess the Number', false, function () {
+      act('/game/start', {kind: 'guess'}, 'Guess the Number started 🔢');
+    });
+    sheetBtn('🎲 Dice Duel', false, function () {
+      act('/game/start', {kind: 'dice'}, 'Dice Duel started 🎲');
+    });
+    if (activeGame) {
+      sheetBtn('⏹ End game', true, function () {
+        act('/game/end', {}, 'Game ended.');
+      });
+    }
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('ctl-games').addEventListener('click', openGameSheet);
+
   function renderInviteBanner(){
     var banner = $('live-invite-banner');
     var inv = pendingInvites[0];
@@ -1330,6 +1485,35 @@ var LIVE_BOOT = {{ boot|safe }};
 
   /* ---------------- comments (unchanged behavior; the server's
      can_delete flag now also covers admins) ---------------- */
+  function addNotice(text){
+    var nearBottom = commentsEl.scrollTop + commentsEl.clientHeight
+      >= commentsEl.scrollHeight - 60;
+    var row = document.createElement('div');
+    row.className = 'live-notice';
+    row.textContent = text;
+    commentsEl.appendChild(row);
+    if (nearBottom) commentsEl.scrollTop = commentsEl.scrollHeight;
+  }
+  function noteRoomArrivals(d){
+    var next = {viewers: {}, panel: {}};
+    if (d.viewer_list){
+      d.viewer_list.forEach(function(v){ next.viewers[v.id] = v.name; });
+    }
+    panel.forEach(function(m){ next.panel[m.user_id] = m.name; });
+    var prevForDiff = roomSnap ? {
+      panel: roomSnap.panel,
+      viewers: (roomSnapHadViewers && d.viewer_list)
+        ? roomSnap.viewers : next.viewers
+    } : null;
+    liveRoomDiff(prevForDiff, next).forEach(function(ev){
+      if (ev.id === B.me) return;
+      addNotice(ev.kind === 'panel'
+        ? '🎤 ' + ev.name + ' is on the panel'
+        : '👋 ' + ev.name + ' joined the live');
+    });
+    roomSnap = next;
+    roomSnapHadViewers = !!d.viewer_list;
+  }
   function addComment(c){
     if (renderedComments[c.id]) return;
     renderedComments[c.id] = 1;
@@ -1404,6 +1588,7 @@ var LIVE_BOOT = {{ boot|safe }};
     $('ctl-join').hidden = member;
     $('ctl-invite-others').hidden = !canManage();
     $('ctl-poll').hidden = !canManage();
+    $('ctl-games').hidden = !canManage();
     $('live-member-banner').hidden = !member;
   }
   function updateJoinButton(d){
@@ -1542,6 +1727,7 @@ var LIVE_BOOT = {{ boot|safe }};
         panel = (d.panel && d.panel.length) ? d.panel : fallbackPanel(d);
         panelById = {};
         panel.forEach(function(m){ panelById[m.user_id] = m; });
+        noteRoomArrivals(d);
         if (d.my_panel){
           myPanel = d.my_panel;
         } else {
@@ -1558,6 +1744,9 @@ var LIVE_BOOT = {{ boot|safe }};
         activePoll = d.active_poll || null;
         closedPoll = d.last_closed_poll || null;
         renderLivePoll();
+        activeGame = d.active_game || null;
+        lastGame = d.last_game || null;
+        renderLiveGame();
         watchersList = d.watchers || [];
         inviteCandidates = d.invite_candidates || [];
         if (d.viewer_list)
@@ -1607,9 +1796,9 @@ var LIVE_BOOT = {{ boot|safe }};
     setStatus('📺 This live has ended.');
     $('live-comment-input').disabled = true;
     ['ctl-mute','ctl-cam','ctl-flip','ctl-end','ctl-panel-leave',
-     'ctl-join','ctl-like','ctl-poll','live-requests-panel','live-people-panel',
+     'ctl-join','ctl-like','ctl-poll','ctl-games','live-requests-panel','live-people-panel',
      'live-invite-banner','live-member-banner','live-poll-card',
-     'live-poll-closed'].forEach(function(id){
+     'live-poll-closed','live-game-card','live-game-closed'].forEach(function(id){
       var el = $(id);
       if (el) el.hidden = true;
     });

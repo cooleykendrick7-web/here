@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}🎮 {{ title|e }} vs {{ other_name|e }} — HERE{% endblock %}
+{% block content %}
+
+<div class="card" style="text-align:center;padding:24px 20px">
+  <div style="font-size:36px">{% if match.kind == 'ttt' %}❌⭕{% else %}🪨📄✂️{% endif %}</div>
+  <h2 style="font-size:24px;margin:8px 0 4px">{{ title|e }}</h2>
+  <div style="font-size:16px">You vs <a href="/user/{{ other_id }}">{{ other_name|e }}</a></div>
+  <div style="font-size:17px;font-weight:700;margin-top:8px">{{ status_text|e }}</div>
+  {% if match.status == 'done' %}
+  <div style="font-size:20px;font-weight:900;margin-top:10px">
+    {% if match.is_draw %}🤝 It's a draw!
+    {% elif match.winner_id == me %}🏆 You won!
+    {% else %}🏆 {{ other_name|e }} won{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if match.kind == 'ttt' %}
+<div class="card" style="text-align:center">
+  <div style="font-size:15px;color:var(--muted)">You are <strong>{{ my_mark|e }}</strong>{% if match.status == 'active' %} · {% if my_turn %}tap a square!{% else %}waiting on {{ other_name|e }}…{% endif %}{% endif %}</div>
+  <div style="display:grid;grid-template-columns:repeat(3,84px);gap:8px;justify-content:center;margin-top:14px">
+    {% for cell in board %}
+    <button type="button" class="ttt-cell" data-cell="{{ loop.index0 }}"
+      style="width:84px;height:84px;font-size:36px;font-weight:900;border:2px solid var(--border);border-radius:12px;background:{% if cell %}#f0f2f5{% else %}#fff{% endif %};cursor:{% if my_turn and not cell %}pointer{% else %}default{% endif %}"
+      {% if not my_turn or cell %}disabled{% endif %}>{{ cell|e if cell else '' }}</button>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="card" style="text-align:center">
+  <div style="font-size:16px">Round {{ round }} · First to 2 round-wins takes it</div>
+  <div style="font-size:19px;font-weight:800;margin-top:6px">You {{ my_wins }} — {{ opp_wins }} {{ other_name|e }}</div>
+  {% if last %}
+  <div style="font-size:15px;color:var(--muted);margin-top:8px">
+    Round {{ last.round }}:
+    you threw {{ rps_emoji[last_my_pick] }} {{ last_my_pick|e }} · {{ other_name|e }} threw {{ rps_emoji[last_opp_pick] }} {{ last_opp_pick|e }} —
+    {% if last.winner_id is none %}tie round!
+    {% elif last.winner_id == me %}<strong>you took it!</strong>
+    {% else %}<strong>{{ other_name|e }} took it.</strong>{% endif %}
+  </div>
+  {% endif %}
+  {% if match.status == 'active' %}
+    {% if my_pick %}
+    <div style="font-size:18px;margin-top:14px">You picked {{ rps_emoji[my_pick] }} — waiting on {{ other_name|e }}…</div>
+    {% else %}
+    {% if opp_picked %}<div style="font-size:14.5px;color:var(--muted);margin-top:12px">{{ other_name|e }} has picked — now you!</div>{% endif %}
+    <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap">
+      <button type="button" class="btn rps-btn" data-choice="rock" style="font-size:21px;padding:14px 20px">🪨 Rock</button>
+      <button type="button" class="btn rps-btn" data-choice="paper" style="font-size:21px;padding:14px 20px">📄 Paper</button>
+      <button type="button" class="btn rps-btn" data-choice="scissors" style="font-size:21px;padding:14px 20px">✂️ Scissors</button>
+    </div>
+    {% endif %}
+  {% endif %}
+</div>
+{% endif %}
+
+<div style="display:flex;gap:10px;justify-content:center;margin:14px 0;flex-wrap:wrap">
+  <a class="btn-ghost" href="/games" style="display:inline-block;padding:10px 16px">🎮 All games</a>
+  {% if match.status == 'done' %}
+  <form method="post" action="/games/match/{{ match.id }}/rematch" style="display:inline">
+    <button type="submit" class="btn">🔁 Rematch</button>
+  </form>
+  {% else %}
+  <button type="button" class="btn-ghost" id="forfeit-btn" style="padding:10px 16px">🏳 Forfeit</button>
+  {% endif %}
+</div>
+
+<script>
+var MATCH_ID = {{ match.id }};
+function moveMatch(body){
+  fetch('/games/match/' + MATCH_ID + '/move', {method: 'POST',
+    credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok) window.location.reload();
+      else alert((d && d.error) || 'That move did not work.');
+    })
+    .catch(function(){ alert('That move did not work.'); });
+}
+document.querySelectorAll('.ttt-cell').forEach(function(b){
+  b.addEventListener('click', function(){
+    moveMatch({cell: parseInt(b.dataset.cell, 10)});
+  });
+});
+document.querySelectorAll('.rps-btn').forEach(function(b){
+  b.addEventListener('click', function(){
+    moveMatch({choice: b.dataset.choice});
+  });
+});
+var ff = document.getElementById('forfeit-btn');
+if (ff) ff.addEventListener('click', function(){
+  if (!confirm('Give up this match? {{ other_name|e }} wins.')) return;
+  fetch('/games/match/' + MATCH_ID + '/forfeit', {method: 'POST',
+    credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok) window.location.href = '/games';
+      else alert((d && d.error) || 'Could not forfeit.');
+    })
+    .catch(function(){ alert('Could not forfeit.'); });
+});
+</script>
+
+{% endblock %}

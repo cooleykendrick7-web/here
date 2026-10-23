@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}🎮 Games — HERE{% endblock %}
+{% block content %}
+
+<div class="card" style="text-align:center;padding:26px 20px">
+  <div style="font-size:42px">🎮</div>
+  <h2 style="font-size:29px;margin:8px 0 4px">Games</h2>
+  <p style="color:var(--muted);font-size:15px">Play with friends, jump into a live room game, or chase the weekly crown — it's all here.</p>
+</div>
+
+<div class="section-title" style="margin:18px 0 8px">⭐ Game of the Week</div>
+<div class="card" style="border:2px solid #e6b800;background:#fffbe8;text-align:center;padding:28px 20px">
+  <div style="font-size:52px">{{ featured.emoji|e }}</div>
+  <div style="font-size:24px;font-weight:900;margin-top:6px">{{ featured.title|e }}</div>
+  <p style="font-size:15.5px;margin-top:8px">{{ featured.blurb|e }}</p>
+  <a class="btn" href="{{ featured.link|e }}" style="margin-top:12px;display:inline-block">▶ Play {{ featured.title|e }}</a>
+  <div style="color:var(--muted);font-size:13.5px;margin-top:12px">New featured game every Monday 🔄</div>
+</div>
+
+<div class="section-title" style="margin:20px 0 8px">🎮 Play with a friend</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
+  <div class="card" style="margin:0">
+    <div style="font-size:34px">❌⭕</div>
+    <div style="font-size:19px;font-weight:800;margin-top:4px">Tic-Tac-Toe</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">Three in a row wins. You play it out move by move — no rush, your friend gets a bell when it's their turn.</p>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <select id="friend-ttt" style="flex:1;min-width:130px;padding:9px;border:1px solid var(--border);border-radius:8px">
+        {% for f in friends %}<option value="{{ f.id }}">{{ f.name|e }}</option>{% else %}<option value="">No friends yet</option>{% endfor %}
+      </select>
+      <button type="button" class="btn" onclick="challenge('ttt')">Challenge</button>
+    </div>
+  </div>
+  <div class="card" style="margin:0">
+    <div style="font-size:34px">🪨📄✂️</div>
+    <div style="font-size:19px;font-weight:800;margin-top:4px">Rock-Paper-Scissors</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">Best of three. Your pick stays hidden until your friend throws too — no peeking, no mind games… okay, some mind games.</p>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <select id="friend-rps" style="flex:1;min-width:130px;padding:9px;border:1px solid var(--border);border-radius:8px">
+        {% for f in friends %}<option value="{{ f.id }}">{{ f.name|e }}</option>{% else %}<option value="">No friends yet</option>{% endfor %}
+      </select>
+      <button type="button" class="btn" onclick="challenge('rps')">Challenge</button>
+    </div>
+  </div>
+</div>
+{% if not friends %}
+<p style="color:var(--muted);font-size:14px;margin-top:10px">Challenges are for friends — <a href="/friends">find your people</a> and come back ready to play.</p>
+{% endif %}
+
+<div class="card">
+  <div class="section-title">My matches</div>
+  {% for m in matches %}
+  <div class="row-item" style="align-items:center;gap:12px">
+    <span style="font-size:24px">{{ m.emoji|e }}</span>
+    <div class="grow" style="flex:1;min-width:0">
+      <div class="nm">{{ m.title|e }} vs <a href="/user/{{ m.opponent_id }}">{{ m.opponent_name|e }}</a></div>
+      <div class="sub">{{ m.status_text|e }}</div>
+    </div>
+    <a class="btn btn-sm" href="/games/match/{{ m.id }}">{% if m.active %}Play{% else %}View{% endif %}</a>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:15px;margin-top:10px">No matches yet — challenge a friend above and get one going!</p>
+  {% endfor %}
+</div>
+
+<div class="section-title" style="margin:20px 0 8px">🔴 Games inside a live</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+  <div class="card" style="margin:0">
+    <div style="font-size:30px">🔢</div>
+    <div style="font-weight:800;margin-top:4px">Guess the Number</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">The host starts it, the whole room guesses 1–100, closest guess wins when the host calls it.</p>
+  </div>
+  <div class="card" style="margin:0">
+    <div style="font-size:30px">🎲</div>
+    <div style="font-weight:800;margin-top:4px">Dice Duel</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">Roll as much as you like during a live — your best roll is your score, and the highest best wins.</p>
+  </div>
+  <div class="card" style="margin:0">
+    <div style="font-size:30px">🧠</div>
+    <div style="font-weight:800;margin-top:4px">Trivia</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">Two-choice trivia inside a live, run by the host or an admin. The answer stays secret until the poll closes.</p>
+  </div>
+  <div class="card" style="margin:0">
+    <div style="font-size:30px">📊</div>
+    <div style="font-weight:800;margin-top:4px">Polls</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">Quick either/or questions for the whole room — vote, change your mind, watch the bars move.</p>
+  </div>
+</div>
+<a class="btn" href="/lives" style="margin-top:12px;display:inline-block">🔴 Find a live</a>
+
+<div class="section-title" style="margin:20px 0 8px">More ways to play</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+  <a class="card" href="/contest" style="margin:0;text-decoration:none;color:inherit">
+    <div style="font-size:30px">🏆</div>
+    <div style="font-weight:800;margin-top:4px">Contest</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">The weekly My Views crown — post with the tag, rack up the points.</p>
+  </a>
+  <a class="card" href="/daily" style="margin:0;text-decoration:none;color:inherit">
+    <div style="font-size:30px">🔥</div>
+    <div style="font-weight:800;margin-top:4px">Daily Challenge</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">One prompt a day. Answer it and keep your streak alive.</p>
+  </a>
+  <a class="card" href="/views" style="margin:0;text-decoration:none;color:inherit">
+    <div style="font-size:30px">🎬</div>
+    <div style="font-weight:800;margin-top:4px">My Views</div>
+    <p style="color:var(--muted);font-size:14px;margin-top:4px">The reel feed that learns your taste — every watch teaches it.</p>
+  </a>
+</div>
+
+<script>
+function challenge(kind){
+  var sel = document.getElementById('friend-' + kind);
+  var uid = sel && sel.value;
+  if (!uid){ alert('Add a friend first!'); return; }
+  fetch('/games/challenge', {method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({kind: kind, user_id: parseInt(uid, 10)})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok && d.url) window.location.href = d.url;
+      else alert((d && d.error) || 'Could not send that challenge.');
+    })
+    .catch(function(){ alert('Could not send that challenge.'); });
+}
+</script>
+
+{% endblock %}
