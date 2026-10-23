@@ -539,6 +539,9 @@ def init_db():
         c.execute("ALTER TABLE users ADD COLUMN spot_card_color TEXT")
     if "spot_card_opacity" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN spot_card_opacity INTEGER")
+    # --- Box Transparency: per-viewer box solidity (safe on existing DBs) ---
+    if "box_opacity" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN box_opacity INTEGER DEFAULT 100")
     # --- hide-from-specific-people + post tags (safe on existing DBs) ---
     c.execute("""CREATE TABLE IF NOT EXISTS post_hidden_from (
         post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
@@ -901,6 +904,44 @@ def init_db():
               "ON live_polls(live_id, active)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_livepollvotes_poll "
               "ON live_poll_votes(poll_id)")
+    # Live room games (Games Pack 2): host/admin start a room game,
+    # the whole room plays. 'guess' keeps a server-only secret
+    # (1-100) in live_games.secret — it is NEVER serialized into an
+    # active-game payload, only revealed once the game has ended.
+    # 'dice' rolls server-side per play. Only ONE active game per
+    # live: starting a new one ends the previous; ending the live
+    # ends its active game (see _end_live_row).
+    c.execute("""CREATE TABLE IF NOT EXISTS live_games (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, kind TEXT NOT NULL,
+        secret INTEGER, status TEXT NOT NULL DEFAULT 'active',
+        created_by INTEGER NOT NULL, created_at TEXT NOT NULL,
+        ended_at TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_game_plays (
+        game_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        value INTEGER, best INTEGER, plays INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(game_id, user_id))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_livegames_room "
+              "ON live_games(live_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_livegameplays_game "
+              "ON live_game_plays(game_id)")
+    # Friend challenges (Games Pack 2): asynchronous 1-v-1 matches
+    # from the Games Hub. state is JSON in a TEXT column. ttt:
+    # {"board": [null x9]} with a_id = X moving first (turn_id tracks
+    # whose move it is). rps: {a_pick, b_pick, round, a_wins, b_wins,
+    # last} — picks stay server-side until both are in; rounds run
+    # until someone reaches 2 round-wins.
+    c.execute("""CREATE TABLE IF NOT EXISTS game_matches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL, a_id INTEGER NOT NULL, b_id INTEGER NOT NULL,
+        state TEXT NOT NULL, turn_id INTEGER, winner_id INTEGER,
+        is_draw INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gamematches_a "
+              "ON game_matches(a_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_gamematches_b "
+              "ON game_matches(b_id, status)")
     conn.commit()
     conn.close()
 
@@ -1097,6 +1138,7 @@ def render(request: Request, name, ctx=None):
         v_style, v_classes = viewer_spot_for(u)
         ctx.setdefault("viewer_spot_style", v_style)
         ctx.setdefault("viewer_spot_classes", v_classes)
+        ctx.setdefault("viewer_box_alpha", viewer_box_alpha_for(u))
         ctx.setdefault("viewer_gold", is_gold_inviter(u["id"]))
     else:
         ctx["user"] = None
@@ -1107,6 +1149,7 @@ def render(request: Request, name, ctx=None):
         ctx.setdefault("page_bg", "")
         ctx.setdefault("viewer_spot_style", "")
         ctx.setdefault("viewer_spot_classes", "")
+        ctx.setdefault("viewer_box_alpha", "")
     ctx.setdefault("flash", request.query_params.get("flash", ""))
     return templates.TemplateResponse(request, name, ctx)
 
@@ -1418,6 +1461,14 @@ def friend_id_set(uid):
     for r in rows:
         out.add(r["friend_id"] if r["user_id"] == uid else r["user_id"])
     return out
+
+
+def is_friend(a_id, b_id):
+    """True when a_id and b_id are accepted friends (either direction
+    — friendships are stored once per pair)."""
+    if not a_id or not b_id or a_id == b_id:
+        return False
+    return b_id in friend_id_set(a_id)
 
 
 # ---------------- follows (one-way graph) ----------------
@@ -4057,6 +4108,499 @@ async def contest_page(request: Request):
         "last_tag": contest_tag(monday - timedelta(days=1))})
 
 
+# ---------------- Games Hub + friend challenges (Games Pack 2) ----------------
+# /games is the one home for play on HERE: a weekly featured game,
+# asynchronous friend challenges (Tic-Tac-Toe + Rock-Paper-Scissors
+# in game_matches), pointers to the games that live inside lives,
+# and the standing ways to play (contest / daily / My Views).
+GAMES_CATALOG = [
+    {"key": "ttt", "emoji": "❌⭕", "title": "Tic-Tac-Toe",
+     "blurb": "The classic three-in-a-row. Challenge a friend and "
+              "play it out move by move, right here.",
+     "link": "/games"},
+    {"key": "rps", "emoji": "🪨📄✂️", "title": "Rock-Paper-Scissors",
+     "blurb": "Best of three against a friend — picks stay hidden "
+              "until you both throw.",
+     "link": "/games"},
+    {"key": "guess", "emoji": "🔢", "title": "Guess the Number",
+     "blurb": "Somebody in a live is thinking of a number 1–100. "
+              "Closest guess takes the crown.",
+     "link": "/lives"},
+    {"key": "dice", "emoji": "🎲", "title": "Dice Duel",
+     "blurb": "Roll in a live room — your best roll is your score. "
+              "Highest best wins.",
+     "link": "/lives"},
+    {"key": "trivia", "emoji": "🎲", "title": "Live Trivia",
+     "blurb": "Two-choice trivia questions inside a live, run by "
+              "the host. Fast fingers win.",
+     "link": "/lives"},
+    {"key": "contest", "emoji": "🏆", "title": "My Views Contest",
+     "blurb": "Post a video with the week's tag — views, reactions "
+              "and comments turn into points.",
+     "link": "/contest"},
+    {"key": "daily", "emoji": "🔥", "title": "Daily Challenge",
+     "blurb": "One prompt every day. Post it, keep your streak "
+              "burning.",
+     "link": "/daily"},
+    {"key": "myviews", "emoji": "🎬", "title": "My Views",
+     "blurb": "The endless reel feed that learns what you love — "
+              "every watch is a play.",
+     "link": "/views"},
+]
+GAME_TITLES = {g["key"]: g["title"] for g in GAMES_CATALOG}
+MATCH_KINDS = ("ttt", "rps")
+RPS_BEATS = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
+RPS_EMOJI = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
+TTT_LINES = [(0, 1, 2), (3, 4, 5), (6, 7, 8), (0, 3, 6), (1, 4, 7),
+             (2, 5, 8), (0, 4, 8), (2, 4, 6)]
+
+
+def featured_game(for_date=None):
+    """The Game of the Week: GAMES_CATALOG[iso_week % len] on the
+    Chicago calendar — the contest_tag rotation pattern. The same
+    entry for everyone all week; it flips on Mondays."""
+    d = for_date or _today_chicago()
+    return GAMES_CATALOG[d.isocalendar()[1] % len(GAMES_CATALOG)]
+
+
+def _match_other(match, uid):
+    return match["b_id"] if match["a_id"] == uid else match["a_id"]
+
+
+def _match_state(match):
+    try:
+        s = json.loads(match["state"] or "{}")
+    except Exception:
+        s = {}
+    return s if isinstance(s, dict) else {}
+
+
+def _match_status_text(match, uid):
+    """The My-matches label for uid: 'Your move 🔴', 'Waiting on
+    {name}', or the result once the match is done."""
+    other = get_user(_match_other(match, uid)) or {}
+    oname = other.get("name", "Deleted user")
+    title = GAME_TITLES.get(match["kind"], "Game")
+    if match["status"] == "done":
+        if match["is_draw"]:
+            return f"🤝 Draw in {title}"
+        if match["winner_id"] == uid:
+            return f"🏆 You won {title}!"
+        return f"{oname} won {title}"
+    if match["kind"] == "ttt":
+        return ("Your move 🔴" if match["turn_id"] == uid
+                else f"Waiting on {oname}")
+    state = _match_state(match)
+    mine = state.get("a_pick") if match["a_id"] == uid \
+        else state.get("b_pick")
+    return "Your move 🔴" if not mine else f"Waiting on {oname}"
+
+
+def _match_json(match, viewer_id):
+    """A match for API responses, from the viewer's side. RPS picks
+    are NEVER exposed while a round is open: the viewer sees only
+    their own pick + whether the opponent has picked. Once a round
+    resolves, its picks live in state['last'] (public history)."""
+    state = _match_state(match)
+    other_id = _match_other(match, viewer_id)
+    other = get_user(other_id) or {}
+    out = {"id": match["id"], "kind": match["kind"],
+           "status": match["status"],
+           "opponent": {"id": other_id,
+                        "name": other.get("name", "Deleted user")},
+           "turn_id": match["turn_id"],
+           "winner_id": match["winner_id"],
+           "is_draw": bool(match["is_draw"]),
+           "status_text": _match_status_text(match, viewer_id)}
+    if match["kind"] == "ttt":
+        out["board"] = state.get("board") or [None] * 9
+        out["my_mark"] = "X" if match["a_id"] == viewer_id else "O"
+    else:
+        mine = state.get("a_pick") if match["a_id"] == viewer_id \
+            else state.get("b_pick")
+        theirs = state.get("b_pick") if match["a_id"] == viewer_id \
+            else state.get("a_pick")
+        out["round"] = state.get("round", 1)
+        out["my_wins"] = state.get("a_wins", 0) \
+            if match["a_id"] == viewer_id else state.get("b_wins", 0)
+        out["opp_wins"] = state.get("b_wins", 0) \
+            if match["a_id"] == viewer_id else state.get("a_wins", 0)
+        out["my_pick"] = mine
+        out["opp_picked"] = theirs is not None
+        out["last"] = state.get("last")
+    return out
+
+
+def _get_match(conn, mid):
+    r = conn.execute("SELECT * FROM game_matches WHERE id=?",
+                     (mid,)).fetchone()
+    return dict(r) if r else None
+
+
+def _save_match(conn, match, state=None):
+    if state is not None:
+        match["state"] = json.dumps(state)
+    match["updated_at"] = now_iso()
+    conn.execute(
+        "UPDATE game_matches SET state=?, turn_id=?, winner_id=?, "
+        "is_draw=?, status=?, updated_at=? WHERE id=?",
+        (match["state"], match["turn_id"], match["winner_id"],
+         match["is_draw"], match["status"], match["updated_at"],
+         match["id"]))
+
+
+def _new_match(conn, kind, a_id, b_id):
+    """Insert a fresh match (no commit): a_id challenges b_id; in
+    ttt a_id is X and moves first."""
+    if kind == "ttt":
+        state = {"board": [None] * 9}
+        turn = a_id
+    else:
+        state = {"a_pick": None, "b_pick": None, "round": 1,
+                 "a_wins": 0, "b_wins": 0, "last": None}
+        turn = None
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO game_matches(kind, a_id, b_id, state, turn_id, "
+        "status, created_at, updated_at) VALUES(?,?,?,?,?,'active',"
+        "?,?)", (kind, a_id, b_id, json.dumps(state), turn, stamp,
+                 stamp))
+    return cur.lastrowid
+
+
+@app.get("/games", response_class=HTMLResponse)
+async def games_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    friends = []
+    for fid in sorted(friend_id_set(user["id"])):
+        fu = get_user(fid)
+        if fu:
+            friends.append({"id": fu["id"], "name": fu["name"],
+                            "avatar": avatar_url(fu.get("avatar", ""))})
+    friends.sort(key=lambda f: f["name"].lower())
+    rows = conn.execute(
+        "SELECT * FROM game_matches WHERE a_id=? OR b_id=? "
+        "ORDER BY (status='active') DESC, updated_at DESC LIMIT 50",
+        (user["id"], user["id"])).fetchall()
+    matches = []
+    for r in rows:
+        m = dict(r)
+        other = get_user(_match_other(m, user["id"])) or {}
+        matches.append({
+            "id": m["id"], "kind": m["kind"],
+            "title": GAME_TITLES.get(m["kind"], "Game"),
+            "emoji": {"ttt": "❌⭕", "rps": "🪨📄✂️"}.get(m["kind"], "🎮"),
+            "opponent_id": _match_other(m, user["id"]),
+            "opponent_name": other.get("name", "Deleted user"),
+            "status_text": _match_status_text(m, user["id"]),
+            "active": m["status"] == "active"})
+    conn.close()
+    return render(request, "games.html", {
+        "featured": featured_game(),
+        "friends": friends,
+        "matches": matches})
+
+
+@app.post("/games/challenge")
+async def games_challenge(request: Request):
+    """Challenge a FRIEND to ttt or rps. Non-friends are refused
+    (403), as is challenging yourself. The target gets a bell:
+    '🎮 {name} challenged you to {game}!' linking the new match."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict) or not data:
+        try:
+            form = await request.form()
+            data = {"kind": form.get("kind"),
+                    "user_id": form.get("user_id")}
+        except Exception:
+            data = {}
+    kind = str(data.get("kind") or "").strip()
+    if kind not in MATCH_KINDS:
+        return JSONResponse({"ok": False, "error": "Unknown game."},
+                            status_code=400)
+    try:
+        target_id = int(data.get("user_id") or 0)
+    except (TypeError, ValueError):
+        target_id = 0
+    if target_id == user["id"]:
+        return JSONResponse({"ok": False,
+                             "error": "You can't challenge yourself."},
+                            status_code=400)
+    target = get_user(target_id)
+    if not target:
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if not is_friend(user["id"], target_id):
+        return JSONResponse(
+            {"ok": False,
+             "error": "You can only challenge your friends."},
+            status_code=403)
+    conn = db()
+    mid = _new_match(conn, kind, user["id"], target_id)
+    conn.commit()
+    conn.close()
+    notify(target_id, "game",
+           f"🎮 {user['name']} challenged you to "
+           f"{GAME_TITLES[kind]}!", f"/games/match/{mid}",
+           actor_id=user["id"])
+    return JSONResponse({"ok": True, "match_id": mid,
+                         "url": f"/games/match/{mid}"})
+
+
+@app.get("/games/match/{mid}", response_class=HTMLResponse)
+async def game_match_page(request: Request, mid: int):
+    """One match, participants only — anyone else gets a 404 (the
+    match's existence is not leaked). RPS: the page renders ONLY the
+    viewer's own pick while a round is open; the opponent's pick is
+    never in the page until both picks are in and the round is
+    history (state['last'])."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    match = _get_match(conn, mid)
+    conn.close()
+    if not match or user["id"] not in (match["a_id"], match["b_id"]):
+        return HTMLResponse("<h1>Match not found</h1>",
+                            status_code=404)
+    state = _match_state(match)
+    other = get_user(_match_other(match, user["id"])) or {}
+    ctx = {"match": match,
+           "other_name": other.get("name", "Deleted user"),
+           "other_id": _match_other(match, user["id"]),
+           "title": GAME_TITLES.get(match["kind"], "Game"),
+           "status_text": _match_status_text(match, user["id"]),
+           "me": user["id"]}
+    if match["kind"] == "ttt":
+        ctx["board"] = state.get("board") or [None] * 9
+        ctx["my_mark"] = "X" if match["a_id"] == user["id"] else "O"
+        ctx["my_turn"] = (match["status"] == "active"
+                          and match["turn_id"] == user["id"])
+    else:
+        is_a = match["a_id"] == user["id"]
+        ctx["round"] = state.get("round", 1)
+        ctx["my_pick"] = state.get("a_pick") if is_a \
+            else state.get("b_pick")
+        ctx["opp_picked"] = (state.get("b_pick") if is_a
+                             else state.get("a_pick")) is not None
+        ctx["my_wins"] = state.get("a_wins", 0) if is_a \
+            else state.get("b_wins", 0)
+        ctx["opp_wins"] = state.get("b_wins", 0) if is_a \
+            else state.get("a_wins", 0)
+        last = state.get("last") or {}
+        ctx["last"] = last
+        ctx["last_my_pick"] = last.get("a_pick") if is_a \
+            else last.get("b_pick")
+        ctx["last_opp_pick"] = last.get("b_pick") if is_a \
+            else last.get("a_pick")
+        ctx["rps_emoji"] = RPS_EMOJI
+    return render(request, "game_match.html", ctx)
+
+
+@app.post("/games/match/{mid}/move")
+async def game_match_move(request: Request, mid: int):
+    """One move. ttt {cell 0-8}: my turn + empty cell or 4xx; a win
+    is any of the 8 lines; a full board is a draw. rps {choice}:
+    my pick is stored hidden; when both picks are in the round
+    resolves (rock>scissors>paper>rock), the winner's wins go up,
+    picks clear, and the first player to 2 round-wins takes the
+    match. The opponent is notified on every move / resolution."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    conn = db()
+    match = _get_match(conn, mid)
+    if not match or user["id"] not in (match["a_id"], match["b_id"]):
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if match["status"] != "active":
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "This match is over."},
+                            status_code=409)
+    title = GAME_TITLES.get(match["kind"], "Game")
+    other_id = _match_other(match, user["id"])
+    state = _match_state(match)
+    note = None
+    if match["kind"] == "ttt":
+        if match["turn_id"] != user["id"]:
+            conn.close()
+            return JSONResponse({"ok": False,
+                                 "error": "It's not your turn."},
+                                status_code=403)
+        try:
+            cell = int(data.get("cell"))
+        except (TypeError, ValueError):
+            conn.close()
+            return JSONResponse({"ok": False, "error": "Bad cell."},
+                                status_code=400)
+        board = state.get("board") or [None] * 9
+        if cell < 0 or cell > 8 or board[cell] is not None:
+            conn.close()
+            return JSONResponse(
+                {"ok": False, "error": "That cell is taken."},
+                status_code=400)
+        mark = "X" if match["a_id"] == user["id"] else "O"
+        board[cell] = mark
+        state["board"] = board
+        won = any(all(board[i] == mark for i in line)
+                  for line in TTT_LINES)
+        if won:
+            match["status"] = "done"
+            match["winner_id"] = user["id"]
+            match["turn_id"] = None
+            note = f"🏆 {user['name']} won {title} against you!"
+        elif all(c is not None for c in board):
+            match["status"] = "done"
+            match["is_draw"] = 1
+            match["turn_id"] = None
+            note = f"🤝 Your {title} match with {user['name']} " \
+                   f"is a draw."
+        else:
+            match["turn_id"] = other_id
+            note = f"🎮 Your move in {title} vs {user['name']}"
+    else:
+        choice = str(data.get("choice") or "").strip()
+        if choice not in RPS_BEATS:
+            conn.close()
+            return JSONResponse({"ok": False,
+                                 "error": "Pick rock, paper or scissors."},
+                                status_code=400)
+        mine_key = "a_pick" if match["a_id"] == user["id"] else "b_pick"
+        theirs_key = "b_pick" if mine_key == "a_pick" else "a_pick"
+        if state.get(mine_key):
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "You already picked this round."},
+                status_code=400)
+        state[mine_key] = choice
+        if state.get(theirs_key):
+            a_pick, b_pick = state["a_pick"], state["b_pick"]
+            if a_pick == b_pick:
+                round_winner = None
+            elif RPS_BEATS[a_pick] == b_pick:
+                round_winner = match["a_id"]
+            else:
+                round_winner = match["b_id"]
+            if round_winner == match["a_id"]:
+                state["a_wins"] = state.get("a_wins", 0) + 1
+            elif round_winner == match["b_id"]:
+                state["b_wins"] = state.get("b_wins", 0) + 1
+            state["last"] = {"a_pick": a_pick, "b_pick": b_pick,
+                             "winner_id": round_winner,
+                             "round": state.get("round", 1)}
+            state["a_pick"] = None
+            state["b_pick"] = None
+            state["round"] = state.get("round", 1) + 1
+            if state["a_wins"] >= 2 or state["b_wins"] >= 2:
+                match["status"] = "done"
+                match["winner_id"] = (match["a_id"]
+                                       if state["a_wins"] >= 2
+                                       else match["b_id"])
+                note = (f"🏆 {user['name']} won {title} against you!"
+                        if match["winner_id"] != other_id else
+                        f"🏆 You won {title} vs {user['name']}!")
+            else:
+                note = f"🎮 Your move in {title} vs {user['name']}"
+        else:
+            note = f"🎮 Your move in {title} vs {user['name']}"
+    _save_match(conn, match, state)
+    conn.commit()
+    out = _match_json(match, user["id"])
+    conn.close()
+    record_activity(user["id"])
+    if note:
+        notify(other_id, "game", note, f"/games/match/{mid}",
+               actor_id=user["id"])
+    return JSONResponse({"ok": True, "match": out})
+
+
+@app.post("/games/match/{mid}/rematch")
+async def game_match_rematch(request: Request, mid: int):
+    """Start a fresh match of the same kind between the same two
+    players (the finished match only). ttt swaps who starts: the
+    previous b_id is the new a_id (X, first move). rps keeps a/b.
+    The other player is notified; we redirect to the new match."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    match = _get_match(conn, mid)
+    if not match or user["id"] not in (match["a_id"], match["b_id"]):
+        conn.close()
+        return HTMLResponse("<h1>Match not found</h1>",
+                            status_code=404)
+    if match["status"] != "done":
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "Finish this match first."},
+                            status_code=409)
+    if match["kind"] == "ttt":
+        a_id, b_id = match["b_id"], match["a_id"]
+    else:
+        a_id, b_id = match["a_id"], match["b_id"]
+    new_id = _new_match(conn, match["kind"], a_id, b_id)
+    conn.commit()
+    conn.close()
+    other_id = _match_other(match, user["id"])
+    notify(other_id, "game",
+           f"🎮 {user['name']} wants a rematch in "
+           f"{GAME_TITLES.get(match['kind'], 'Game')}!",
+           f"/games/match/{new_id}", actor_id=user["id"])
+    return redir(f"/games/match/{new_id}")
+
+
+@app.post("/games/match/{mid}/forfeit")
+async def game_match_forfeit(request: Request, mid: int):
+    """Give up an active match: it ends, the other player wins."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    conn = db()
+    match = _get_match(conn, mid)
+    if not match or user["id"] not in (match["a_id"], match["b_id"]):
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if match["status"] != "active":
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "This match is over."},
+                            status_code=409)
+    other_id = _match_other(match, user["id"])
+    match["status"] = "done"
+    match["winner_id"] = other_id
+    match["turn_id"] = None
+    _save_match(conn, match)
+    conn.commit()
+    conn.close()
+    notify(other_id, "game",
+           f"🏆 {user['name']} forfeited your "
+           f"{GAME_TITLES.get(match['kind'], 'Game')} match — you win!",
+           f"/games/match/{mid}", actor_id=user["id"])
+    return JSONResponse({"ok": True})
+
+
 # ---------------- stories (friends-only, custom lifetimes) ----------------
 def story_expires_at(minutes=STORY_TTL_HOURS * 60):
     return (datetime.now(timezone.utc)
@@ -5049,6 +5593,7 @@ async def audience_save(request: Request, pid: int):
 SPOT_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 SPOT_NAME_MAX = 60
 SPOT_OPACITY_MIN, SPOT_OPACITY_MAX = 30, 100
+BOX_OPACITY_MIN, BOX_OPACITY_MAX = 30, 100
 # Theme defaults a spot falls back to (matches the glass look in base.html).
 SPOT_DEFAULT_TEXT = "#1c1e21"
 SPOT_DEFAULT_CARD_RGB = (232, 232, 238)
@@ -5136,6 +5681,29 @@ def viewer_spot_for(u):
     classes = (classes.replace("spot-has-text", "viewer-spot-text")
                       .replace("spot-has-card", "viewer-spot-card"))
     return style, classes
+
+
+def viewer_box_alpha_for(u):
+    """The viewer's own Box Transparency as a CSS alpha string.
+
+    users.box_opacity is a solidity percent (30-100). Returns "" when
+    the viewer is at (or defaults to) 100 — fully solid, the default
+    look with no glass overrides at all — otherwise the alpha as a
+    compact decimal string (55 -> "0.55", 30 -> "0.3").
+    """
+    if not u:
+        return ""
+    op = _uget(u, "box_opacity")
+    if op is None:
+        op = 100
+    try:
+        op = int(op)
+    except (TypeError, ValueError):
+        op = 100
+    op = max(BOX_OPACITY_MIN, min(BOX_OPACITY_MAX, op))
+    if op >= 100:
+        return ""
+    return "%g" % (op / 100.0)
 
 
 def _album_photos(viewer, owner_id, owner_on=False, limit=None):
@@ -5372,7 +5940,8 @@ async def profile_edit_page(request: Request):
                     "spot_name": user.get("spot_name") or "",
                     "spot_text_color": user.get("spot_text_color") or "",
                     "spot_card_color": user.get("spot_card_color") or "",
-                    "spot_card_opacity": user.get("spot_card_opacity")}})
+                    "spot_card_opacity": user.get("spot_card_opacity"),
+                    "box_opacity": user.get("box_opacity")}})
 
 
 @app.post("/settings/status")
@@ -5466,6 +6035,35 @@ async def settings_spot(request: Request):
         flag_item("spot_name", user["id"], user["id"], user["name"], name)
     return redir("/settings/profile",
                  "Your spot was saved — that's how your profile looks now.")
+
+
+@app.post("/settings/boxes")
+async def settings_boxes(request: Request):
+    """Save the logged-in user's own Box Transparency (box solidity).
+
+    Only ever touches the caller's own row, and it is purely a
+    per-viewer display preference: it changes how see-through the
+    boxes are on THEIR screen, everywhere on HERE, and changes
+    nothing for anybody else. A non-number changes nothing.
+    """
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    raw_op = (form.get("box_opacity") or "").strip()
+    try:
+        op = int(raw_op)
+    except ValueError:
+        return redir("/settings/profile",
+                     "Box transparency needs a number from 30 to 100.")
+    op = max(BOX_OPACITY_MIN, min(BOX_OPACITY_MAX, op))
+    conn = db()
+    conn.execute("UPDATE users SET box_opacity=? WHERE id=?",
+                 (op, user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile",
+                 f"Boxes are now {op}% solid on your screen.")
 
 
 def _delete_upload(rel_path):
@@ -6889,6 +7487,10 @@ def _end_live_row(conn, live):
     conn.execute(
         "UPDATE live_polls SET active=0 WHERE live_id=? AND active=1",
         (live["id"],))
+    # Games Pack 2: an active room game ends with the room too.
+    conn.execute(
+        "UPDATE live_games SET status='ended', ended_at=? "
+        "WHERE live_id=? AND status='active'", (stamp, live["id"]))
 
 
 def _live_get(conn, lid):
@@ -7667,6 +8269,25 @@ async def live_state(request: Request, lid: int):
             _live_poll_json(conn, dict(_closed_poll), user["id"],
                             reveal=True)
             if _closed_poll else None)
+    # Games Pack 2: the room's game standing. active_game NEVER
+    # carries the guess secret (no 'secret' key at all while a game
+    # runs). last_game — winners + the revealed secret — rides along
+    # only while no game is active, mirroring last_closed_poll.
+    _active_game = conn.execute(
+        "SELECT * FROM live_games WHERE live_id=? AND status='active' "
+        "ORDER BY id DESC LIMIT 1", (lid,)).fetchone()
+    out["active_game"] = (
+        _live_game_json(conn, dict(_active_game), user["id"])
+        if _active_game else None)
+    if _active_game:
+        out["last_game"] = None
+    else:
+        _ended_game = conn.execute(
+            "SELECT * FROM live_games WHERE live_id=? AND "
+            "status='ended' ORDER BY id DESC LIMIT 1", (lid,)).fetchone()
+        out["last_game"] = (
+            _live_game_result_json(conn, dict(_ended_game))
+            if _ended_game else None)
     conn.close()
     return JSONResponse(out)
 
@@ -7887,6 +8508,242 @@ async def live_trivia(request: Request, lid: int):
     q = secrets.choice(TRIVIA_BANK)
     return JSONResponse({"ok": True, "question": q["q"], "a": q["a"],
                          "b": q["b"], "correct": q["correct"]})
+
+
+# ---------------- live room games (Games Pack 2) ----------------
+# Host/admin-run games the whole room plays. 'guess': the server
+# picks a secret number 1-100 at start; players set/replace their
+# guess; the closest guess(es) win. 'dice': every play rolls a
+# server-side die 1-6; a player's best roll is their score and the
+# highest best wins. The guess secret lives ONLY in live_games.secret
+# server-side: _live_game_json (the active payload) has no 'secret'
+# key at all; the secret is revealed only in _live_game_result_json
+# once the game has ended. Only ONE active game per live — starting
+# a new one ends the previous, and ending the live ends its game.
+
+
+async def _live_game_body(request):
+    """JSON body, falling back to form fields (the poll pattern)."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict) or not data:
+        try:
+            form = await request.form()
+            data = {"kind": form.get("kind"), "guess": form.get("guess")}
+        except Exception:
+            data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def _live_game_players(conn, game):
+    """The game's player rows for payloads: [{name, display}].
+    guess display = the player's guess (a number, public once made);
+    dice display = '🎲 best {best} ({plays} rolls)'. Dice standings
+    sort by best (then most rolls); guesses sort low to high."""
+    rows = conn.execute(
+        "SELECT p.*, u.name FROM live_game_plays p LEFT JOIN users u "
+        "ON u.id=p.user_id WHERE p.game_id=?", (game["id"],)).fetchall()
+    out = []
+    for r in rows:
+        if game["kind"] == "dice":
+            display = (f"🎲 best {r['best'] or 0} "
+                       f"({r['plays']} roll{'s' if r['plays'] != 1 else ''})")
+            key = (-(r["best"] or 0), -(r["plays"] or 0))
+        else:
+            display = r["value"]
+            key = (r["value"] if r["value"] is not None else 101,)
+        out.append({"name": r["name"] or "Deleted user",
+                    "display": display, "_key": key})
+    out.sort(key=lambda p: p["_key"])
+    for p in out:
+        del p["_key"]
+    return out
+
+
+def _live_game_json(conn, game, viewer_id):
+    """The ACTIVE game for the state payload / play responses: who
+    is playing and what they show, plus the viewer's own standing.
+    NEVER includes the secret — there is no 'secret' key here."""
+    mine = conn.execute(
+        "SELECT * FROM live_game_plays WHERE game_id=? AND user_id=?",
+        (game["id"], viewer_id)).fetchone()
+    my_play = None
+    if mine:
+        my_play = (mine["best"] if game["kind"] == "dice"
+                   else mine["value"])
+    return {"id": game["id"], "kind": game["kind"],
+            "players": _live_game_players(conn, game),
+            "my_play": my_play}
+
+
+def _live_game_winners(conn, game):
+    """(winner names, winning value) for an ENDED game. guess: the
+    smallest |guess - secret| wins, all ties share the win. dice:
+    the highest best roll wins, ties share. No plays -> no winners."""
+    rows = conn.execute(
+        "SELECT p.*, u.name FROM live_game_plays p LEFT JOIN users u "
+        "ON u.id=p.user_id WHERE p.game_id=?", (game["id"],)).fetchall()
+    if not rows:
+        return [], None
+    if game["kind"] == "guess":
+        secret = game["secret"]
+        best_dist = min(abs(r["value"] - secret) for r in rows)
+        return ([(r["name"] or "Deleted user") for r in rows
+                 if abs(r["value"] - secret) == best_dist], best_dist)
+    top = max(r["best"] or 0 for r in rows)
+    return ([(r["name"] or "Deleted user") for r in rows
+             if (r["best"] or 0) == top], top)
+
+
+def _live_game_result_json(conn, game):
+    """An ENDED game for the payload: winners + a summary; the guess
+    secret is revealed here (and only here / the end response)."""
+    winners, _val = _live_game_winners(conn, game)
+    if game["kind"] == "guess":
+        summary = f"The number was {game['secret']}."
+    else:
+        top = conn.execute(
+            "SELECT MAX(best) m FROM live_game_plays WHERE game_id=?",
+            (game["id"],)).fetchone()["m"]
+        summary = (f"The best roll was {top}." if top is not None
+                   else "Nobody rolled.")
+    out = {"id": game["id"], "kind": game["kind"],
+           "summary": summary, "winners": winners}
+    if game["kind"] == "guess":
+        out["secret"] = game["secret"]
+    return out
+
+
+def _live_active_game(conn, lid):
+    r = conn.execute(
+        "SELECT * FROM live_games WHERE live_id=? AND status='active' "
+        "ORDER BY id DESC LIMIT 1", (lid,)).fetchone()
+    return dict(r) if r else None
+
+
+@app.post("/live/{lid}/game/start")
+async def live_game_start(request: Request, lid: int):
+    """Start a room game (host/admin only — the poll mod gate).
+    kind 'guess' deals a fresh server-side secret 1-100; 'dice'
+    needs none. Starting auto-ends the room's active game."""
+    user, live, err = _live_poll_mod_gate(request, lid)
+    if err:
+        return err
+    data = await _live_game_body(request)
+    kind = str(data.get("kind") or "").strip()
+    if kind not in ("guess", "dice"):
+        return JSONResponse({"ok": False, "error": "Unknown game."},
+                            status_code=400)
+    conn = db()
+    stamp = now_iso()
+    conn.execute(
+        "UPDATE live_games SET status='ended', ended_at=? "
+        "WHERE live_id=? AND status='active'", (stamp, lid))
+    secret = secrets.randbelow(100) + 1 if kind == "guess" else None
+    cur = conn.execute(
+        "INSERT INTO live_games(live_id, kind, secret, status, "
+        "created_by, created_at) VALUES(?,?,?,'active',?,?)",
+        (lid, kind, secret, user["id"], stamp))
+    game_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM live_games WHERE id=?",
+                       (game_id,)).fetchone()
+    out = _live_game_json(conn, dict(row), user["id"])
+    conn.close()
+    return JSONResponse({"ok": True, "game": out})
+
+
+@app.post("/live/{lid}/game/play")
+async def live_game_play(request: Request, lid: int):
+    """Play in the room's active game. The player must be IN the
+    room — the same gate as poll voting (_live_access). guess:
+    {guess} integer 1-100 sets/replaces my guess (else 400). dice:
+    the body is ignored; the server rolls 1-6 and updates my row
+    (value=last roll, best=max, plays+1). No active game -> 409."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    conn = db()
+    game = _live_active_game(conn, lid)
+    if not game:
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "No game is running."},
+                            status_code=409)
+    roll = None
+    if game["kind"] == "guess":
+        data = await _live_game_body(request)
+        raw = data.get("guess")
+        if isinstance(raw, bool) or raw is None:
+            conn.close()
+            return JSONResponse(
+                {"ok": False, "error": "Guess a number 1-100."},
+                status_code=400)
+        try:
+            guess = int(raw)
+        except (TypeError, ValueError):
+            conn.close()
+            return JSONResponse(
+                {"ok": False, "error": "Guess a number 1-100."},
+                status_code=400)
+        if isinstance(raw, float) and not raw.is_integer():
+            conn.close()
+            return JSONResponse(
+                {"ok": False, "error": "Guess a number 1-100."},
+                status_code=400)
+        if guess < 1 or guess > 100:
+            conn.close()
+            return JSONResponse(
+                {"ok": False, "error": "Guess a number 1-100."},
+                status_code=400)
+        conn.execute(
+            "INSERT INTO live_game_plays(game_id, user_id, value) "
+            "VALUES(?,?,?) ON CONFLICT(game_id, user_id) DO UPDATE "
+            "SET value=excluded.value", (game["id"], user["id"], guess))
+    else:
+        roll = secrets.randbelow(6) + 1
+        conn.execute(
+            "INSERT INTO live_game_plays(game_id, user_id, value, "
+            "best, plays) VALUES(?,?,?, ?,1) ON CONFLICT(game_id, "
+            "user_id) DO UPDATE SET value=excluded.value, "
+            "best=MAX(COALESCE(live_game_plays.best, 0), "
+            "excluded.best), plays=live_game_plays.plays+1",
+            (game["id"], user["id"], roll, roll))
+    conn.commit()
+    out = _live_game_json(conn, game, user["id"])
+    conn.close()
+    resp = {"ok": True, "game": out}
+    if roll is not None:
+        resp["roll"] = roll
+    return JSONResponse(resp)
+
+
+@app.post("/live/{lid}/game/end")
+async def live_game_end(request: Request, lid: int):
+    """End the room's active game (host/admin only) and settle it:
+    guess -> closest guess(es) win; dice -> highest best wins, ties
+    share. The response is the result payload (secret revealed)."""
+    user, live, err = _live_poll_mod_gate(request, lid)
+    if err:
+        return err
+    conn = db()
+    game = _live_active_game(conn, lid)
+    if not game:
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "No game is running."},
+                            status_code=404)
+    conn.execute(
+        "UPDATE live_games SET status='ended', ended_at=? WHERE id=?",
+        (now_iso(), game["id"]))
+    conn.commit()
+    row = conn.execute("SELECT * FROM live_games WHERE id=?",
+                       (game["id"],)).fetchone()
+    out = _live_game_result_json(conn, dict(row))
+    conn.close()
+    return JSONResponse({"ok": True, "game": out, **out})
 
 
 @app.post("/live/{lid}/comment")
