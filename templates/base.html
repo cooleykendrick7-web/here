@@ -385,6 +385,11 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 /* ===== full-screen story viewer (Facebook-style) ===== */
 #story-viewer{position:fixed;inset:0;height:100dvh;background:#000;z-index:2500;
   display:flex;flex-direction:column;color:#fff;overflow:hidden}
+/* The stage CSS below sets display:block on img/video, which beats the
+   UA stylesheet's [hidden]{display:none} — so hidden media used to keep
+   rendering side by side (the split-screen bug). This guarantees every
+   hidden element inside the viewer actually disappears. */
+#story-viewer [hidden]{display:none!important}
 .sv-top{padding:10px 12px 4px;background:linear-gradient(rgba(0,0,0,.55),transparent)}
 .sv-bars{display:flex;gap:4px;margin-bottom:8px}
 .sv-seg{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.35);overflow:hidden;cursor:pointer}

@@ -33,6 +33,7 @@
       {% endif %}
       {% if not profile.is_private_locked %}
       <div class="post-meta" style="margin-top:4px">{{ profile.friend_count }} friends · joined {{ profile.created_at|e }}</div>
+      <div class="post-meta" style="margin-top:2px"><a href="/user/{{ profile.id }}/followers">{{ profile.follower_count }} Followers</a> · <a href="/user/{{ profile.id }}/following">{{ profile.following_count }} Following</a></div>
       {% endif %}
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
       {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
@@ -73,6 +74,15 @@
         </form>
         {% endif %}
         {% if not profile.is_self %}
+        {% if profile.viewer_follows %}
+        <form class="inline-form" action="/unfollow/{{ profile.id }}" method="post">
+          <button type="submit" class="btn-ghost btn-sm" title="Unfollow {{ profile.name|e }}">✓ Following</button>
+        </form>
+        {% else %}
+        <form class="inline-form" action="/follow/{{ profile.id }}" method="post">
+          <button type="submit" class="btn-ghost btn-sm" title="Follow {{ profile.name|e }} — see their lives and posts in your lists; following never unlocks a private profile">➕ Follow</button>
+        </form>
+        {% endif %}
         <a class="btn-ghost btn-sm" href="/messages/{{ profile.id }}">💬 Message</a>
         {% if profile.muted_by_viewer %}
         <form class="inline-form" action="/unmute/{{ profile.id }}" method="post">

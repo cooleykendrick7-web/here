@@ -169,6 +169,7 @@
   <!-- watcher -->
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔇 Sound off</button>
   <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
+  <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
   <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
 </div>
 <div id="live-join-msg" style="font-size:13px;color:var(--muted);margin:-6px 0 10px" hidden></div>
@@ -234,6 +235,7 @@ var LIVE_BOOT = {{ boot|safe }};
   var panel = [];                 /* [{user_id,name,avatar,role,admin,muted}] */
   var panelById = {};             /* user_id -> panel row */
   var watchersList = [];          /* host/admin only: room people rows */
+  var inviteCandidates = [];      /* host/admin only: friends ∪ following ∪ watchers */
   var audienceIds = [];           /* viewer ids I publish to (viewer_list) */
   var myPanel = null;             /* {am_member,muted,is_admin,is_host} */
   var amMember = (B.role === 'host' || B.role === 'guest');
@@ -1062,9 +1064,69 @@ var LIVE_BOOT = {{ boot|safe }};
       box.appendChild(row);
     });
   }
+  /* ---------------- "Invite others" sheet ----------------
+     Ken: the host/admin can invite people they're friends with or
+     following — not only people already in the room. Candidates
+     come from the state poll (invite_candidates, computed for the
+     requesting moderator: friends ∪ following ∪ watchers), split
+     here into "Watching now" and "Friends & following". Inviting
+     sends the bell + push server-side; the invitee accepts from
+     their invite banner on the live page. */
+  function openInviteSheet(){
+    sheetTitle.textContent = '➕ Invite others';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    function section(title, list, emptyText){
+      var h = document.createElement('div');
+      h.style.cssText = 'font-weight:800;font-size:13px;color:var(--muted);padding:10px 4px 2px';
+      h.textContent = title;
+      sheetActions.appendChild(h);
+      if (!list.length){
+        var e = document.createElement('div');
+        e.style.cssText = 'padding:6px 4px;color:var(--muted);font-size:13.5px';
+        e.textContent = emptyText;
+        sheetActions.appendChild(e);
+        return;
+      }
+      list.forEach(function(c){
+        var row = document.createElement('div');
+        row.className = 'live-req';
+        row.appendChild(avatarNode(c, 'av-32'));
+        var nm = document.createElement('span');
+        nm.style.fontWeight = '700';
+        nm.textContent = c.name;
+        row.appendChild(nm);
+        var sp = document.createElement('span'); sp.style.flex = '1';
+        row.appendChild(sp);
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'btn btn-sm';
+        b.textContent = c.invited ? 'Invited ✓' : 'Invite';
+        b.disabled = !!c.invited;
+        b.addEventListener('click', function(){
+          b.disabled = true;
+          act('/invite', {user_id: c.id}, 'Invite sent to ' + c.name + '.')
+            .then(function(d){
+              if (d && d.ok){ c.invited = true; b.textContent = 'Invited ✓'; }
+              else { b.disabled = false; b.textContent = 'Invite'; }
+            });
+        });
+        row.appendChild(b);
+        sheetActions.appendChild(row);
+      });
+    }
+    section('Watching now',
+            inviteCandidates.filter(function(c){ return c.watching; }),
+            'Nobody else is watching yet.');
+    section('Friends & following',
+            inviteCandidates.filter(function(c){ return !c.watching; }),
+            'No friends or people you follow to invite.');
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('ctl-invite-others').addEventListener('click', openInviteSheet);
+
   function renderInviteBanner(){
     var banner = $('live-invite-banner');
-    if (amMember || !pendingInvites.length){ banner.hidden = true; return; }
     var inv = pendingInvites[0];
     $('live-invite-text').textContent =
       inv.from_name + ' invited you to join the panel';
@@ -1157,6 +1219,7 @@ var LIVE_BOOT = {{ boot|safe }};
     $('ctl-sound').hidden = member;
     $('ctl-leave').hidden = member;
     $('ctl-join').hidden = member;
+    $('ctl-invite-others').hidden = !canManage();
     $('live-member-banner').hidden = !member;
   }
   function updateJoinButton(d){
@@ -1309,6 +1372,7 @@ var LIVE_BOOT = {{ boot|safe }};
         isHost = !!myPanel.is_host;
         pendingInvites = d.pending_invites_for_me || [];
         watchersList = d.watchers || [];
+        inviteCandidates = d.invite_candidates || [];
         if (d.viewer_list)
           audienceIds = d.viewer_list.map(function(v){ return v.id; });
         syncMembership();
@@ -1328,6 +1392,21 @@ var LIVE_BOOT = {{ boot|safe }};
   function teardownEnded(){
     if (ended) return;
     ended = true;
+    /* Ken's rule: when a live ends, the HOST goes straight back to
+       their own profile — whether they ended it themselves or it
+       ended under them (e.g. the owner's kill switch). One-shot:
+       the `ended` flag above is already set, and navigating away
+       leaves this page entirely, so this cannot loop. Watchers and
+       guests keep the ended face below. */
+    if (isHost){
+      try {
+        timers.forEach(clearInterval);
+        if (myStream)
+          myStream.getTracks().forEach(function(tr){ tr.stop(); });
+      } catch (e) {}
+      window.location.href = '/user/' + B.host.id;
+      return;
+    }
     timers.forEach(clearInterval);
     teardownPeers();
     if (myStream){

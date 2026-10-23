@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{% if which == 'followers' %}Followers{% else %}Following{% endif %} — {{ profile.name|e }} · HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">{% if which == 'followers' %}👥 Followers of{% else %}👀 {{ profile.name|e }} is following{% endif %} <a href="/user/{{ profile.id }}">{{ profile.name|e }}</a> {% if people %}({{ people|length }}){% endif %}</div>
+  {% for p in people %}
+  <div class="row-item">
+    {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ p.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ p.id }}">{{ p.name|e }}</a> {% set pres = p.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
+    </div>
+    <div class="row-actions">
+      <a class="btn-ghost btn-sm" href="/user/{{ p.id }}">View</a>
+    </div>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px">{% if which == 'followers' %}No followers yet.{% else %}Not following anyone yet.{% endif %}</p>
+  {% endfor %}
+</div>
+
+{% endblock %}

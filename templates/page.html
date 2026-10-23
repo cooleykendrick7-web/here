@@ -44,9 +44,7 @@
       <button type="button" class="kind-tab active" data-kind="text">📝 Status</button>
       <button type="button" class="kind-tab" data-kind="photo">📷 Photo</button>
       <button type="button" class="kind-tab" data-kind="feeling">😊 Feeling</button>
-      <button type="button" class="kind-tab" data-kind="clothes">👕 Clothes</button>
       <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
-      <button type="button" class="kind-tab" data-kind="audio">🎵 Music</button>
     </div>
     <div class="composer-body-wrap">
       <textarea name="body" id="composer-body" placeholder="Post to {{ page.name|e }}…"></textarea>
@@ -119,10 +117,8 @@
     kindInput.value = kind;
     tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.kind === kind); });
     fFeeling.style.display = (kind === 'feeling') ? 'block' : 'none';
-    fMedia.style.display = (kind === 'photo' || kind === 'clothes' || kind === 'audio' || kind === 'video') ? 'block' : 'none';
-    if (kind === 'audio') { mediaLbl.textContent = 'music'; mediaHint.textContent = '(mp3, wav, ogg, m4a · max 25MB)'; mediaInput.accept = 'audio/*'; }
-    else if (kind === 'video') { mediaLbl.textContent = 'video'; mediaHint.textContent = '(mp4, mov, webm · max 200MB)'; mediaInput.accept = 'video/*,.mp4,.mov,.webm'; }
-    else if (kind === 'clothes') { mediaLbl.textContent = 'outfit photo'; mediaHint.textContent = '(jpg, png, gif, webp · max 25MB)'; mediaInput.accept = 'image/*'; }
+    fMedia.style.display = (kind === 'photo' || kind === 'video') ? 'block' : 'none';
+    if (kind === 'video') { mediaLbl.textContent = 'video'; mediaHint.textContent = '(mp4, mov, webm · max 200MB)'; mediaInput.accept = 'video/*,.mp4,.mov,.webm'; }
     else { mediaLbl.textContent = 'photo'; mediaHint.textContent = '(jpg, png, gif, webp · max 25MB)'; mediaInput.accept = 'image/*'; }
   }
   tabs.forEach(function(t){ t.addEventListener('click', function(){ setKind(t.dataset.kind); }); });

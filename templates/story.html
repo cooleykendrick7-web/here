@@ -274,10 +274,19 @@
     whenEl.textContent = timeLeft(s) + (s.mine ? ' · Your story' : '');
     buildBars(item);
 
+    // Hide AND clear BOTH media elements first, then set up only the
+    // active one. A stale src (or a buffered video frame) on the
+    // inactive element is what produced the half-and-half split screen
+    // when stories transitioned between photo and video.
+    img.hidden = true;
+    img.removeAttribute('src');
+    try { vid.pause(); } catch (e) {}
+    vid.hidden = true;
+    vid.removeAttribute('src');
+    try { vid.load(); } catch (e) {}  // drop any buffered frame
+
     if (s.is_video) {
-      img.hidden = true;
       vid.hidden = false;
-      vid.removeAttribute('src');
       vid.src = s.media;
       vid.muted = !!(s.music && s.music.mute_orig);
       vid.volume = s.music ? (s.music.mute_orig ? 0 : 0.25) : 1;
@@ -297,8 +306,6 @@
         novol.hidden = false;
       });
     } else {
-      vid.hidden = true;
-      try { vid.pause(); } catch (e) {}
       img.hidden = false;
       img.src = s.media;
       durationMs = s.music
