@@ -67,6 +67,25 @@
     {% endif %}
   {% endif %}
 
+  {% if post.poll %}
+  <div class="post-poll" data-poll-post="{{ post.id }}">
+    {% if post.poll.voted or post.is_mine %}
+    {% for o in post.poll.options %}
+    <div class="poll-row{% if o.mine %} mine{% endif %}">
+      <div class="poll-fill" style="width:{{ o.pct }}%"></div>
+      <span class="poll-opt-text">{{ o.text|e }}{% if o.mine %} ✓ your pick{% endif %}</span>
+      <span class="poll-pct">{{ o.pct }}% · {{ o.votes }} vote{{ 's' if o.votes != 1 }}</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    {% for o in post.poll.options %}
+    <button type="button" class="poll-opt-btn" data-post="{{ post.id }}" data-option="{{ o.id }}">{{ o.text|e }}</button>
+    {% endfor %}
+    {% endif %}
+    <div class="poll-total">📊 {{ post.poll.total }} vote{{ 's' if post.poll.total != 1 }} total</div>
+  </div>
+  {% endif %}
+
   <div class="post-stats">
     <span class="react-summary">{% if post.likes %}{% for r in post.reactions_top %}{{ r.emoji }}{% endfor %} <span class="stat-likes">{{ post.likes }}</span>{% endif %}</span>
     <a href="/post/{{ post.id }}">{{ post.comments_count }} Comments</a>
@@ -89,6 +108,7 @@
       </div>
     </div>
     <a class="action-link" href="/post/{{ post.id }}">💬 Comment</a>
+    <button type="button" class="action-link" data-copy-path="/p/{{ post.id }}" style="background:none;border:none;cursor:pointer;font-size:14px">🔗 Copy share link</button>
     {% if post.can_edit_audience %}
     <div class="aud-wrap">
       <button type="button" class="action-link aud-toggle" data-pid="{{ post.id }}" title="Hide this post from…" style="background:none;border:none;cursor:pointer">👁</button>
