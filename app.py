@@ -167,6 +167,14 @@ def init_db():
         user_id INTEGER NOT NULL, friend_id INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
         UNIQUE(user_id, friend_id))""")
+    # follows: the one-way graph (independent of friendship). A follow
+    # is an attention subscription only — it never unlocks a private
+    # profile (can_view_post doesn't consult it); it exists so people
+    # can keep up with, and be found by, people they aren't friends
+    # with, and it feeds live-invite eligibility ("friends & following").
+    c.execute("""CREATE TABLE IF NOT EXISTS follows (
+        follower_id INTEGER NOT NULL, followee_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, PRIMARY KEY(follower_id, followee_id))""")
     c.execute("""CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sender_id INTEGER NOT NULL, receiver_id INTEGER NOT NULL,
@@ -1109,6 +1117,57 @@ def friend_id_set(uid):
     return out
 
 
+# ---------------- follows (one-way graph) ----------------
+def following_ids(uid):
+    """Everyone uid follows (the followees). A follow is created ONLY
+    by an explicit POST /follow — nothing derives follows implicitly
+    (not friendship, not story views, not boot-time migration)."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT followee_id FROM follows WHERE follower_id=?",
+        (uid,)).fetchall()
+    conn.close()
+    return {r["followee_id"] for r in rows}
+
+
+def follower_ids(uid):
+    conn = db()
+    rows = conn.execute(
+        "SELECT follower_id FROM follows WHERE followee_id=?",
+        (uid,)).fetchall()
+    conn.close()
+    return {r["follower_id"] for r in rows}
+
+
+def follower_count(uid):
+    conn = db()
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM follows WHERE followee_id=?",
+        (uid,)).fetchone()["c"]
+    conn.close()
+    return n
+
+
+def following_count(uid):
+    conn = db()
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM follows WHERE follower_id=?",
+        (uid,)).fetchone()["c"]
+    conn.close()
+    return n
+
+
+def is_following(follower_id, followee_id):
+    if not follower_id or not followee_id or follower_id == followee_id:
+        return False
+    conn = db()
+    r = conn.execute(
+        "SELECT 1 FROM follows WHERE follower_id=? AND followee_id=?",
+        (follower_id, followee_id)).fetchone()
+    conn.close()
+    return bool(r)
+
+
 def req_status(viewer_id, profile_id):
     """'none'|'pending_out'|'pending_in'|'friends' from viewer's perspective."""
     if viewer_id == profile_id:
@@ -1983,6 +2042,13 @@ async def home(request: Request):
 def create_post_from_form(user, form, page_id=None):
     """Validate + insert a post. Returns (post_id, error_flash)."""
     kind = (form.get("kind") or "text").strip()
+    # Retired post kinds (Ken's order): 'clothes' and 'audio' (MP3
+    # uploads) are no longer offered anywhere in the composer, and new
+    # posts of those kinds are refused outright. EXISTING clothes /
+    # audio posts keep rendering exactly as before — post_card and the
+    # KINDS list are untouched; only creation is closed.
+    if kind in ("clothes", "audio"):
+        return None, "That post type is no longer available."
     if kind not in KINDS:
         return None, "Invalid post kind."
     privacy = (form.get("privacy") or "public").strip()
@@ -2018,11 +2084,12 @@ def create_post_from_form(user, form, page_id=None):
         music_start = 0
 
     media_file = form.get("media")
-    allowed = IMG_EXTS | AUD_EXTS | VID_EXTS
-    if kind in ("photo", "clothes"):
+    # Audio files are no longer accepted on ANY new post (the MP3 post
+    # option was retired with kind='audio' above) — the upload in a
+    # forged form now fails validation like any other bad extension.
+    allowed = IMG_EXTS | VID_EXTS
+    if kind == "photo":
         allowed = IMG_EXTS
-    elif kind == "audio":
-        allowed = AUD_EXTS
     elif kind == "video":
         allowed = VID_EXTS
     # Post videos get the big cap; photos/audio keep the default cap.
@@ -3468,6 +3535,10 @@ async def profile(request: Request, uid: int):
         "avatar": avatar_url(prof.get("avatar", "")),
         "created_at": fancy_time(prof["created_at"]),
         "friend_count": fcount,
+        "follower_count": follower_count(uid),
+        "following_count": following_count(uid),
+        "viewer_follows": bool(user["id"] != uid
+                               and is_following(user["id"], uid)),
         "is_self": user["id"] == uid,
         "req_status": status,
         "tap_count": tcount,
@@ -3816,6 +3887,104 @@ async def friend_remove(request: Request, uid: int):
     return redir("/friends")
 
 
+# ---------------- follows ----------------
+@app.post("/follow/{uid}")
+async def follow_user(request: Request, uid: int):
+    """Follow a user: a one-way attention subscription, independent
+    of friendship. It changes NOTHING about what the follower can see
+    (a private profile stays locked to non-friends; can_view_post
+    never consults follows) — it only records the relationship for
+    follower/following lists, counts, and live-invite eligibility."""
+    user, err = require_login(request)
+    if err:
+        return err
+    if uid == user["id"]:
+        return back(request, f"/user/{uid}")
+    target = get_user(uid)
+    if not target:
+        return redir("/home", "User not found.")
+    if blocked_either_way(user["id"], uid):
+        return redir(f"/user/{uid}", "You can't follow this person.")
+    conn = db()
+    conn.execute(
+        "INSERT OR IGNORE INTO follows(follower_id, followee_id, "
+        "created_at) VALUES(?,?,?)", (user["id"], uid, now_iso()))
+    conn.commit()
+    conn.close()
+    return back(request, f"/user/{uid}")
+
+
+@app.post("/unfollow/{uid}")
+async def unfollow_user(request: Request, uid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    if uid == user["id"]:
+        return back(request, f"/user/{uid}")
+    if blocked_either_way(user["id"], uid):
+        return redir(f"/user/{uid}", "You can't follow this person.")
+    conn = db()
+    conn.execute(
+        "DELETE FROM follows WHERE follower_id=? AND followee_id=?",
+        (user["id"], uid))
+    conn.commit()
+    conn.close()
+    return back(request, f"/user/{uid}")
+
+
+def _follow_list_ctx(request, user, uid, which):
+    """Shared loader for the followers/following pages: the profile
+    must exist and not be blocked off from the viewer (same face as
+    the profile itself), and anyone blocked either way WITH THE
+    VIEWER is hidden from the list."""
+    prof = get_user(uid)
+    if not prof:
+        return None, redir("/home", "User not found.")
+    if user["id"] != uid and not is_owner(request) \
+            and blocked_either_way(user["id"], uid):
+        return None, render(request, "profile_unavailable.html", {})
+    if which == "followers":
+        sql = ("SELECT u.* FROM follows f JOIN users u "
+               "ON u.id=f.follower_id WHERE f.followee_id=? "
+               "ORDER BY f.created_at DESC")
+    else:
+        sql = ("SELECT u.* FROM follows f JOIN users u "
+               "ON u.id=f.followee_id WHERE f.follower_id=? "
+               "ORDER BY f.created_at DESC")
+    conn = db()
+    rows = conn.execute(sql, (uid,)).fetchall()
+    conn.close()
+    blocked = blocked_id_set(user["id"])
+    people = [{"id": r["id"], "name": r["name"],
+               "avatar": avatar_url(r["avatar"] or ""),
+               "presence": presence_of(r)}
+              for r in rows if r["id"] not in blocked]
+    return {"profile": {"id": prof["id"], "name": prof["name"]},
+            "people": people, "which": which}, None
+
+
+@app.get("/user/{uid}/followers", response_class=HTMLResponse)
+async def followers_page(request: Request, uid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    ctx, rerr = _follow_list_ctx(request, user, uid, "followers")
+    if rerr:
+        return rerr
+    return render(request, "follow_list.html", ctx)
+
+
+@app.get("/user/{uid}/following", response_class=HTMLResponse)
+async def following_page(request: Request, uid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    ctx, rerr = _follow_list_ctx(request, user, uid, "following")
+    if rerr:
+        return rerr
+    return render(request, "follow_list.html", ctx)
+
+
 # ---------------- tap ----------------
 def _ack_taps(conn, tapper_id, tapped_id):
     """Acknowledge tapper_id's taps to tapped_id: the recipient has
@@ -3930,6 +4099,10 @@ async def block_user(request: Request, uid: int):
     conn.execute(
         "DELETE FROM mutes WHERE (muter_id=? AND muted_id=?) OR "
         "(muter_id=? AND muted_id=?)",
+        (user["id"], uid, uid, user["id"]))
+    conn.execute(
+        "DELETE FROM follows WHERE (follower_id=? AND followee_id=?) OR "
+        "(follower_id=? AND followee_id=?)",
         (user["id"], uid, uid, user["id"]))
     conn.commit()
     conn.close()
@@ -5614,6 +5787,35 @@ async def live_state(request: Request, lid: int):
              "muted": bool(member_map[v["user_id"]]["muted"])
                       if v["user_id"] in member_map else False}
             for v in viewer_rows]
+        # "Invite others" candidates FOR THIS moderator (Ken: invite
+        # people I'm following or friends with, not only people in
+        # the room): my friends ∪ my following ∪ current watchers,
+        # deduped, can-watch filtered. People already on the panel or
+        # room-banned are excluded; people with a pending invite or
+        # join request are flagged invited so the UI disables them.
+        cand_ids = friend_id_set(user["id"]) | following_ids(user["id"]) \
+            | {v["user_id"] for v in viewer_rows}
+        cand_ids.discard(live["host_id"])
+        cand_ids.discard(user["id"])
+        pending_uids = {r["user_id"] for r in conn.execute(
+            "SELECT user_id FROM live_join_requests WHERE live_id=? "
+            "AND status='pending'", (lid,)).fetchall()}
+        watching_uids = {v["user_id"] for v in viewer_rows}
+        cands = []
+        for cuid in cand_ids:
+            if cuid in member_map or _live_banned(conn, lid, cuid):
+                continue
+            cuser = get_user(cuid)
+            if not cuser or not _live_can_watch(
+                    cuser, live, owner_on=is_owner(request)):
+                continue
+            person = _live_person(cuid)
+            cands.append({"id": cuid, "name": person["name"],
+                          "avatar": person["avatar"],
+                          "invited": cuid in pending_uids,
+                          "watching": cuid in watching_uids})
+        cands.sort(key=lambda c: c["name"].lower())
+        out["invite_candidates"] = cands
     mine = conn.execute(
         "SELECT * FROM live_join_requests WHERE live_id=? AND "
         "user_id=? ORDER BY id DESC LIMIT 1",
@@ -6044,11 +6246,16 @@ async def live_remove_admin(request: Request, lid: int):
 
 @app.post("/live/{lid}/invite")
 async def live_invite(request: Request, lid: int):
-    """Host or admin invites a current watcher onto the panel. The
-    invite is a live_join_requests row with kind='invite' whose
-    user_id is the INVITEE and inviter_id the caller (kind is how
-    invite-decide tells it apart from a watcher-initiated request).
-    One pending invite per target per live."""
+    """Host or admin invites someone onto the panel: a current
+    watcher of this live, OR a friend of the inviter, OR someone the
+    inviter follows (Ken's "Invite others" — you shouldn't have to
+    already be in the room to be invited). The target must also be
+    able to watch this live at all (_live_can_watch: no room ban, no
+    block with the host, private host = friends only). The invite is
+    a live_join_requests row with kind='invite' whose user_id is the
+    INVITEE and inviter_id the caller (kind is how invite-decide
+    tells it apart from a watcher-initiated request). One pending
+    invite per target per live."""
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
@@ -6081,12 +6288,28 @@ async def live_invite(request: Request, lid: int):
         return JSONResponse(
             {"ok": False, "error": "They're already on the panel."},
             status_code=400)
+    target_user = get_user(target)
+    if not target_user:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "User not found."},
+            status_code=404)
+    if not _live_can_watch(target_user, live,
+                           owner_on=is_owner(request)):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person can't join this live."},
+            status_code=400)
     watcher_ids = {v["user_id"] for v in _live_viewer_rows(conn, lid)}
-    if target not in watcher_ids:
+    eligible = target in watcher_ids \
+        or target in friend_id_set(user["id"]) \
+        or is_following(user["id"], target)
+    if not eligible:
         conn.close()
         return JSONResponse(
             {"ok": False,
-             "error": "That person isn't watching right now."},
+             "error": "You can only invite friends, people you follow, "
+                      "or people watching this live."},
             status_code=400)
     existing = conn.execute(
         "SELECT * FROM live_join_requests WHERE live_id=? AND "
@@ -6108,6 +6331,11 @@ async def live_invite(request: Request, lid: int):
     notify(target, "live_invite",
            f"🔴 {user['name']} invited you to join a live panel",
            f"/live/{lid}", actor_id=user["id"])
+    if notifications_allowed(target, user["id"]):
+        send_push(target,
+                  f"🔴 {user['name']} invited you to join a live panel",
+                  "Open HERE to join the live.",
+                  f"/live/{lid}", tag=f"live-invite-{lid}")
     return JSONResponse({"ok": True, "invite": {"id": rid,
                                                  "status": "pending"}})
 
@@ -6150,6 +6378,17 @@ async def live_invite_decide(request: Request, lid: int):
         return JSONResponse(
             {"ok": False, "error": "That invite is already settled."},
             status_code=409)
+    if accept:
+        # An invitee who was invited from outside the room (a friend /
+        # someone the inviter follows) may have no live_viewers row yet
+        # — accepting IS their arrival, so give them the heartbeat
+        # upsert a watcher gets, then put them on the panel.
+        stamp = now_iso()
+        conn.execute(
+            "INSERT INTO live_viewers(live_id, user_id, joined_at, "
+            "last_seen_at) VALUES(?,?,?,?) ON CONFLICT(live_id, user_id) "
+            "DO UPDATE SET last_seen_at=excluded.last_seen_at, "
+            "left_at=NULL", (lid, user["id"], stamp, stamp))
     if accept and not _live_add_member(conn, live, user["id"]):
         conn.close()
         return JSONResponse(
