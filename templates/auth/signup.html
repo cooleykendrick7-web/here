@@ -38,6 +38,12 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 <div class="tagline">Your people. Your pages. Your world.</div>
 <div class="auth-card">
   <h2>Sign Up — it's free</h2>
+  {% if inviter %}
+  <div style="display:flex;align-items:center;gap:10px;background:#1f1f1f;border:1px solid #d41f2e;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:14px">
+    {% if inviter.avatar %}<img src="{{ inviter.avatar|e }}" alt="" style="width:36px;height:36px;border-radius:50%;object-fit:cover">{% endif %}
+    <span>{{ inviter.name|e }} invited you to HERE 🎉</span>
+  </div>
+  {% endif %}
   {% if error %}<div class="err">{{ error|e }}</div>{% endif %}
   <form action="/signup" method="post">
     <div class="field">
