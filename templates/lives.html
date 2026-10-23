@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Lives · HERE{% endblock %}
+{% block content %}
+
+<style>
+.lives-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.live-card{background:#fff;border-top:3px solid #d41f2e}
+.live-card-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.live-card-head a{font-weight:700}
+.live-badge{color:#d41f2e;font-weight:800;font-size:12px;margin-left:auto;animation:livepulse 1.2s infinite}
+.live-title{font-weight:700;font-size:16px;margin-bottom:6px;word-wrap:break-word}
+.live-meta{color:var(--muted);font-size:13px;margin-bottom:12px}
+.live-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+</style>
+
+<div class="card">
+  <h2 style="font-size:24px">🔴 Lives</h2>
+  <p style="color:var(--muted);margin-top:6px">Watch people who are live right now — friends and people you follow come first.</p>
+</div>
+
+<div id="lives-grid" class="lives-grid">
+  {% for l in lives %}
+  <div class="card live-card">
+    <div class="live-card-head">
+      {% if l.avatar %}<img class="avatar av-40" src="{{ l.avatar|e }}" alt="">
+      {% else %}<span class="av-ph av-40">{{ l.name[:1]|upper|e }}</span>{% endif %}
+      <a href="/user/{{ l.host_id }}">{{ l.name|e }}{% if l.is_self %} (you){% endif %}</a>
+      <span class="live-badge" style="animation:livepulse 1.2s infinite">🔴 LIVE</span>
+    </div>
+    <div class="live-title">{{ l.title|e if l.title else 'Live now' }}</div>
+    <div class="live-meta">👁 {{ l.viewers }} watching · 👥 {{ l.panel_count }} on panel</div>
+    <div class="live-actions">
+      <a class="btn" href="/live/{{ l.id }}">▶ Watch</a>
+      {% if not l.is_self %}
+      {% if l.following %}
+      <span class="kind-tag">Following ✓</span>
+      {% else %}
+      <form class="inline-form" action="/follow/{{ l.host_id }}" method="post">
+        <button type="submit" class="btn-ghost btn-sm">+ Follow</button>
+      </form>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div id="lives-empty" class="card" style="text-align:center;padding:28px 20px"{% if lives %} hidden{% endif %}>
+  <p style="font-size:16px;font-weight:700">🔴 Nobody's live right now.</p>
+  <p style="color:var(--muted);margin-top:6px">Tap the 🔴 Go Live tab to be the first.</p>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  function buildCard(live){
+    var card = document.createElement('div');
+    card.className = 'card live-card';
+    var head = document.createElement('div');
+    head.className = 'live-card-head';
+    if (live.host_avatar){
+      var img = document.createElement('img');
+      img.className = 'avatar av-40';
+      img.src = live.host_avatar;
+      img.alt = '';
+      head.appendChild(img);
+    } else {
+      var ph = document.createElement('span');
+      ph.className = 'av-ph av-40';
+      ph.textContent = (live.host_name || '?').charAt(0).toUpperCase();
+      head.appendChild(ph);
+    }
+    var nameLink = document.createElement('a');
+    nameLink.href = '/user/' + live.host_id;
+    nameLink.textContent = live.host_name + (live.is_self ? ' (you)' : '');
+    head.appendChild(nameLink);
+    var badge = document.createElement('span');
+    badge.className = 'live-badge';
+    badge.style.animation = 'livepulse 1.2s infinite';
+    badge.textContent = '🔴 LIVE';
+    head.appendChild(badge);
+    card.appendChild(head);
+    var title = document.createElement('div');
+    title.className = 'live-title';
+    title.textContent = live.title || 'Live now';
+    card.appendChild(title);
+    var meta = document.createElement('div');
+    meta.className = 'live-meta';
+    meta.textContent = '👁 ' + live.viewers + ' watching · 👥 ' + live.panel_count + ' on panel';
+    card.appendChild(meta);
+    var actions = document.createElement('div');
+    actions.className = 'live-actions';
+    var watch = document.createElement('a');
+    watch.className = 'btn';
+    watch.href = '/live/' + live.id;
+    watch.textContent = '▶ Watch';
+    actions.appendChild(watch);
+    if (!live.is_self){
+      if (live.following){
+        var tag = document.createElement('span');
+        tag.className = 'kind-tag';
+        tag.textContent = 'Following ✓';
+        actions.appendChild(tag);
+      } else {
+        var form = document.createElement('form');
+        form.className = 'inline-form';
+        form.action = '/follow/' + live.host_id;
+        form.method = 'post';
+        var btn = document.createElement('button');
+        btn.type = 'submit';
+        btn.className = 'btn-ghost btn-sm';
+        btn.textContent = '+ Follow';
+        form.appendChild(btn);
+        actions.appendChild(form);
+      }
+    }
+    card.appendChild(actions);
+    return card;
+  }
+  function renderLives(list){
+    var grid = document.getElementById('lives-grid');
+    if (!grid) return;
+    while (grid.firstChild) grid.removeChild(grid.firstChild);
+    list.forEach(function(live){ grid.appendChild(buildCard(live)); });
+    var empty = document.getElementById('lives-empty');
+    if (empty) empty.hidden = list.length > 0;
+  }
+  function pollLives(){
+    fetch('/lives.json', {credentials: 'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.ok && Array.isArray(d.lives)) renderLives(d.lives);
+      })
+      .catch(function(){});
+  }
+  setInterval(pollLives, 30000);
+})();
+</script>
+{% endblock %}

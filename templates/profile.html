@@ -41,6 +41,7 @@
         {% if profile.live_id %}
         <a class="btn" href="/live/{{ profile.live_id }}" style="background:var(--red);animation:livepulse 1.2s infinite">🔴 LIVE — watch now</a>
         {% endif %}
+        <a class="btn-ghost" href="/lives">🔴 Lives</a>
         {% if profile.is_self %}
         <a class="btn-ghost" href="/settings/profile">✏️ Edit Profile</a>
         <a class="btn-ghost" href="/settings/profile#spot">🏠 Customize my spot</a>
@@ -112,6 +113,23 @@
   <p style="color:var(--muted);font-size:15px">🔒 This profile is private — only friends can see what's here.</p>
 </div>
 {% else %}
+{% if album_photos or profile.is_self %}
+<div class="card">
+  <div style="display:flex;align-items:center;gap:8px">
+    <h3 style="margin:0">📸 Photos{% if album_count %} ({{ album_count }}){% endif %}</h3>
+    <a href="/user/{{ profile.id }}/photos" style="margin-left:auto">See all photos →</a>
+  </div>
+  {% if album_photos %}
+  <div class="photo-grid" style="margin-top:10px">
+    {% for p in album_photos %}
+    <a class="photo-cell" href="/post/{{ p.post_id }}"><img src="{{ p.url|e }}" alt=""></a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:var(--muted);margin-top:8px">Photos you post will show up here.</p>
+  {% endif %}
+</div>
+{% endif %}
 {% for post in posts %}
   {% include "partials/post_card.html" %}
 {% else %}

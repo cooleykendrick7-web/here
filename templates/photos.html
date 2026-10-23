@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ profile.name|e }}'s Photos · HERE{% endblock %}
+{% block content %}
+
+<div class="spot-scope{% if profile.spot_classes %} {{ profile.spot_classes }}{% endif %}"{% if profile.spot_style %} style="{{ profile.spot_style }}"{% endif %}>
+<div class="card">
+  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+    {% if profile.avatar %}<img class="avatar av-100" src="{{ profile.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-100">{{ profile.name[:1]|upper|e }}</span>{% endif %}
+    <div style="flex:1;min-width:200px">
+      <h2 style="font-size:24px">{{ profile.name|e }}'s Photos</h2>
+      <div style="margin-top:8px"><a class="btn-ghost btn-sm" href="/user/{{ profile.id }}">← Back to profile</a></div>
+    </div>
+  </div>
+</div>
+
+{% if profile.is_private_locked %}
+<div class="card" style="text-align:center;padding:36px 20px">
+  <div style="font-size:44px">🔒</div>
+  <h3 style="margin:10px 0 6px">This profile is private</h3>
+  <p style="color:var(--muted);font-size:15px">🔒 This profile is private — only friends can see what's here.</p>
+</div>
+{% else %}
+{% if cover %}
+<div class="card">
+  <h3 style="margin:0 0 10px">Profile &amp; cover</h3>
+  <div class="photo-grid">
+    {% for c in cover %}
+    <a class="photo-cell" href="/user/{{ profile.id }}"><img src="{{ c.url|e }}" alt=""><span class="photo-cap">{{ c.label|e }}</span></a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin:0 0 10px">Photos{% if photo_count %} ({{ photo_count }}){% endif %}</h3>
+  {% if photos %}
+  <div class="photo-grid">
+    {% for p in photos %}
+    <a class="photo-cell" href="/post/{{ p.post_id }}"><img src="{{ p.url|e }}" alt=""></a>
+    {% endfor %}
+  </div>
+  {% elif profile.is_self %}
+  <p style="color:var(--muted)">Photos you post will show up here.</p>
+  {% else %}
+  <p style="color:var(--muted)">No photos yet.</p>
+  {% endif %}
+</div>
+{% endif %}
+</div>
+
+{% endblock %}

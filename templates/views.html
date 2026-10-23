@@ -1,0 +1,1000 @@
+{% extends "base.html" %}
+{% block title %}🎬 My Views · HERE{% endblock %}
+{% block content %}
+
+<style>
+/* ===== My Views: full-screen vertical video feed (Reels-style) =====
+   Fixed overlay inside the content block, like the story viewer:
+   z-index 1200 sits above the header (1000) and the call mini tile
+   (1500 is higher, so a minimized call still floats over the feed)
+   but below base.html's body-level sheets (1990/2000), the story
+   viewer (2500) and the call overlay (3100). */
+#views-root{position:fixed;inset:0;height:100dvh;background:#000;color:#fff;
+  z-index:1200;display:flex;flex-direction:column;overflow:hidden}
+#views-root [hidden]{display:none!important}
+#mv-feed{flex:1;overflow-y:auto;scroll-snap-type:y mandatory;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+#mv-feed::-webkit-scrollbar{display:none}
+.mv-cell{position:relative;height:100%;min-height:100%;scroll-snap-align:start;
+  scroll-snap-stop:always;background:#000;overflow:hidden}
+.mv-cell video{position:absolute;inset:0;width:100%;height:100%;
+  object-fit:contain;background:#000;display:block}
+/* --- top bar --- */
+#mv-topbar{position:absolute;top:0;left:0;right:0;z-index:5;
+  padding:10px 12px 18px;pointer-events:none;
+  background:linear-gradient(rgba(0,0,0,.65),transparent)}
+#mv-topbar>*{pointer-events:auto}
+.mv-toprow{display:flex;align-items:center;gap:8px}
+.mv-title{font-size:19px;font-weight:900;text-shadow:0 1px 6px rgba(0,0,0,.8)}
+.mv-iconbtn{background:rgba(255,255,255,.14);color:#fff;border:none;border-radius:999px;
+  min-width:38px;height:38px;padding:0 10px;font-size:16px;font-weight:700;
+  cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+  text-decoration:none;flex-shrink:0}
+.mv-iconbtn:hover{background:rgba(255,255,255,.28)}
+#mv-post-btn{background:#d41f2e;margin-left:auto}
+#mv-post-btn:hover{background:#a8151f}
+.mv-tagrow{display:flex;gap:7px;overflow-x:auto;padding:10px 2px 0;
+  scrollbar-width:none;align-items:center}
+.mv-tagrow::-webkit-scrollbar{display:none}
+.mv-tag{flex-shrink:0;background:rgba(255,255,255,.14);color:#fff;border:none;
+  border-radius:999px;padding:7px 13px;font-size:13.5px;font-weight:700;cursor:pointer}
+.mv-tag:hover{background:rgba(255,255,255,.28)}
+.mv-tag .cnt{opacity:.75;font-weight:600;font-size:12px}
+#mv-active-filter{flex-shrink:0;background:#d41f2e}
+#mv-active-filter:hover{background:#a8151f}
+/* --- right action rail --- */
+.mv-rail{position:absolute;right:10px;bottom:86px;z-index:3;display:flex;
+  flex-direction:column;align-items:center;gap:16px}
+.mv-rail-item{display:flex;flex-direction:column;align-items:center;gap:3px}
+.mv-rail-btn{width:48px;height:48px;border-radius:50%;border:none;cursor:pointer;
+  background:rgba(255,255,255,.14);color:#fff;font-size:22px;line-height:1;
+  display:flex;align-items:center;justify-content:center;
+  text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.mv-rail-btn:hover{background:rgba(255,255,255,.3)}
+.mv-rail-btn.reacted{background:#d41f2e;transform:scale(1.06)}
+.mv-rail-count{font-size:12.5px;font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,.9)}
+.mv-avlink{display:block;width:48px;height:48px;border-radius:50%;overflow:hidden;
+  border:2px solid rgba(255,255,255,.75);background:#2b2b2b;flex-shrink:0}
+.mv-avlink img{width:100%;height:100%;object-fit:cover;display:block}
+.mv-avlink .mv-avph{width:100%;height:100%;display:flex;align-items:center;
+  justify-content:center;background:#d41f2e;color:#fff;font-weight:800;font-size:20px}
+.mv-follow-btn{margin-top:-14px;z-index:1;width:22px;height:22px;border-radius:50%;
+  border:2px solid #000;background:#d41f2e;color:#fff;font-size:14px;font-weight:800;
+  line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.mv-follow-btn.following{background:#fff;color:#d41f2e}
+/* --- bottom-left info --- */
+.mv-info{position:absolute;left:12px;right:76px;bottom:0;z-index:3;
+  padding:0 0 calc(14px + env(safe-area-inset-bottom));
+  text-shadow:0 1px 5px rgba(0,0,0,.9)}
+.mv-author{font-weight:800;font-size:16px;color:#fff}
+.mv-author:hover{text-decoration:underline}
+.mv-when{font-size:12px;color:rgba(255,255,255,.75);margin:2px 0 5px}
+.mv-caption{font-size:14.5px;line-height:1.4;word-wrap:break-word;white-space:pre-wrap}
+.mv-tagchip{background:none;border:none;color:#fff;font-weight:800;font-size:inherit;
+  cursor:pointer;padding:0;text-shadow:0 1px 5px rgba(0,0,0,.9)}
+.mv-tagchip:hover{text-decoration:underline;color:#ffb3ba}
+.mv-paused-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  font-size:64px;opacity:.85;pointer-events:none;text-shadow:0 2px 14px rgba(0,0,0,.8)}
+/* --- empty / interest cells --- */
+.mv-center-cell{height:100%;display:flex;flex-direction:column;gap:10px;
+  align-items:center;justify-content:center;text-align:center;padding:24px}
+.mv-center-cell .big{font-size:44px}
+.mv-center-cell .msg{font-size:17px;font-weight:700;max-width:320px}
+.mv-interest-card{background:#161616;height:100%;display:flex;flex-direction:column;
+  gap:12px;align-items:center;justify-content:center;text-align:center;padding:24px}
+.mv-interest-card .q{font-size:21px;font-weight:800;max-width:320px}
+.mv-interest-card .ref{font-size:15px;color:rgba(255,255,255,.75)}
+.mv-interest-card .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+/* --- sheets (inside the root; same bottom-sheet shape as stories) --- */
+.mv-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:8}
+.mv-sheet{position:absolute;left:0;right:0;bottom:0;z-index:9;background:#161616;
+  color:#fff;border-top-left-radius:16px;border-top-right-radius:16px;
+  padding:14px 16px calc(14px + env(safe-area-inset-bottom));
+  box-shadow:0 -8px 28px rgba(0,0,0,.5)}
+.mv-sheet-head{display:flex;align-items:center;margin-bottom:10px}
+.mv-sheet-head strong{font-size:16px}
+.mv-sheet-x{margin-left:auto;background:rgba(255,255,255,.14);color:#fff;border:none;
+  width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer;flex-shrink:0}
+#mv-comments-sheet{display:flex;flex-direction:column;max-height:70%}
+#mv-comments-list{overflow-y:auto;min-height:60px;padding-right:2px}
+.mv-nocomments{color:rgba(255,255,255,.6);font-size:14px;padding:10px 0}
+.mv-comment{display:flex;gap:9px;padding:8px 0}
+.mv-comment .mv-cav{width:34px;height:34px;border-radius:50%;flex-shrink:0;
+  overflow:hidden;background:#2b2b2b}
+.mv-comment .mv-cav img{width:100%;height:100%;object-fit:cover;display:block}
+.mv-comment .mv-cav .mv-avph{width:100%;height:100%;display:flex;align-items:center;
+  justify-content:center;background:#d41f2e;color:#fff;font-weight:800;font-size:14px}
+.mv-comment .mv-cmain{flex:1;min-width:0}
+.mv-comment .mv-cname{font-weight:700;font-size:13.5px}
+.mv-comment .mv-cbody{font-size:14.5px;line-height:1.4;word-wrap:break-word}
+.mv-comment .mv-cbody a{color:#ff8a94;font-weight:600}
+.mv-comment .mv-cmeta{font-size:11.5px;color:rgba(255,255,255,.55);margin-top:2px;
+  display:flex;gap:12px;align-items:center}
+.mv-clink{background:none;border:none;color:rgba(255,255,255,.65);font-weight:700;
+  font-size:12px;cursor:pointer;padding:0}
+.mv-clink:hover{color:#fff;text-decoration:underline}
+.mv-clink.danger:hover{color:#ff8a94}
+.mv-replies{margin-left:43px}
+#mv-reply-bar{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.08);
+  border-radius:8px;padding:7px 10px;font-size:13px;margin-top:8px}
+#mv-reply-bar button{background:none;border:none;color:#fff;font-size:14px;
+  cursor:pointer;margin-left:auto;padding:0 2px}
+#mv-comment-form{display:flex;gap:8px;margin-top:10px}
+#mv-comment-input{flex:1;min-width:0;background:rgba(255,255,255,.1);color:#fff;
+  border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:10px 15px;
+  font-size:15px;outline:none}
+#mv-comment-input::placeholder{color:rgba(255,255,255,.55)}
+#mv-comment-input:focus{border-color:#d41f2e}
+.mv-blocked-note{background:rgba(212,31,46,.16);border:1px solid #d41f2e;
+  border-radius:10px;padding:10px 12px;font-size:14px;font-weight:600;margin-top:10px}
+.mv-menu-item{display:block;width:100%;text-align:left;background:none;border:none;
+  color:#fff;padding:13px 8px;font-size:16px;font-weight:600;cursor:pointer;
+  border-radius:8px}
+.mv-menu-item:hover{background:rgba(255,255,255,.1)}
+/* --- composer sheet --- */
+#mv-composer-sheet{max-height:86%;overflow-y:auto}
+#mv-composer-sheet label.fld{display:block;font-size:14px;font-weight:600;
+  margin:12px 0 4px;color:rgba(255,255,255,.85)}
+#mv-composer-sheet textarea{width:100%;background:rgba(255,255,255,.08);color:#fff;
+  border:1px solid rgba(255,255,255,.25);border-radius:10px;padding:10px 12px;
+  font-size:15px;min-height:64px;resize:vertical;outline:none;font-family:inherit}
+#mv-composer-sheet textarea:focus{border-color:#d41f2e}
+#mv-composer-sheet select{width:100%;background:#222;color:#fff;
+  border:1px solid rgba(255,255,255,.25);border-radius:10px;padding:10px 12px;font-size:15px}
+#mv-composer-sheet input[type=file]{font-size:14px;color:#fff;margin-top:4px}
+#mv-loading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  z-index:2;font-size:15px;font-weight:600;color:rgba(255,255,255,.8)}
+</style>
+
+<div id="views-root">
+  <div id="mv-feed"></div>
+  <div id="mv-loading">🎬 Loading Views…</div>
+
+  <div id="mv-topbar">
+    <div class="mv-toprow">
+      <div class="mv-title">🎬 My Views</div>
+      <button class="mv-iconbtn" id="mv-post-btn" type="button">➕ Post a View</button>
+      <button class="mv-iconbtn" id="mv-sound-btn" type="button" title="Sound on/off" aria-label="Toggle sound">🔇</button>
+      <a class="mv-iconbtn" href="/home" title="Close" aria-label="Close My Views">✕</a>
+    </div>
+    <div class="mv-tagrow">
+      <button class="mv-tag" id="mv-active-filter" type="button" hidden></button>
+      <span id="mv-tags" style="display:contents"></span>
+    </div>
+  </div>
+
+  <!-- ⋯ menu sheet -->
+  <div class="mv-backdrop" id="mv-menu-backdrop" hidden></div>
+  <div class="mv-sheet" id="mv-menu-sheet" hidden>
+    <button class="mv-menu-item" id="mv-menu-interested" type="button">👍 Interested</button>
+    <button class="mv-menu-item" id="mv-menu-not" type="button">👎 Not interested</button>
+    <button class="mv-menu-item" id="mv-menu-cancel" type="button">Cancel</button>
+  </div>
+
+  <!-- comments sheet -->
+  <div class="mv-backdrop" id="mv-comments-backdrop" hidden></div>
+  <div class="mv-sheet" id="mv-comments-sheet" hidden>
+    <div class="mv-sheet-head">
+      <strong>💬 Comments</strong>
+      <button class="mv-sheet-x" id="mv-comments-close" type="button" aria-label="Close comments">✕</button>
+    </div>
+    <div id="mv-comments-list"></div>
+    <div id="mv-reply-bar" hidden>
+      <span>Replying to <strong id="mv-reply-name"></strong></span>
+      <button id="mv-reply-cancel" type="button" aria-label="Cancel reply">✕</button>
+    </div>
+    <div class="mv-blocked-note" id="mv-comments-blocked" hidden>🚫 The author of this post has blocked you from commenting here.</div>
+    <form id="mv-comment-form">
+      <input id="mv-comment-input" type="text" maxlength="2000" autocomplete="off" placeholder="Add a comment…">
+      <button class="btn" type="submit">Send</button>
+    </form>
+  </div>
+
+  <!-- Post a View composer sheet -->
+  <div class="mv-backdrop" id="mv-composer-backdrop" hidden></div>
+  <div class="mv-sheet" id="mv-composer-sheet" hidden>
+    <div class="mv-sheet-head">
+      <strong>➕ Post a View</strong>
+      <button class="mv-sheet-x" id="mv-composer-close" type="button" aria-label="Close composer">✕</button>
+    </div>
+    <form method="post" action="/posts" enctype="multipart/form-data">
+      <input type="hidden" name="kind" value="video">
+      <input type="hidden" name="next" value="/views">
+      <label class="fld" for="mv-comp-file">Video</label>
+      <input id="mv-comp-file" type="file" name="media" required
+             accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm">
+      <label class="fld" for="mv-comp-body">Caption</label>
+      <textarea id="mv-comp-body" name="body" maxlength="2000" placeholder="Say something… use #hashtags"></textarea>
+      <label class="fld" for="mv-comp-privacy">Who can see this?</label>
+      <select id="mv-comp-privacy" name="privacy">
+        <option value="public">🌍 Public</option>
+        <option value="friends">👥 Friends only</option>
+        <option value="onlyme">🔒 Only me</option>
+      </select>
+      <div style="text-align:right;margin-top:14px">
+        <button class="btn" type="submit">Post</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  'use strict';
+  var root = document.getElementById('views-root');
+  if (!root) return;
+  document.body.style.overflow = 'hidden';
+
+  var INITIAL_TAG = {{ view_tag|tojson }};
+  var PAGE_LIMIT = 10;
+
+  var feedEl = document.getElementById('mv-feed');
+  var loadingEl = document.getElementById('mv-loading');
+  var tagsEl = document.getElementById('mv-tags');
+  var activeFilterBtn = document.getElementById('mv-active-filter');
+  var soundBtn = document.getElementById('mv-sound-btn');
+
+  var commentsBackdrop = document.getElementById('mv-comments-backdrop');
+  var commentsSheet = document.getElementById('mv-comments-sheet');
+  var commentsList = document.getElementById('mv-comments-list');
+  var commentsBlocked = document.getElementById('mv-comments-blocked');
+  var commentForm = document.getElementById('mv-comment-form');
+  var commentInput = document.getElementById('mv-comment-input');
+  var replyBar = document.getElementById('mv-reply-bar');
+  var replyNameEl = document.getElementById('mv-reply-name');
+
+  var menuBackdrop = document.getElementById('mv-menu-backdrop');
+  var menuSheet = document.getElementById('mv-menu-sheet');
+
+  var composerBackdrop = document.getElementById('mv-composer-backdrop');
+  var composerSheet = document.getElementById('mv-composer-sheet');
+
+  /* ---------------- state ---------------- */
+  var currentTag = (typeof INITIAL_TAG === 'string') ? INITIAL_TAG : '';
+  var entries = [];            /* video cells, in feed order: {item, el, video, ...} */
+  var loadedIds = {};          /* post_id -> true (dedupe, current filter) */
+  var serverLoaded = 0;        /* raw items the server has sent for this filter */
+  var hasMore = true;
+  var loading = false;
+  var activeEntry = null;
+  var soundOn = false;
+
+  var seenSet = {};            /* post_id -> true, whole session */
+  var completedSet = {};       /* post_id -> true, whole session */
+  var seenDistinct = 0;
+  var nextInterestAt = 3;      /* first card after 3 seen, then every +8 */
+  var lastSeenItem = null;
+
+  var commentCtx = null;       /* {postId, entry} while the sheet is open */
+  var replyParentId = null;
+  var menuEntry = null;
+
+  /* ---------------- helpers ---------------- */
+  function esc(t) {
+    return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+  function getJSON(url) {
+    return fetch(url, {credentials: 'same-origin'})
+      .then(function (r) { return r.json(); });
+  }
+  function postJSON(url, obj) {
+    return fetch(url, {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(obj || {})}).catch(function () {});
+  }
+  function postForm(url, params) {
+    return fetch(url, {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: params ? params.toString() : ''});
+  }
+  function postBare(url) {
+    return fetch(url, {method: 'POST', credentials: 'same-origin'});
+  }
+  function fmtTime(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString();
+  }
+  function avatarNode(url, name, cls) {
+    if (url) {
+      var img = document.createElement('img');
+      img.src = url; img.alt = '';
+      if (cls) img.className = cls;
+      return img;
+    }
+    var ph = document.createElement('span');
+    ph.className = 'mv-avph';
+    ph.textContent = (name || '?').charAt(0).toUpperCase();
+    return ph;
+  }
+
+  /* ---------------- filter ---------------- */
+  function paintActiveFilter() {
+    if (currentTag) {
+      activeFilterBtn.hidden = false;
+      activeFilterBtn.textContent = '🏷 #' + currentTag + ' ✕';
+    } else {
+      activeFilterBtn.hidden = true;
+      activeFilterBtn.textContent = '';
+    }
+    var chips = tagsEl.querySelectorAll('.mv-tag');
+    for (var i = 0; i < chips.length; i++) {
+      chips[i].style.background =
+        chips[i].getAttribute('data-tag') === currentTag
+          ? '#d41f2e' : '';
+    }
+  }
+  function applyFilter(tag) {
+    currentTag = tag || '';
+    var url = location.pathname +
+      (currentTag ? '?tag=' + encodeURIComponent(currentTag) : '');
+    try { history.replaceState(null, '', url); } catch (e) {}
+    paintActiveFilter();
+    loadFeed(true);
+  }
+  activeFilterBtn.addEventListener('click', function () { applyFilter(''); });
+
+  function loadTrending() {
+    getJSON('/views/trending').then(function (d) {
+      if (!d || !d.ok || !Array.isArray(d.tags)) return;
+      tagsEl.innerHTML = '';
+      d.tags.forEach(function (t) {
+        if (!t || !t.tag) return;
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'mv-tag';
+        b.setAttribute('data-tag', t.tag);
+        b.textContent = '#' + t.tag + ' ';
+        var cnt = document.createElement('span');
+        cnt.className = 'cnt';
+        cnt.textContent = t.count;
+        b.appendChild(cnt);
+        b.addEventListener('click', function () { applyFilter(t.tag); });
+        tagsEl.appendChild(b);
+      });
+      paintActiveFilter();
+    }).catch(function () {});
+  }
+
+  /* ---------------- feed loading ---------------- */
+  function loadFeed(reset) {
+    if (reset) {
+      entries.forEach(function (en) {
+        try { en.video.pause(); } catch (e) {}
+        observer.unobserve(en.el);
+      });
+      entries = [];
+      loadedIds = {};
+      serverLoaded = 0;
+      hasMore = true;
+      activeEntry = null;
+      feedEl.innerHTML = '';
+      feedEl.scrollTop = 0;
+    }
+    fetchPage();
+  }
+  function fetchPage() {
+    if (loading || !hasMore) return;
+    loading = true;
+    loadingEl.hidden = entries.length > 0;
+    var url = '/views.json?tag=' + encodeURIComponent(currentTag) +
+      '&offset=' + serverLoaded + '&limit=' + PAGE_LIMIT;
+    getJSON(url).then(function (d) {
+      loading = false;
+      loadingEl.hidden = true;
+      var views = (d && d.ok && Array.isArray(d.views)) ? d.views : [];
+      serverLoaded += views.length;
+      if (views.length < PAGE_LIMIT) hasMore = false;
+      views.forEach(function (item) {
+        if (!item || loadedIds[item.post_id]) return;
+        loadedIds[item.post_id] = true;
+        appendCell(item);
+      });
+      if (!entries.length) renderEmptyState();
+    }).catch(function () {
+      loading = false;
+      loadingEl.hidden = true;
+      if (!entries.length) renderEmptyState();
+    });
+  }
+  function renderEmptyState() {
+    var cell = document.createElement('div');
+    cell.className = 'mv-cell';
+    var center = document.createElement('div');
+    center.className = 'mv-center-cell';
+    var big = document.createElement('div');
+    big.className = 'big';
+    big.textContent = '🎬';
+    var msg = document.createElement('div');
+    msg.className = 'msg';
+    center.appendChild(big);
+    center.appendChild(msg);
+    if (currentTag) {
+      msg.textContent = 'Nothing under #' + currentTag + ' yet.';
+      var clear = document.createElement('button');
+      clear.type = 'button';
+      clear.className = 'btn';
+      clear.textContent = '✕ Clear filter';
+      clear.addEventListener('click', function () { applyFilter(''); });
+      center.appendChild(clear);
+    } else {
+      msg.textContent = 'No Views yet. Be the first to post one!';
+      var add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'btn';
+      add.textContent = '➕ Post a View';
+      add.addEventListener('click', openComposer);
+      center.appendChild(add);
+    }
+    cell.appendChild(center);
+    feedEl.appendChild(cell);
+  }
+
+  /* ---------------- cells ---------------- */
+  function renderCaption(container, body) {
+    var text = String(body == null ? '' : body);
+    var parts = text.split(/(#[\p{L}\p{N}_]+)/gu);
+    parts.forEach(function (part) {
+      if (!part) return;
+      if (part.charAt(0) === '#' && part.length > 1) {
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'mv-tagchip';
+        chip.textContent = part;
+        var tag = part.slice(1);
+        chip.addEventListener('click', function () { applyFilter(tag); });
+        container.appendChild(chip);
+      } else {
+        container.appendChild(document.createTextNode(part));
+      }
+    });
+  }
+  function appendCell(item) {
+    var cell = document.createElement('div');
+    cell.className = 'mv-cell';
+    cell.setAttribute('data-post-id', item.post_id);
+
+    var video = document.createElement('video');
+    video.src = item.video_url || '';
+    if (item.poster_url) video.poster = item.poster_url;
+    video.loop = true;
+    video.muted = true;
+    video.setAttribute('playsinline', '');
+    video.preload = 'metadata';
+    cell.appendChild(video);
+
+    var entry = {item: item, el: cell, video: video};
+
+    var hint = document.createElement('div');
+    hint.className = 'mv-paused-hint';
+    hint.textContent = '▶';
+    hint.hidden = true;
+    cell.appendChild(hint);
+    entry.hint = hint;
+    video.addEventListener('pause', function () {
+      if (activeEntry === entry) hint.hidden = false;
+    });
+    video.addEventListener('play', function () { hint.hidden = true; });
+
+    /* bottom-left info */
+    var info = document.createElement('div');
+    info.className = 'mv-info';
+    var authorLink = document.createElement('a');
+    authorLink.className = 'mv-author';
+    authorLink.href = '/user/' + item.author.id;
+    authorLink.textContent = item.author.name || '';
+    info.appendChild(authorLink);
+    var when = document.createElement('div');
+    when.className = 'mv-when';
+    when.textContent = fmtTime(item.created_at);
+    info.appendChild(when);
+    if (item.body) {
+      var cap = document.createElement('div');
+      cap.className = 'mv-caption';
+      renderCaption(cap, item.body);
+      info.appendChild(cap);
+    }
+    cell.appendChild(info);
+
+    /* right action rail */
+    var rail = document.createElement('div');
+    rail.className = 'mv-rail';
+
+    var avItem = document.createElement('div');
+    avItem.className = 'mv-rail-item';
+    var avLink = document.createElement('a');
+    avLink.className = 'mv-avlink';
+    avLink.href = '/user/' + item.author.id;
+    avLink.appendChild(avatarNode(item.author.avatar, item.author.name, ''));
+    avItem.appendChild(avLink);
+    if (!item.author.is_self) {
+      var followBtn = document.createElement('button');
+      followBtn.type = 'button';
+      followBtn.className = 'mv-follow-btn';
+      followBtn.title = 'Follow';
+      avItem.appendChild(followBtn);
+      entry.followBtn = followBtn;
+      paintFollow(entry);
+      followBtn.addEventListener('click', function () { toggleFollow(entry); });
+    }
+    rail.appendChild(avItem);
+
+    var reactItem = document.createElement('div');
+    reactItem.className = 'mv-rail-item';
+    var reactBtn = document.createElement('button');
+    reactBtn.type = 'button';
+    reactBtn.className = 'mv-rail-btn';
+    reactBtn.textContent = '❤️';
+    reactBtn.title = 'Love';
+    var reactCount = document.createElement('span');
+    reactCount.className = 'mv-rail-count';
+    reactItem.appendChild(reactBtn);
+    reactItem.appendChild(reactCount);
+    rail.appendChild(reactItem);
+    entry.reactBtn = reactBtn;
+    entry.reactCountEl = reactCount;
+    paintReact(entry);
+    reactBtn.addEventListener('click', function () { toggleReact(entry); });
+
+    var comItem = document.createElement('div');
+    comItem.className = 'mv-rail-item';
+    var comBtn = document.createElement('button');
+    comBtn.type = 'button';
+    comBtn.className = 'mv-rail-btn';
+    comBtn.textContent = '💬';
+    comBtn.title = 'Comments';
+    var comCount = document.createElement('span');
+    comCount.className = 'mv-rail-count';
+    comCount.textContent = item.comment_count || 0;
+    comItem.appendChild(comBtn);
+    comItem.appendChild(comCount);
+    rail.appendChild(comItem);
+    entry.commentCountEl = comCount;
+    comBtn.addEventListener('click', function () { openComments(entry); });
+
+    var moreItem = document.createElement('div');
+    moreItem.className = 'mv-rail-item';
+    var moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'mv-rail-btn';
+    moreBtn.textContent = '⋯';
+    moreBtn.title = 'More';
+    moreItem.appendChild(moreBtn);
+    rail.appendChild(moreItem);
+    moreBtn.addEventListener('click', function () { openMenu(entry); });
+
+    cell.appendChild(rail);
+
+    /* playback reporting */
+    video.addEventListener('playing', function () { markSeen(entry); });
+    video.addEventListener('timeupdate', function () {
+      var id = item.post_id;
+      if (completedSet[id]) return;
+      var d = video.duration;
+      if (d && isFinite(d) && d > 0 && video.currentTime / d >= 0.85) {
+        completedSet[id] = true;
+        postBare('/views/' + id + '/completed').catch(function () {});
+      }
+    });
+    /* tap the video toggles play/pause */
+    video.addEventListener('click', function () {
+      if (video.paused) {
+        video.muted = !soundOn;
+        var p = video.play();
+        if (p) p.catch(function () {
+          video.muted = true;
+          video.play().catch(function () {});
+        });
+      } else {
+        video.pause();
+      }
+    });
+
+    entries.push(entry);
+    feedEl.appendChild(cell);
+    observer.observe(cell);
+    return entry;
+  }
+  function removeEntry(entry) {
+    var i = entries.indexOf(entry);
+    if (i >= 0) entries.splice(i, 1);
+    delete loadedIds[entry.item.post_id];
+    try { entry.video.pause(); } catch (e) {}
+    observer.unobserve(entry.el);
+    if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el);
+    if (activeEntry === entry) activeEntry = null;
+    if (!entries.length) renderEmptyState();
+  }
+
+  /* ---------------- playback / pagination ---------------- */
+  var observer = new IntersectionObserver(function (list) {
+    list.forEach(function (rec) {
+      var entry = null;
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].el === rec.target) { entry = entries[i]; break; }
+      }
+      if (!entry) return;   /* interest / empty cells are not observed */
+      if (rec.intersectionRatio >= 0.5) {
+        setActive(entry);
+      } else if (activeEntry === entry) {
+        try { entry.video.pause(); } catch (e) {}
+      } else {
+        try { entry.video.pause(); } catch (e) {}
+      }
+    });
+  }, {root: feedEl, threshold: [0, 0.5, 1]});
+  function setActive(entry) {
+    if (activeEntry && activeEntry !== entry) {
+      try { activeEntry.video.pause(); } catch (e) {}
+    }
+    activeEntry = entry;
+    entry.video.muted = !soundOn;
+    var p = entry.video.play();
+    if (p) p.catch(function () {
+      entry.video.muted = true;
+      entry.video.play().catch(function () {});
+    });
+    var idx = entries.indexOf(entry);
+    if (idx >= 0 && idx >= entries.length - 2) fetchPage();
+  }
+  function markSeen(entry) {
+    var item = entry.item;
+    var id = item.post_id;
+    if (seenSet[id]) return;
+    seenSet[id] = true;
+    seenDistinct++;
+    lastSeenItem = item;
+    postBare('/views/' + id + '/seen').catch(function () {});
+    maybeInsertInterest(item);
+  }
+
+  /* ---------------- interest prompt cards ---------------- */
+  function maybeInsertInterest(item) {
+    if (seenDistinct < nextInterestAt) return;
+    nextInterestAt += 8;
+    var card = document.createElement('div');
+    card.className = 'mv-cell';
+    var inner = document.createElement('div');
+    inner.className = 'mv-interest-card';
+    var q = document.createElement('div');
+    q.className = 'q';
+    q.textContent = 'Are you interested in more like this?';
+    inner.appendChild(q);
+    var ref = document.createElement('div');
+    ref.className = 'ref';
+    if (item.hashtags && item.hashtags.length) {
+      ref.textContent = 'More #' + item.hashtags[0] + '?';
+    } else {
+      ref.textContent = 'More from ' + (item.author.name || 'them') + '?';
+    }
+    inner.appendChild(ref);
+    var row = document.createElement('div');
+    row.className = 'row';
+    var yes = document.createElement('button');
+    yes.type = 'button';
+    yes.className = 'btn';
+    yes.textContent = '👍 Show me more';
+    var no = document.createElement('button');
+    no.type = 'button';
+    no.className = 'btn-ghost';
+    no.textContent = '👎 Not interested';
+    var skip = document.createElement('button');
+    skip.type = 'button';
+    skip.className = 'sv-chipbtn';
+    skip.textContent = 'Skip';
+    row.appendChild(yes);
+    row.appendChild(no);
+    row.appendChild(skip);
+    inner.appendChild(row);
+    card.appendChild(inner);
+
+    function dismissCard(scrollNext) {
+      var next = card.nextElementSibling;
+      if (card.parentNode) card.parentNode.removeChild(card);
+      if (scrollNext && next) {
+        next.scrollIntoView({behavior: 'smooth', block: 'start'});
+      }
+    }
+    yes.addEventListener('click', function () {
+      postJSON('/views/' + item.post_id + '/interest', {interested: true});
+      dismissCard(true);
+    });
+    no.addEventListener('click', function () {
+      postJSON('/views/' + item.post_id + '/interest', {interested: false});
+      dismissCard(true);
+    });
+    skip.addEventListener('click', function () { dismissCard(false); });
+
+    var anchor = activeEntry ? activeEntry.el : null;
+    if (anchor && anchor.parentNode === feedEl) {
+      feedEl.insertBefore(card, anchor.nextSibling);
+    } else {
+      feedEl.appendChild(card);
+    }
+  }
+
+  /* ---------------- react / follow ---------------- */
+  function paintReact(entry) {
+    entry.reactCountEl.textContent = entry.item.reaction_count || 0;
+    entry.reactBtn.classList.toggle('reacted', !!entry.item.my_reaction);
+  }
+  function toggleReact(entry) {
+    var id = entry.item.post_id;
+    var params = new URLSearchParams();
+    params.set('kind', 'love');
+    postForm('/post/' + id + '/react', params)
+      .then(function (r) { return r.json().catch(function () { return null; }); })
+      .then(function (d) {
+        if (!d || !d.ok) return;
+        entry.item.reaction_count = d.likes;
+        entry.item.my_reaction = d.reacted ? (d.kind || 'love') : null;
+        paintReact(entry);
+        if (d.reacted) postJSON('/views/' + id + '/engage', {kind: 'react'});
+      })
+      .catch(function () {});
+  }
+  function paintFollow(entry) {
+    if (!entry.followBtn) return;
+    var following = !!entry.item.author.following;
+    entry.followBtn.textContent = following ? '✓' : '+';
+    entry.followBtn.classList.toggle('following', following);
+    entry.followBtn.title = following ? 'Following' : 'Follow';
+  }
+  function toggleFollow(entry) {
+    var author = entry.item.author;
+    var url = author.following
+      ? '/unfollow/' + author.id : '/follow/' + author.id;
+    postBare(url).then(function (r) {
+      if (!r.ok) return;
+      var now = !author.following;
+      entries.forEach(function (en) {
+        if (en.item.author.id === author.id) {
+          en.item.author.following = now;
+          paintFollow(en);
+        }
+      });
+    }).catch(function () {});
+  }
+
+  /* ---------------- ⋯ menu ---------------- */
+  function openMenu(entry) {
+    menuEntry = entry;
+    menuBackdrop.hidden = false;
+    menuSheet.hidden = false;
+  }
+  function closeMenu() {
+    menuBackdrop.hidden = true;
+    menuSheet.hidden = true;
+    menuEntry = null;
+  }
+  menuBackdrop.addEventListener('click', closeMenu);
+  document.getElementById('mv-menu-cancel')
+    .addEventListener('click', closeMenu);
+  document.getElementById('mv-menu-interested')
+    .addEventListener('click', function () {
+      if (!menuEntry) return closeMenu();
+      postJSON('/views/' + menuEntry.item.post_id + '/interest',
+               {interested: true});
+      closeMenu();
+    });
+  document.getElementById('mv-menu-not')
+    .addEventListener('click', function () {
+      if (!menuEntry) return closeMenu();
+      var entry = menuEntry;
+      postJSON('/views/' + entry.item.post_id + '/interest',
+               {interested: false});
+      closeMenu();
+      removeEntry(entry);
+    });
+
+  /* ---------------- sound ---------------- */
+  soundBtn.addEventListener('click', function () {
+    soundOn = !soundOn;
+    soundBtn.textContent = soundOn ? '🔊' : '🔇';
+    entries.forEach(function (en) { en.video.muted = !soundOn; });
+    if (activeEntry && soundOn) {
+      var p = activeEntry.video.play();
+      if (p) p.catch(function () {});
+    }
+  });
+
+  /* ---------------- comments sheet ---------------- */
+  function setReply(parentId, name) {
+    replyParentId = parentId;
+    if (parentId) {
+      replyNameEl.textContent = name || '';
+      replyBar.hidden = false;
+      commentInput.placeholder = 'Write a reply…';
+      commentInput.focus();
+    } else {
+      replyBar.hidden = true;
+      commentInput.placeholder = 'Add a comment…';
+    }
+  }
+  document.getElementById('mv-reply-cancel')
+    .addEventListener('click', function () { setReply(null, ''); });
+
+  function commentNode(c, topId) {
+    var row = document.createElement('div');
+    row.className = 'mv-comment';
+    var avWrap = document.createElement('span');
+    avWrap.className = 'mv-cav';
+    avWrap.appendChild(avatarNode(c.author_avatar, c.author_name, ''));
+    row.appendChild(avWrap);
+    var main = document.createElement('div');
+    main.className = 'mv-cmain';
+    var nm = document.createElement('div');
+    nm.className = 'mv-cname';
+    nm.textContent = c.author_name || '';
+    main.appendChild(nm);
+    var body = document.createElement('div');
+    body.className = 'mv-cbody';
+    /* body_html is pre-escaped + linkified server-side — by contract
+       this is the one field rendered as HTML. */
+    if (c.body_html != null) body.innerHTML = c.body_html;
+    else body.textContent = c.body || '';
+    main.appendChild(body);
+    var meta = document.createElement('div');
+    meta.className = 'mv-cmeta';
+    var when = document.createElement('span');
+    when.textContent = c.created_at || '';
+    meta.appendChild(when);
+    var replyBtn = document.createElement('button');
+    replyBtn.type = 'button';
+    replyBtn.className = 'mv-clink';
+    replyBtn.textContent = 'Reply';
+    replyBtn.addEventListener('click', function () {
+      setReply(topId, c.author_name || '');
+    });
+    meta.appendChild(replyBtn);
+    if (c.can_delete) {
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'mv-clink danger';
+      del.textContent = 'Delete';
+      del.addEventListener('click', function () {
+        postBare('/comment/' + c.id + '/delete').then(function () {
+          if (commentCtx) loadComments(commentCtx.postId);
+        }).catch(function () {
+          if (commentCtx) loadComments(commentCtx.postId);
+        });
+      });
+      meta.appendChild(del);
+    }
+    main.appendChild(meta);
+    row.appendChild(main);
+    return row;
+  }
+  function renderComments(listEl, comments) {
+    listEl.innerHTML = '';
+    if (!comments.length) {
+      var none = document.createElement('div');
+      none.className = 'mv-nocomments';
+      none.textContent = 'No comments yet — say something!';
+      listEl.appendChild(none);
+      return;
+    }
+    comments.forEach(function (c) {
+      listEl.appendChild(commentNode(c, c.id));
+      if (c.replies && c.replies.length) {
+        var wrap = document.createElement('div');
+        wrap.className = 'mv-replies';
+        c.replies.forEach(function (r) {
+          wrap.appendChild(commentNode(r, c.id));
+        });
+        listEl.appendChild(wrap);
+      }
+    });
+  }
+  function loadComments(postId) {
+    commentsList.innerHTML = '';
+    var loading = document.createElement('div');
+    loading.className = 'mv-nocomments';
+    loading.textContent = 'Loading…';
+    commentsList.appendChild(loading);
+    getJSON('/views/' + postId + '/comments').then(function (d) {
+      if (!commentCtx || commentCtx.postId !== postId) return;
+      if (!d || !d.ok) {
+        commentsList.innerHTML = '';
+        var err = document.createElement('div');
+        err.className = 'mv-nocomments';
+        err.textContent = 'Could not load comments.';
+        commentsList.appendChild(err);
+        return;
+      }
+      commentsBlocked.hidden = !d.comment_blocked;
+      commentForm.hidden = !!d.comment_blocked;
+      if (d.comment_blocked) replyBar.hidden = true;
+      renderComments(commentsList, d.comments || []);
+    }).catch(function () {
+      if (!commentCtx || commentCtx.postId !== postId) return;
+      commentsList.innerHTML = '';
+      var err = document.createElement('div');
+      err.className = 'mv-nocomments';
+      err.textContent = 'Could not load comments.';
+      commentsList.appendChild(err);
+    });
+  }
+  function openComments(entry) {
+    commentCtx = {postId: entry.item.post_id, entry: entry};
+    setReply(null, '');
+    commentInput.value = '';
+    commentsBlocked.hidden = true;
+    commentForm.hidden = false;
+    commentsBackdrop.hidden = false;
+    commentsSheet.hidden = false;
+    if (activeEntry) { try { activeEntry.video.pause(); } catch (e) {} }
+    loadComments(entry.item.post_id);
+  }
+  function closeComments() {
+    commentsBackdrop.hidden = true;
+    commentsSheet.hidden = true;
+    commentCtx = null;
+    setReply(null, '');
+    if (activeEntry) {
+      var p = activeEntry.video.play();
+      if (p) p.catch(function () {});
+    }
+  }
+  commentsBackdrop.addEventListener('click', closeComments);
+  document.getElementById('mv-comments-close')
+    .addEventListener('click', closeComments);
+  commentForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!commentCtx) return;
+    var body = commentInput.value.trim();
+    if (!body) return;
+    var ctx = commentCtx;
+    var params = new URLSearchParams();
+    params.set('body', body);
+    if (replyParentId) params.set('parent_id', replyParentId);
+    postForm('/post/' + ctx.postId + '/comment', params)
+      .then(function (r) {
+        if (!r.ok) return;
+        commentInput.value = '';
+        setReply(null, '');
+        ctx.entry.item.comment_count =
+          (ctx.entry.item.comment_count || 0) + 1;
+        ctx.entry.commentCountEl.textContent = ctx.entry.item.comment_count;
+        postJSON('/views/' + ctx.postId + '/engage', {kind: 'comment'});
+        if (commentCtx && commentCtx.postId === ctx.postId) {
+          loadComments(ctx.postId);
+        }
+      })
+      .catch(function () {});
+  });
+
+  /* ---------------- composer sheet ---------------- */
+  function openComposer() {
+    composerBackdrop.hidden = false;
+    composerSheet.hidden = false;
+  }
+  function closeComposer() {
+    composerBackdrop.hidden = true;
+    composerSheet.hidden = true;
+  }
+  document.getElementById('mv-post-btn')
+    .addEventListener('click', openComposer);
+  composerBackdrop.addEventListener('click', closeComposer);
+  document.getElementById('mv-composer-close')
+    .addEventListener('click', closeComposer);
+
+  /* ---------------- keys / boot ---------------- */
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (!commentsSheet.hidden) closeComments();
+    else if (!menuSheet.hidden) closeMenu();
+    else if (!composerSheet.hidden) closeComposer();
+  });
+
+  paintActiveFilter();
+  loadTrending();
+  loadFeed(true);
+})();
+</script>
+{% endblock %}

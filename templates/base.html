@@ -331,6 +331,10 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
   padding:11px 12px;font-size:15px;margin:8px 0 12px}
 #golive-error{color:var(--red);font-size:13px;font-weight:600;min-height:16px}
 @keyframes livepulse{0%,100%{opacity:1}50%{opacity:.55}}
+.photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.photo-cell{display:block;aspect-ratio:1/1;border-radius:10px;overflow:hidden;background:#e4e6eb;position:relative}
+.photo-cell img{width:100%;height:100%;object-fit:cover;display:block}
+.photo-cap{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);color:#fff;font-size:11px;padding:3px 6px}
 #call-mini.voice #call-mini-voice{flex-direction:row;justify-content:flex-start;gap:10px;
   padding:8px 104px 8px 12px;text-align:left}
 #call-mini.voice #call-mini-voice .nm{white-space:normal}
@@ -665,6 +669,8 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   </form>
   <nav class="topnav">
     <a class="nav-ic" href="/home" title="Home">🏠</a>
+    <a class="nav-ic" href="/lives" title="Lives">🔴</a>
+    <a class="nav-ic" href="/views" title="My Views">🎬</a>
     <a class="nav-ic" href="/messages" title="Messages">💬{% if unread_msgs %}<span class="badge">{{ unread_msgs }}</span>{% endif %}</a>
     <a class="nav-ic" href="/notifications" title="Notifications">🔔{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
     <a class="nav-ic" href="/friends" title="Friends">👥{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
@@ -689,6 +695,8 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   <a href="/friends"><span>👥</span> Friends</a>
   <a href="/search"><span>🔎</span> Find Friends</a>
   <a href="/discover"><span>🧭</span> Discover</a>
+  <a href="/lives"><span>🔴</span> Lives</a>
+  <a href="/views"><span>🎬</span> My Views</a>
   <a href="/messages"><span>💬</span> Messages</a>
   <a href="/pages"><span>📄</span> Pages</a>
   <a href="/hidden"><span>🙈</span> Hidden</a>
@@ -709,6 +717,8 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <a class="menu-item" href="/friends"><span class="menu-ic">👥</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
     <a class="menu-item" href="/search"><span class="menu-ic">🔎</span> Find Friends</a>
     <a class="menu-item" href="/discover"><span class="menu-ic">🧭</span> Discover</a>
+    <a class="menu-item" href="/lives"><span class="menu-ic">🔴</span> Lives</a>
+    <a class="menu-item" href="/views"><span class="menu-ic">🎬</span> My Views</a>
     <a class="menu-item" href="/messages"><span class="menu-ic">💬</span> Messages</a>
     <a class="menu-item" href="/pages"><span class="menu-ic">📄</span> Pages</a>
     <a class="menu-item" href="/hidden"><span class="menu-ic">🙈</span> Hidden</a>
