@@ -1,0 +1,25 @@
+<div class="mkt-card">
+  <a class="mkt-photo" href="/market/{{ l.id }}">
+    {% if l.first_photo %}<img src="{{ l.first_photo|e }}" alt="">
+    {% else %}<span class="mkt-ph">🛒</span>{% endif %}
+    <span class="mkt-price">{{ l.price|e }}</span>
+    {% if l.sold %}<span class="mkt-sold">SOLD</span>{% endif %}
+  </a>
+  <div class="mkt-cbody">
+    <a class="mkt-title" href="/market/{{ l.id }}">{{ l.title|e }}</a>
+    <div class="mkt-meta">{% if l.location %}{{ l.location|e }} · {% endif %}{{ l.created|e }}</div>
+    <div class="mkt-seller">
+      {% if l.seller_avatar %}<img src="{{ l.seller_avatar|e }}" alt="">{% endif %}
+      <a href="/user/{{ l.seller_id }}">{{ l.seller_name|e }}</a>
+      {% if l.saved %}<span class="mkt-saved-tag">♥ Saved</span>{% endif %}
+    </div>
+    {% if mine_page %}
+    <div class="mkt-actions">
+      <form class="inline-form" action="/market/{{ l.id }}/sold" method="post">
+        <button type="submit" class="btn-ghost btn-sm">{% if l.sold %}Mark available{% else %}Mark SOLD{% endif %}</button>
+      </form>
+      <a class="btn-ghost btn-sm" href="/market/{{ l.id }}/edit">✏️ Edit</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
