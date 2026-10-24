@@ -1,0 +1,2346 @@
+{% extends "base.html" %}
+{% block title %}{% if mode == 'live' %}🔴 {{ host.name|e }} is live — HERE{% else %}Live — HERE{% endif %}{% endblock %}
+{% block content %}
+
+{% if mode == 'ended' %}
+<div class="card" style="text-align:center;padding:34px 20px">
+  <div style="font-size:44px">📺</div>
+  <h2 style="margin:10px 0 6px">This live has ended</h2>
+  <p style="color:var(--muted)">{{ host.name|e }} was live{% if live.title %} — “{{ live.title|e }}”{% endif %}. Catch the next one!</p>
+  <a class="btn" href="/home" style="margin-top:14px;display:inline-block">🏠 Back home</a>
+</div>
+
+{% elif mode == 'unavailable' %}
+<div class="card" style="text-align:center;padding:34px 20px">
+  <div style="font-size:44px">📺</div>
+  <h2 style="margin:10px 0 6px">This live isn't available</h2>
+  <p style="color:var(--muted)">It may have ended, or it isn't open to you.</p>
+  <a class="btn" href="/home" style="margin-top:14px;display:inline-block">🏠 Back home</a>
+</div>
+
+{% else %}
+<style>
+:root{--lg-bg: rgba(14,16,20,0.16);--lg-bg-strong: rgba(14,16,20,0.28);
+  --lg-blur: blur(14px) saturate(1.5);--lg-border: 1px solid rgba(255,255,255,0.22);
+  --lg-text: #fff;--lg-text-shadow: 0 1px 8px rgba(0,0,0,0.55), 0 0 2px rgba(0,0,0,0.35)}
+/* ===== FULLSCREEN stage (TikTok-style): the live fills the whole
+   viewport (100dvh). #live-fs is a fixed full-viewport layer; the
+   stage fills it; the HOST tile (.stage-bg) is the full-bleed
+   background layer (video object-fit:cover) and the remaining
+   panel tiles form a compact overlay stack — a right-side vertical
+   column on tall/portrait stages, a bottom strip on wide ones.
+   Solo (no panel), the single host/local tile fills the stage. */
+.live-fs{position:fixed;inset:0;height:100dvh;background:#000;z-index:1150;
+  overflow:hidden}
+.live-fs[hidden]{display:none}
+#live-stage-slot{position:absolute;inset:0}
+.live-stage{position:absolute;inset:0;height:100%;background:#000;overflow:hidden}
+.live-grid{position:absolute;inset:0;background:#000}
+.live-grid.cols-1 .live-tile{position:absolute;inset:0;width:100%;height:100%;
+  aspect-ratio:auto;border-radius:0}
+.live-tile.stage-bg{position:absolute;inset:0;width:100%;height:100%;
+  aspect-ratio:auto;border-radius:0;z-index:0}
+.live-grid.has-panel{display:flex;flex-direction:column;align-items:flex-end;
+  overflow-y:auto;overflow-x:hidden;padding:64px 8px 110px;gap:6px}
+.live-grid.has-panel .live-tile{position:relative;width:min(32%,180px);
+  aspect-ratio:3/4;flex:none;z-index:2}
+.live-grid.has-panel .live-tile.stage-bg{position:absolute;inset:0;width:100%;
+  height:100%;aspect-ratio:auto;z-index:0}
+@media (orientation:landscape){
+  .live-grid.has-panel{flex-direction:row;align-items:flex-end;
+    justify-content:flex-start;overflow-x:auto;overflow-y:hidden;
+    padding:8px 8px 96px}
+  .live-grid.has-panel .live-tile{height:min(30%,170px);width:auto;
+    aspect-ratio:3/4}
+  .live-grid.has-panel .live-tile.stage-bg{width:100%;height:100%}
+}
+.live-tile{position:relative;aspect-ratio:1/1;background:#181818;border-radius:10px;
+  overflow:hidden}
+.live-tile video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  background:#181818}
+.live-tile video.localvid{transform:scaleX(-1)}
+.live-tile .tile-ph{position:absolute;inset:0;display:flex;flex-direction:column;gap:8px;
+  align-items:center;justify-content:center;color:#fff;background:#242526}
+.live-tile .tile-ph img{width:64px;height:64px;border-radius:50%;object-fit:cover}
+.live-tile .tile-ph .ph-init{width:64px;height:64px;border-radius:50%;background:#3a3b3d;
+  display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800}
+.live-tile .tile-ph .ph-name{font-size:13px;color:#ddd;font-weight:600}
+.live-tile.has-video .tile-ph{display:none}
+.live-tile .tile-label{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;
+  align-items:center;gap:5px;padding:2px 6px;color:#fff;font-size:11px;
+  font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,.9);
+  background:var(--lg-bg);border-top:var(--lg-border);
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-tile .tile-label .tname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-conn-dot{width:9px;height:9px;border-radius:50%;background:#8a8d91;flex:none;
+  cursor:pointer;border:1px solid rgba(255,255,255,.75);padding:0}
+.live-conn-dot.ok{background:#31a24c}
+.live-conn-dot.bad{background:#e02b20}
+.live-tile .tile-menu{position:absolute;top:6px;right:6px;z-index:3;width:30px;height:30px;
+  border-radius:50%;border:var(--lg-border);background:var(--lg-bg);color:#fff;font-size:16px;
+  font-weight:800;cursor:pointer;line-height:1;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-tile .tile-menu:hover{background:rgba(255,255,255,.22)}
+.live-topbar{position:absolute;top:0;left:0;right:0;z-index:4;display:flex;gap:8px;
+  align-items:flex-start;padding:6px 10px;background:var(--lg-bg);
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  border-bottom:var(--lg-border)}
+.live-pill{background:var(--red);color:#fff;font-weight:800;font-size:12px;
+  border-radius:6px;padding:3px 8px;letter-spacing:.4px;white-space:nowrap}
+.live-pill .dot{animation:livepulse 1.2s infinite}
+@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.25}}
+.live-meta{color:#fff;min-width:0}
+.live-host{font-weight:800;font-size:13px;text-shadow:0 1px 4px rgba(0,0,0,.8)}
+.live-title{font-size:13px;color:#eee;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;text-shadow:0 1px 4px rgba(0,0,0,.8)}
+.live-stats{margin-left:auto;text-align:right;color:#fff;font-size:11px;
+  font-weight:700;white-space:nowrap;text-shadow:0 1px 4px rgba(0,0,0,.8)}
+.live-statusline{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
+  z-index:5;background:var(--lg-bg-strong);border:var(--lg-border);color:#fff;border-radius:10px;
+  padding:10px 16px;font-size:14px;font-weight:600;text-align:center;max-width:86%;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-hearts{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:6}
+.live-heart{position:absolute;opacity:0;animation:heartfloat 2.4s ease-out forwards;
+  text-shadow:0 2px 8px rgba(0,0,0,.4);will-change:transform,opacity}
+@keyframes heartfloat{0%{opacity:0;transform:translate(0,0) scale(.6)}
+  12%{opacity:1}100%{opacity:0;transform:translate(var(--dx,0px),-44vh) scale(1.15)}}
+/* ===== controls / action bar ===== */
+.live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
+.live-ctl{background:var(--lg-bg);color:#fff;border:var(--lg-border);border-radius:999px;
+  height:38px;padding:0 10px;font-size:12.5px;font-weight:700;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-ctl[hidden],.live-rail button[hidden]{display:none}
+.live-ctl.off{background:var(--red);border-color:var(--red-dark)}
+.live-ctl.danger{background:var(--red);border-color:var(--red-dark)}
+.live-ctl:disabled{opacity:.45;cursor:default}
+.live-like-btn{background:var(--red);border:1px solid var(--red-dark);color:#fff;
+  border-radius:999px;padding:12px 26px;font-size:19px;font-weight:800;cursor:pointer;
+  box-shadow:0 4px 14px rgba(212,31,46,.4)}
+.live-like-btn:active{transform:scale(1.12)}
+.live-panel{background:var(--lg-bg-strong);border:var(--lg-border);border-radius:12px;
+  padding:10px 12px;margin-bottom:12px;color:var(--lg-text);
+  text-shadow:var(--lg-text-shadow);
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-comments{max-height:38vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.live-comment{display:flex;gap:8px;align-items:flex-start;font-size:14px}
+.live-comment .av-32{width:32px;height:32px;border-radius:50%;object-fit:cover;flex:none}
+.live-comment .ph-32{width:32px;height:32px;border-radius:50%;background:#3a3b3d;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:800;flex:none}
+.live-comment .who{font-weight:800}
+.live-comment .hosttag{background:var(--red);color:#fff;font-size:10px;font-weight:800;
+  border-radius:5px;padding:1px 5px;margin-left:4px;vertical-align:2px}
+.live-comment .del{margin-left:auto;background:none;border:none;cursor:pointer;
+  font-size:13px;opacity:.65;flex:none}
+/* ===== floating comments over the stage ===== */
+.live-float{position:absolute;left:10px;bottom:25%;z-index:7;width:min(72%,420px);max-height:40%;display:flex;pointer-events:none}
+.live-float .live-comments{pointer-events:auto;width:100%;max-height:100%;overflow-y:auto;display:flex;flex-direction:column;gap:6px;background:transparent;padding-right:2px;scrollbar-width:thin}
+.live-float .live-comment{background:var(--lg-bg);border:var(--lg-border);border-radius:14px;padding:5px 10px 5px 6px;color:var(--lg-text);text-shadow:var(--lg-text-shadow);align-items:center;align-self:flex-start;max-width:100%;backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-float .live-comment .av-32, .live-float .live-comment .ph-32{width:24px;height:24px;font-size:12px}
+.live-float .live-comment .who{color:#ffb3ba}
+.live-float .live-comment .del{color:#fff}
+.live-notice{align-self:center;background:var(--lg-bg);border:var(--lg-border);color:#fff;text-shadow:var(--lg-text-shadow);border-radius:999px;padding:3px 12px;font-size:12.5px;font-weight:600;text-align:center;backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-comment-form{display:flex;gap:8px;margin-top:10px}
+.live-comment-form input{flex:1;height:36px;border:var(--lg-border);border-radius:999px;
+  padding:0 14px;font-size:14px;min-width:0;background:rgba(255,255,255,.14);color:#fff}
+.live-comment-form input::placeholder{color:rgba(255,255,255,.6)}
+.live-req{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.16)}
+.live-req:last-child{border-bottom:none}
+.live-req .av-32{width:32px;height:32px;border-radius:50%;object-fit:cover;flex:none}
+.live-req .ph-32{width:32px;height:32px;border-radius:50%;background:#3a3b3d;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:800;flex:none}
+.live-req .kind{font-size:12px;color:rgba(255,255,255,.75)}
+.live-req .mini-btn{background:rgba(255,255,255,.16);color:#fff;border:var(--lg-border);border-radius:999px;padding:6px 11px;
+  font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
+.live-req .mini-btn:hover{background:rgba(255,255,255,.28)}
+.live-err{background:var(--lg-bg-strong);color:#fff;border:1px solid rgba(255,120,130,.5);border-radius:12px;
+  padding:12px 14px;margin-bottom:12px;font-size:14px;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-muted-note{background:var(--lg-bg-strong);color:#ffe9a8;border:1px solid rgba(255,210,110,.45);border-radius:12px;
+  padding:10px 14px;margin-bottom:12px;font-size:14px;font-weight:600;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+/* ===== manage sheet (portaled to <body> by JS; same z pattern as
+   base.html's cmenu/dmenu sheets: backdrop 1990, sheet 2000) ===== */
+#live-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
+#live-sheet-backdrop[hidden]{display:none}
+#live-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(92vw,340px);max-height:84vh;overflow-y:auto;background:var(--lg-bg-strong);
+  color:var(--lg-text);border:var(--lg-border);border-radius:12px;padding:12px;
+  box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+#live-sheet[hidden]{display:none}
+#live-sheet .cmenu-item{color:#fff;padding:10px 8px;font-size:13px}
+#live-sheet .cmenu-item:hover{background:rgba(255,255,255,.14)}
+#live-sheet .cmenu-item.danger{color:#ff9aa4}
+#live-sheet .aud-title{color:#fff}
+#live-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:2100;
+  width:min(88vw,380px);background:var(--lg-bg-strong);color:#fff;border:1px solid rgba(212,31,46,.55);
+  border-radius:10px;padding:10px 14px;font-size:14px;text-align:center;
+  box-shadow:0 8px 24px rgba(0,0,0,.4);
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+#live-toast[hidden]{display:none}
+/* ===== chrome: auto-fading overlay UI (Build G translucency) =====
+   #live-chrome wraps the top bar, the right action rail and the
+   bottom control bar. After ~3.5s without pointer/touch activity
+   on the stage, #live-fs gains .chrome-dim and the chrome fades to
+   opacity .08 — pointer-events stay ON (the wrapper itself is
+   click-through, its children are not), so a tap both wakes the
+   chrome and works. The ✕ exit button is NOT inside the wrapper:
+   it is exempt from the full dim and never drops below .35. */
+.live-chrome{position:absolute;inset:0;z-index:9;pointer-events:none;
+  transition:opacity .4s ease}
+.live-chrome>*{pointer-events:auto}
+#live-fs.chrome-dim .live-chrome{opacity:.08}
+#live-exit{position:absolute;top:10px;left:10px;z-index:11;width:44px;height:44px;
+  border-radius:50%;border:var(--lg-border);background:var(--lg-bg);color:#fff;
+  font-size:17px;font-weight:800;cursor:pointer;line-height:1;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  transition:opacity .4s ease}
+#live-fs.chrome-dim #live-exit{opacity:.35}
+.live-topbar{padding-left:60px;transition:opacity .4s ease}
+#live-fs.chrome-dim .live-topbar{opacity:.08}
+.live-stage.in-mini .live-topbar{display:none}
+.live-rail{position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  display:flex;flex-direction:column;gap:10px;align-items:center;z-index:9}
+.live-rail .live-like-btn{box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.live-rail button{width:40px;height:40px;border-radius:50%;padding:0;display:flex;
+  align-items:center;justify-content:center;font-size:19px;background:var(--lg-bg);
+  border:var(--lg-border);backdrop-filter:var(--lg-blur);
+  -webkit-backdrop-filter:var(--lg-blur);color:#fff;box-shadow:none;
+  flex-direction:column;line-height:1}
+#live-like-count{font-size:10px;font-weight:800;margin-top:1px}
+.live-rail .live-like-btn{box-shadow:none}
+.live-controls{position:absolute;left:0;right:0;bottom:0;margin:0;z-index:9;
+  padding:6px 10px;background:var(--lg-bg);
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  border-top:var(--lg-border)}
+@media (prefers-reduced-motion: reduce){
+  .live-chrome,#live-exit{transition:none}
+}
+/* ===== overlay stack: poll/game cards, panels, comment form =====
+   Everything that used to sit BELOW the stage now floats over it,
+   translucent (Build G), in a scrollable stack above the bottom
+   control bar. Reachable in fullscreen; simply not reachable
+   while the live is minimized (the tile has no panel buttons). */
+.live-overlay-stack{position:absolute;left:10px;bottom:84px;z-index:8;
+  width:min(94vw,430px);max-height:46%;overflow-y:auto;display:flex;
+  flex-direction:column;gap:8px;align-items:flex-start}
+.live-overlay-stack .live-panel{margin-bottom:0;max-width:min(86vw,340px);width:100%}
+#live-join-msg{text-shadow:var(--lg-text-shadow)}
+.live-overlay-stack:empty{display:none}
+/* ===== minimized live: floating tile + browse mode ===== */
+#live-mini{position:fixed;right:12px;bottom:12px;width:min(34vw,180px);
+  aspect-ratio:3/4;z-index:1600;background:#000;
+  border:var(--lg-border);border-radius:12px;overflow:hidden;
+  box-shadow:0 10px 28px rgba(0,0,0,.5);color:#fff;touch-action:none;cursor:pointer}
+#live-mini[hidden]{display:none}
+#live-mini-slot{position:absolute;inset:0}
+.live-stage.in-mini .live-float{display:none}
+.live-stage.in-mini .live-statusline{display:none}
+.live-stage.in-mini .live-grid.has-panel{padding:4px;gap:3px}
+.live-stage.in-mini .live-grid.has-panel .live-tile{width:46%}
+#live-mini-close{position:absolute;top:4px;right:4px;z-index:3;width:26px;height:26px;
+  border-radius:50%;border:var(--lg-border);background:var(--lg-bg);color:#fff;
+  font-size:13px;font-weight:800;cursor:pointer;line-height:1;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+#live-mini-host{position:absolute;left:0;right:0;bottom:0;z-index:3;display:flex;
+  gap:6px;align-items:center;padding:5px 6px;background:var(--lg-bg);
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  font-size:11.5px;font-weight:800}
+#live-mini-host[hidden]{display:none}
+#live-mini-end{background:var(--red);border:none;color:#fff;border-radius:999px;
+  padding:4px 10px;font-size:11.5px;font-weight:800;cursor:pointer;margin-left:auto}
+/* ===== browse mode section (server-rendered; shown minimized) == */
+#live-browse[hidden]{display:none}
+.live-browse-lives{display:flex;gap:10px;overflow-x:auto;padding:4px 0 10px}
+.live-browse-card{flex:none;width:150px;background:var(--card);
+  border:1px solid var(--border);border-radius:12px;padding:10px;color:inherit;
+  display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.live-browse-card img{width:44px;height:44px;border-radius:50%;object-fit:cover}
+.live-browse-card .nm{font-weight:800;font-size:14px}
+.live-browse-card .ti{font-size:12.5px;color:var(--muted);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.live-browse-card .vw{font-size:12px;font-weight:700;color:var(--red)}
+</style>
+
+<div class="live-fs" id="live-fs">
+ <div id="live-stage-slot">
+<div class="live-stage" id="live-stage">
+  <div class="live-grid cols-1" id="live-grid"></div>
+  <div class="live-topbar">
+    <span class="live-pill"><span class="dot">●</span> LIVE</span>
+    <div class="live-meta">
+      <div class="live-host">{{ host.name|e }}</div>
+      {% if live.title %}<div class="live-title">{{ live.title|e }}</div>{% endif %}
+    </div>
+    <div class="live-stats">
+      <div>👁 <span id="live-viewers">0</span> · ❤️ <span id="live-likes">0</span></div>
+      <div>⏱ <span id="live-timer">0:00</span></div>
+    </div>
+  </div>
+  <div class="live-statusline" id="live-status">Connecting…</div>
+  <div class="live-hearts" id="live-hearts"></div>
+  <div class="live-float" id="live-float"><div class="live-comments" id="live-comments"></div></div>
+</div>
+
+ </div>
+ <button type="button" id="live-exit" title="Shrink live">✕</button>
+ <div class="live-chrome" id="live-chrome">
+ <div class="live-rail">
+  <button type="button" class="live-like-btn" id="ctl-like">❤️ <span id="live-like-count">0</span></button>
+  <button type="button" class="live-like-btn" id="ctl-share" data-copy-path="/l/{{ live.id }}" title="Share this live">🔗</button>
+  <button type="button" class="live-ctl" id="ctl-comment-focus" title="Comment">💬</button>
+  <button type="button" class="live-ctl" id="ctl-poll" title="Poll / Trivia" hidden>📊</button>
+  <button type="button" class="live-ctl" id="ctl-games" title="🎮 Games" hidden>🎮</button>
+ </div>
+<div class="live-controls" id="live-controls">
+  <!-- panel members -->
+  <button type="button" class="live-ctl" id="ctl-mute" hidden>🎤 Mute</button>
+  <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
+  <button type="button" class="live-ctl" id="ctl-flip" hidden>🔄 Flip</button>
+  <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>🚪 Leave panel</button>
+  <!-- host -->
+  <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
+  <!-- watcher -->
+  <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
+  <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
+  <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
+  <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
+</div>
+ </div>
+ <div class="live-overlay-stack" id="live-overlay-stack">
+<div class="live-err" id="live-error" hidden>
+  <div id="live-error-text"></div>
+  <button type="button" class="live-ctl" id="live-error-retry" style="margin-top:8px">🔁 Try again</button>
+</div>
+
+<div id="live-invite-banner" class="live-panel" hidden style="border-color:rgba(255,150,160,.45)">
+  <span id="live-invite-text"></span>
+  <span style="display:inline-flex;gap:6px;margin-left:8px">
+    <button type="button" class="btn btn-sm" id="live-invite-join">Join</button>
+    <button type="button" class="btn-ghost btn-sm" id="live-invite-no">No thanks</button>
+  </span>
+</div>
+
+<div class="live-panel" id="live-poll-card" hidden style="border-color:rgba(212,31,46,.55)">
+  <div style="font-weight:800;margin-bottom:8px">📊 <span id="live-poll-q"></span></div>
+  <div id="live-poll-actions" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  <div id="live-poll-results" hidden></div>
+  <div id="live-poll-note" style="font-size:13px;color:rgba(255,255,255,.78);margin-top:6px"></div>
+</div>
+<div class="live-panel" id="live-poll-closed" hidden style="border-color:rgba(255,150,160,.45)">
+  <div id="live-poll-closed-text" style="font-weight:700"></div>
+  <div id="live-poll-closed-detail" style="font-size:13.5px;margin-top:4px"></div>
+</div>
+<div class="live-panel" id="live-game-card" hidden style="border-color:rgba(212,31,46,.55)">
+  <div style="font-weight:800;margin-bottom:8px" id="live-game-title"></div>
+  <div id="live-game-guess-ui" hidden>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="live-game-guess" type="number" min="1" max="100" placeholder="Your guess (1–100)"
+        style="flex:1;min-width:130px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:15px">
+      <button type="button" class="btn" id="live-game-guess-btn">Guess</button>
+    </div>
+  </div>
+  <div id="live-game-dice-ui" hidden>
+    <button type="button" class="btn" id="live-game-roll" style="font-size:18px;padding:12px 26px">🎲 Roll</button>
+  </div>
+  <div id="live-game-players" style="margin-top:8px"></div>
+  <div id="live-game-note" style="font-size:13px;color:rgba(255,255,255,.78);margin-top:6px"></div>
+</div>
+<div class="live-panel" id="live-game-closed" hidden style="border-color:rgba(255,150,160,.45)">
+  <div id="live-game-closed-text" style="font-weight:700"></div>
+  <div id="live-game-closed-detail" style="font-size:13.5px;margin-top:4px"></div>
+</div>
+<div id="live-join-msg" style="font-size:13px;color:rgba(255,255,255,.88);margin:-6px 0 10px" hidden></div>
+<div id="live-muted-note" class="live-muted-note" hidden>🔇 You were muted by the host/admin — your mic is off for everyone until they unmute you.</div>
+<div id="live-member-banner" class="live-panel" hidden style="border-color:rgba(255,150,160,.45)">
+  🎥 <strong>You're on the panel!</strong> Everyone watching can see and hear you.
+</div>
+
+<div class="live-panel" id="live-requests-panel" hidden>
+  <div style="font-weight:800;margin-bottom:4px">✋ Panel requests &amp; invites</div>
+  <div id="live-requests"></div>
+</div>
+
+<div class="live-panel" id="live-people-panel" hidden>
+  <div style="font-weight:800;margin-bottom:4px">👥 In this live</div>
+  <div id="live-watchers"></div>
+</div>
+
+<div class="live-panel">
+  <div style="font-weight:800;margin-bottom:8px">💬 Live comments</div>
+  <form class="live-comment-form" id="live-comment-form">
+    <input id="live-comment-input" maxlength="300" autocomplete="off"
+      placeholder="Say something nice…">
+    <button type="submit" class="btn">Send</button>
+  </form>
+</div>
+
+ </div>
+</div>
+<div id="live-mini" hidden>
+  <div id="live-mini-slot"></div>
+  <button type="button" id="live-mini-close" title="Leave live">✕</button>
+  <div id="live-mini-host" hidden><span>🔴 You're live</span><button type="button" id="live-mini-end">End</button></div>
+</div>
+<div id="live-browse" hidden>
+  <h2 style="margin:14px 0 6px">🔴 More lives</h2>
+  {% if more_lives %}
+  <div class="live-browse-lives">
+    {% for l in more_lives %}
+    <a class="live-browse-card" href="/live/{{ l.id }}">
+      {% if l.avatar %}<img src="{{ l.avatar|e }}" alt="">{% else %}<span class="av-ph av-40">{{ l.name[:1]|upper|e }}</span>{% endif %}
+      <span class="nm">{{ l.name|e }}</span>
+      {% if l.title %}<span class="ti">{{ l.title|e }}</span>{% endif %}
+      <span class="vw">👁 {{ l.viewers }} watching</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:var(--muted)">No other lives right now.</p>
+  {% endif %}
+  <h2 style="margin:16px 0 8px">Latest posts</h2>
+  {% for post in browse_posts %}
+  {% include "partials/post_card.html" %}
+  {% else %}
+  <div class="card"><p style="color:var(--muted)">No posts yet.</p></div>
+  {% endfor %}
+</div>
+<!-- Manage sheet: moved to <body> by JS on init (body-level sheet
+     pattern — sheets inside cards get trapped by stacking contexts). -->
+<div id="live-sheet-backdrop" hidden></div>
+<div id="live-sheet" hidden>
+  <div class="aud-title" id="live-sheet-title">Manage</div>
+  <div id="live-sheet-actions"></div>
+  <button type="button" class="cmenu-item" id="live-sheet-cancel">Cancel</button>
+</div>
+<div id="live-toast" hidden></div>
+
+<script>
+var LIVE_BOOT = {{ boot|safe }};
+</script>
+<script>
+/* Pure room-arrival diff: panel arrivals first, then watcher joins.
+   A person on the panel never also gets a join event; a null prev
+   (first snapshot) yields no events, so nobody is announced on load. */
+function liveRoomDiff(prev, next){
+  var events=[];
+  if(!prev || !next) return events;
+  var id;
+  for(id in next.panel){
+    if(!prev.panel[id]) events.push({kind:'panel', id:+id, name:next.panel[id]});
+  }
+  for(id in next.viewers){
+    if(!prev.viewers[id] && !next.panel[id]) events.push({kind:'join', id:+id, name:next.viewers[id]});
+  }
+  return events;
+}
+</script>
+<script>
+(function(){
+  'use strict';
+  var B = LIVE_BOOT;
+  /* ICE config: GET /ice.json is the single source (app.py, with the
+     HERE_ICE_SERVERS env override). The literal below is the FALLBACK
+     (same defaults as base.html's calls copy) used when the fetch
+     fails or takes >1.5s — peer creation never waits longer than
+     that race; new RTCPeerConnections read the current ICE_CONFIG,
+     which the fetch replaces as soon as it lands (normally long
+     before the first peer is created). */
+  var ICE_CONFIG = {iceServers: [
+    {urls: 'stun:stun.l.google.com:19302'},
+    {urls: 'stun:stun1.l.google.com:19302'},
+    {urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject'},
+    {urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject'},
+    {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'}
+  ]};
+  var _iceConfigPromise = null;
+  function getIceConfig(){
+    if (_iceConfigPromise) return _iceConfigPromise;
+    var fetched = fetch('/ice.json', {credentials: 'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.iceServers && d.iceServers.length)
+          return {iceServers: d.iceServers};
+        return ICE_CONFIG;
+      })
+      .catch(function(){ return ICE_CONFIG; });
+    var timeout = new Promise(function(res){
+      setTimeout(function(){ res(ICE_CONFIG); }, 1500);
+    });
+    _iceConfigPromise = Promise.race([fetched, timeout])
+      .then(function(cfg){ ICE_CONFIG = cfg; return cfg; });
+    return _iceConfigPromise;
+  }
+  getIceConfig();
+  var $ = function(id){ return document.getElementById(id); };
+  var stageEl = $('live-stage'), gridEl = $('live-grid'),
+      heartsEl = $('live-hearts'), statusEl = $('live-status'),
+      errBox = $('live-error'), errText = $('live-error-text'),
+      viewersEl = $('live-viewers'), likesEl = $('live-likes'),
+      likeCountEl = $('live-like-count'), timerEl = $('live-timer'),
+      commentsEl = $('live-comments');
+
+  /* ---- panel / roster state (panel[] order IS the tile order) ---- */
+  var panel = [];                 /* [{user_id,name,avatar,role,admin,muted}] */
+  var panelById = {};             /* user_id -> panel row */
+  var watchersList = [];          /* host/admin only: room people rows */
+  var inviteCandidates = [];      /* host/admin only: friends ∪ following ∪ watchers */
+  var audienceIds = [];           /* viewer ids I publish to (viewer_list) */
+  var myPanel = null;             /* {am_member,muted,is_admin,is_host} */
+  var amMember = (B.role === 'host' || B.role === 'guest');
+  var membershipKnown = false;    /* true after the first state poll */
+  var isHost = (B.me === (B.host && B.host.id));
+  var likeCount = 0, lastLikeCursor = 0, ownLikesPending = 0;
+  var pendingInvites = [];
+  var activePoll = null;          /* state payload's active_poll */
+  var closedPoll = null;          /* state payload's last_closed_poll */
+  var activeGame = null;          /* state payload's active_game */
+  var lastGame = null;            /* state payload's last_game */
+
+  var peers = {};   /* uid -> {pc, iceQ, offered, helloSent, remoteKind, videoEl} */
+  var tiles = {};   /* uid -> {el, video, ph, labelName, badges, menuBtn, member} */
+  var myStream = null, mediaReady = false, facing = 'user';
+  var myMicOn = true, myCamOn = true, forcedMuted = false;
+  /* Remote videos START MUTED (iOS autoplay requires it; unmuted
+     autoplay is what silently failed on phones). Sound is one tap
+     on the 🔊 button — shown to panel members too, not just
+     watchers, since members need it to hear the other panelists. */
+  var soundOff = true;
+  var lastSignal = 0, lastComment = 0, renderedComments = {};
+  var roomSnap = null;
+  var roomSnapHadViewers = false;
+  var ended = false, startedAt = Date.now();
+  try {
+    var t0 = Date.parse(B.created_at);
+    if (!isNaN(t0)) startedAt = t0;
+  } catch (e) {}
+  var timers = [];
+
+  function jget(url){
+    return fetch(url, {credentials: 'same-origin'})
+      .then(function(r){ return r.json(); });
+  }
+  function jpost(url, body){
+    return fetch(url, {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: body ? JSON.stringify(body) : '{}'})
+      .then(function(r){ return r.json().catch(function(){ return {}; }); });
+  }
+  function post(path, body){ return jpost('/live/' + B.id + path, body); }
+  function signal(toId, kind, payload){
+    return post('/signal', {to_id: toId, kind: kind, payload: payload || ''})
+      .catch(function(){});
+  }
+  function setStatus(t){
+    if (!t){ statusEl.hidden = true; return; }
+    statusEl.hidden = false;
+    statusEl.textContent = t;
+  }
+  function every(ms, fn){ timers.push(setInterval(fn, ms)); }
+
+  /* ---- toast (the old page had none; small inline helper) ---- */
+  var toastEl = $('live-toast'), toastTimer = null;
+  function toast(msg){
+    if (!msg) return;
+    toastEl.textContent = msg;
+    toastEl.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toastEl.hidden = true; }, 3200);
+  }
+  /* Action helper: POST, toast the server's error (or a success
+     note), then refresh state so rosters/sheets stay honest. */
+  function act(path, body, okMsg){
+    return post(path, body).then(function(d){
+      if (d && d.ok){ if (okMsg) toast(okMsg); }
+      else toast((d && d.error) || 'That did not work.');
+      pollState();
+      return d;
+    }).catch(function(){ toast('That did not work.'); });
+  }
+
+  /* ---- role helpers ---- */
+  function myIndex(){ return panelIndexOf(B.me); }
+  function panelIndexOf(uid){
+    for (var i = 0; i < panel.length; i++)
+      if (panel[i].user_id === uid) return i;
+    return -1;
+  }
+  function iAmHost(){ return !!(myPanel && myPanel.is_host) || isHost; }
+  function iAmAdmin(){ return !!(myPanel && myPanel.is_admin); }
+  function canManage(){ return iAmHost() || iAmAdmin(); }
+  /* Hierarchy for showing actions: the host sees actions on everyone;
+     an admin sees none on the host or on other admins. The server
+     still enforces everything — this only keeps the UI honest. */
+  function canActOn(target){
+    if (!target || target.user_id === B.me) return false;
+    if (iAmHost()) return true;
+    if (iAmAdmin()) return !(target.role === 'host' || target.admin);
+    return false;
+  }
+
+  /* ---------------- tiles ---------------- */
+  function gridCols(n){
+    if (n <= 1) return 1;
+    if (n === 2) return 2;
+    if (n <= 4) return 2;
+    if (n <= 9) return 3;
+    return 4;
+  }
+  function ensureTile(member){
+    var uid = member.user_id;
+    if (tiles[uid]){ updateTile(member); return tiles[uid]; }
+    var el = document.createElement('div');
+    el.className = 'live-tile';
+    var ph = document.createElement('div');
+    ph.className = 'tile-ph';
+    if (member.avatar){
+      var img = document.createElement('img');
+      img.src = member.avatar; img.alt = '';
+      ph.appendChild(img);
+    } else {
+      var ini = document.createElement('span');
+      ini.className = 'ph-init';
+      ini.textContent = (member.name || '?').charAt(0).toUpperCase();
+      ph.appendChild(ini);
+    }
+    var phName = document.createElement('span');
+    phName.className = 'ph-name';
+    phName.textContent = member.name || '';
+    ph.appendChild(phName);
+    var video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    /* EVERY tile starts muted: the local one forever (feedback),
+       remote ones until the 🔊 toggle (iOS autoplay policy). */
+    video.muted = true;
+    if (uid === B.me){
+      video.className = 'localvid';
+    }
+    var label = document.createElement('div');
+    label.className = 'tile-label';
+    var dot = null;
+    if (uid !== B.me){
+      dot = document.createElement('button');
+      dot.type = 'button';
+      dot.className = 'live-conn-dot';
+      dot.title = 'Connection status';
+      dot.dataset.state = 'new';
+      (function(targetId){
+        dot.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          if (dot.dataset.state === 'bad') manualRestart(targetId);
+        });
+      })(uid);
+      label.appendChild(dot);
+    }
+    var tname = document.createElement('span');
+    tname.className = 'tname';
+    var badges = document.createElement('span');
+    badges.className = 'tile-badges';
+    label.appendChild(tname);
+    label.appendChild(badges);
+    var menuBtn = document.createElement('button');
+    menuBtn.type = 'button';
+    menuBtn.className = 'tile-menu';
+    menuBtn.textContent = '⋯';
+    menuBtn.title = 'Manage';
+    menuBtn.hidden = true;
+    (function(targetId){
+      menuBtn.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        openManageSheet(targetId);
+      });
+    })(uid);
+    el.appendChild(ph);
+    el.appendChild(video);
+    el.appendChild(label);
+    el.appendChild(menuBtn);
+    gridEl.appendChild(el);
+    tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
+                  badges: badges, menuBtn: menuBtn, member: member,
+                  dot: dot};
+    updateTile(member);
+    var P = peers[uid];
+    if (P) P.videoEl = video;
+    return tiles[uid];
+  }
+  function updateTile(member){
+    var T = tiles[member.user_id];
+    if (!T) return;
+    T.member = member;
+    T.labelName.textContent =
+      (member.user_id === B.me ? 'You' : (member.name || ''));
+    var b = '';
+    if (member.role === 'host') b += '👑 ';
+    if (member.admin) b += '🛡 ';
+    if (member.muted) b += '🔇';
+    T.badges.textContent = b;
+    T.el.classList.toggle('stage-bg', member.role === 'host');
+    T.menuBtn.hidden = !(canManage() && canActOn(member));
+  }
+  function removeTile(uid){
+    var T = tiles[uid];
+    if (!T) return;
+    delete tiles[uid];
+    try { T.video.srcObject = null; } catch (e) {}
+    if (T.el.parentNode) T.el.parentNode.removeChild(T.el);
+  }
+  /* Re-render = move the EXISTING tile nodes into panel order
+     (appendChild on a node already in the grid just moves it — the
+     <video> elements and their streams are never recreated). */
+  function renderTiles(){
+    panel.forEach(function(m){
+      var T = ensureTile(m);
+      gridEl.appendChild(T.el);
+      updateTile(m);
+    });
+    Object.keys(tiles).forEach(function(uid){
+      if (!panelById[uid]) removeTile(+uid);
+    });
+    gridEl.className = 'live-grid cols-' + gridCols(panel.length)
+      + (panel.length > 1 ? ' has-panel' : '');
+  }
+
+  /* ---------------- local media (panel members) ---------------- */
+  function acquireMedia(){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      return Promise.reject(new Error('nomedia'));
+    }
+    return navigator.mediaDevices.getUserMedia({
+      audio: true, video: {facingMode: facing}});
+  }
+  function showMediaError(){
+    errText.textContent = 'Camera/mic blocked — allow access in the '
+      + 'browser prompt, then tap Try again. If you are in the HERE '
+      + 'app and it still will not work, open HERE in your phone\u2019s '
+      + 'browser instead.';
+    errBox.hidden = false;
+  }
+  function applyLocalTrackStates(){
+    if (!myStream) return;
+    var micWanted = myMicOn && !forcedMuted;
+    myStream.getAudioTracks().forEach(function(tr){ tr.enabled = micWanted; });
+    myStream.getVideoTracks().forEach(function(tr){ tr.enabled = myCamOn; });
+    var micBtn = $('ctl-mute');
+    micBtn.disabled = forcedMuted;
+    micBtn.classList.toggle('off', !micWanted);
+    micBtn.textContent = forcedMuted ? '🔇 Muted for you'
+      : (myMicOn ? '🎤 Mute' : '🔇 Unmute');
+    var camBtn = $('ctl-cam');
+    camBtn.classList.toggle('off', !myCamOn);
+    camBtn.textContent = myCamOn ? '📷 Camera on' : '🚫 Camera off';
+    $('live-muted-note').hidden = !forcedMuted;
+  }
+  function bindLocalTile(){
+    if (!myStream) return;
+    var me = panelById[B.me];
+    if (!me) return;
+    var T = ensureTile(me);
+    if (T.video.srcObject !== myStream){
+      T.video.srcObject = myStream;
+      T.video.muted = true;
+    }
+    T.el.classList.add('has-video');
+    T.video.play().catch(function(){});
+  }
+  function setupLocalMedia(){
+    return acquireMedia().then(function(stream){
+      errBox.hidden = true;
+      if (myStream){ /* camera flip: keep old audio, swap video */
+        var oldVideo = myStream.getVideoTracks()[0];
+        var newVideo = stream.getVideoTracks()[0];
+        var audio = myStream.getAudioTracks()[0];
+        Object.keys(peers).forEach(function(uid){
+          var senders = peers[uid].pc.getSenders();
+          senders.forEach(function(s){
+            if (s.track && s.track.kind === 'video' && newVideo)
+              s.replaceTrack(newVideo).catch(function(){});
+          });
+        });
+        if (oldVideo) oldVideo.stop();
+        stream.getAudioTracks().forEach(function(tr){ tr.stop(); });
+        myStream = new MediaStream([audio, newVideo].filter(Boolean));
+      } else {
+        myStream = stream;
+      }
+      mediaReady = true;
+      applyLocalTrackStates();
+      bindLocalTile();
+      setStatus(null);
+      /* Peers created before the camera was ready get my tracks now;
+         pairs I drive get a (re)offer, pairs driven at me get a
+         fresh hello so the earlier panelist re-offers with my
+         tracks riding the answer. */
+      Object.keys(peers).forEach(function(uid){
+        var P = peers[uid];
+        addLocalTracks(P);
+        if (P.offered) makeOffer(+uid); /* queues if mid-negotiation */
+        else sayHelloTo(+uid); /* nudge a fresh offer now that my
+          tracks can ride the answer (old guest trick) */
+      });
+      reconcilePeers();
+    }).catch(function(){
+      mediaReady = false;
+      showMediaError();
+      if (iAmHost())
+        setStatus('Your live is on air, but HERE can\u2019t reach your camera yet.');
+    });
+  }
+  $('live-error-retry').addEventListener('click', function(){
+    errBox.hidden = true;
+    setupLocalMedia();
+  });
+
+  /* ---------------- peers (keyed by user_id) ----------------
+     remoteKind: 'panelist' (they publish; tile + video) or 'watcher'
+     (receive-only from me; no tile). Offer rule (glare-free):
+       panelist -> watcher : the PANELIST offers; the watcher hellos
+                             a panelist when it needs their stream.
+       panelist <-> panelist: whoever is EARLIER in panel order
+                             offers; the later one hellos once its
+                             camera is ready / a new earlier
+                             panelist appears. Receivers answer. */
+  function addLocalTracks(P){
+    if (!myStream || !amMember) return;
+    var have = {};
+    P.pc.getSenders().forEach(function(s){
+      if (s.track) have[s.track.kind] = 1;
+    });
+    myStream.getTracks().forEach(function(tr){
+      if (!have[tr.kind]){ try { P.pc.addTrack(tr, myStream); } catch (e) {} }
+    });
+  }
+  function isPanelist(uid){ return !!panelById[uid]; }
+  function shouldOfferTo(uid){
+    if (!amMember) return false;             /* watchers never offer */
+    if (isPanelist(uid)) return myIndex() !== -1 && panelIndexOf(uid) !== -1
+      && myIndex() < panelIndexOf(uid);
+    return true;                             /* panelist -> watcher */
+  }
+  function sayHelloTo(uid){
+    var P = peers[uid];
+    if (P){
+      P.helloSent = true;
+      if (mediaReady) P.helloWithMedia = true;
+    }
+    signal(uid, 'hello', {watch: 1});
+  }
+  /* ---------------- diagnostics (window.__liveDiag + tile dots) ----
+     __liveDiag.peers[uid] = {state, iceState, signalingState,
+     hasRemoteTrack, hasLocalSenders, restarts} — refreshed on every
+     peer event and on a 1s interval. The dot on each remote tile's
+     label row mirrors connectionState: grey = connecting/new,
+     green = connected, red = failed (or disconnected past the
+     grace window); tapping a RED dot retries that peer. */
+  window.__liveDiag = {peers: {}};
+  var restartCounts = {};   /* uid -> ICE restarts this failure episode */
+  function peerHasRemoteTrack(P){
+    try {
+      return P.pc.getReceivers().some(function(r){
+        return r.track && r.track.readyState === 'live';
+      });
+    } catch (e) { return false; }
+  }
+  function peerHasLocalSenders(P){
+    try {
+      return P.pc.getSenders().some(function(s){ return !!s.track; });
+    } catch (e) { return false; }
+  }
+  function refreshDiag(){
+    var out = {};
+    Object.keys(peers).forEach(function(uid){
+      var P = peers[uid];
+      out[uid] = {
+        state: P.pc.connectionState,
+        iceState: P.pc.iceConnectionState,
+        signalingState: P.pc.signalingState,
+        hasRemoteTrack: peerHasRemoteTrack(P),
+        hasLocalSenders: peerHasLocalSenders(P),
+        restarts: restartCounts[uid] || 0
+      };
+      updateDot(+uid);
+    });
+    window.__liveDiag = {peers: out};
+  }
+  function updateDot(uid){
+    var T = tiles[uid], P = peers[uid];
+    if (!T || !T.dot) return;
+    var st = P ? P.pc.connectionState : 'closed';
+    var cls = 'live-conn-dot', ds = 'new';
+    if (st === 'connected'){ cls += ' ok'; ds = 'ok'; }
+    else if (st === 'failed' || (P && P.discBad)){ cls += ' bad'; ds = 'bad'; }
+    T.dot.className = cls;
+    T.dot.dataset.state = ds;
+  }
+  /* Per-peer promise chain serializing ALL SDP work (S2): offers,
+     answers and renegotiations for one peer never run concurrently,
+     so setRemoteDescription calls can't interleave into a swallowed
+     InvalidStateError. The fixed offer rule is unchanged. */
+  function enqueuePeerOp(P, fn){
+    var run = P.chain.then(fn, fn);
+    P.chain = run.catch(function(){});
+    return run;
+  }
+  function noteStable(uid){
+    var P = peers[uid];
+    if (!P) return;
+    if (P.pendingHello){
+      P.pendingHello = false;
+      if (P.offered) makeOffer(uid);
+    }
+    if (P.pendingReoffer) makeOffer(uid);
+  }
+  function handleFailed(uid){
+    var P = peers[uid];
+    if (!P) return;
+    setStatus('Connection problem — reconnecting…');
+    if ((restartCounts[uid] || 0) >= 1){
+      /* S4: ONE automatic restart per failure episode; after that
+         the red tile dot is the (manual) retry path. The counter
+         resets when the peer reaches 'connected'. */
+      refreshDiag();
+      return;
+    }
+    restartCounts[uid] = (restartCounts[uid] || 0) + 1;
+    if (P.offered){ /* I drive this pair: restart ICE + re-offer */
+      try { P.pc.restartIce(); } catch (e) {}
+      makeOffer(uid);
+    } else { /* the other side drives: drop it and re-hello */
+      closePeer(uid);
+      reconcilePeers();
+    }
+    refreshDiag();
+  }
+  function manualRestart(uid){
+    restartCounts[uid] = 0;
+    var P = peers[uid];
+    if (P && P.offered){
+      try { P.pc.restartIce(); } catch (e) {}
+      makeOffer(uid);
+    } else {
+      if (P) closePeer(uid);
+      reconcilePeers();
+      var P2 = peers[uid];
+      if (P2 && !P2.offered && !P2.helloSent) sayHelloTo(uid);
+    }
+    refreshDiag();
+  }
+  function ensurePeer(uid, offerer){
+    if (peers[uid]) return peers[uid];
+    var pc = new RTCPeerConnection(ICE_CONFIG);
+    var T = tiles[uid];
+    var P = {pc: pc, iceQ: [], offered: false, helloSent: false,
+             helloWithMedia: false, pendingHello: false,
+             pendingReoffer: false, makingOffer: false,
+             chain: Promise.resolve(), discBad: false, discTimer: null,
+             remoteKind: isPanelist(uid) ? 'panelist' : 'watcher',
+             videoEl: T ? T.video : null};
+    peers[uid] = P;
+    pc.onicecandidate = function(ev){
+      if (ev.candidate) signal(uid, 'ice', ev.candidate.toJSON());
+    };
+    pc.ontrack = function(ev){
+      if (ev.streams && ev.streams[0]) attachRemote(uid, ev.streams[0]);
+      refreshDiag();
+    };
+    pc.onsignalingstatechange = function(){
+      if (peers[uid] !== P) return;
+      if (pc.signalingState === 'stable') noteStable(uid);
+      refreshDiag();
+    };
+    pc.oniceconnectionstatechange = function(){ refreshDiag(); };
+    pc.onconnectionstatechange = function(){
+      if (ended || peers[uid] !== P) return;
+      var st = pc.connectionState;
+      if (st === 'connected'){
+        restartCounts[uid] = 0;
+        P.discBad = false;
+        if (P.discTimer){ clearTimeout(P.discTimer); P.discTimer = null; }
+        setStatus(null);
+      } else if (st === 'disconnected'){
+        setStatus('Reconnecting…');
+        if (!P.discTimer){
+          P.discTimer = setTimeout(function(){
+            P.discTimer = null;
+            if (peers[uid] === P && pc.connectionState === 'disconnected'){
+              P.discBad = true;
+              refreshDiag();
+            }
+          }, 5000);
+        }
+      } else if (st === 'failed'){
+        handleFailed(uid);
+      }
+      refreshDiag();
+    };
+    if (myStream && amMember) addLocalTracks(P);
+    refreshDiag();
+    if (offerer) makeOffer(uid);
+    return P;
+  }
+  function makeOffer(uid){
+    var P = peers[uid];
+    if (!P) return;
+    P.offered = true;
+    if (P.makingOffer || P.pc.signalingState !== 'stable'){
+      /* Coalesce into ONE re-offer when the pc settles (S1/S2):
+         never run two SDP operations for this peer at once. */
+      P.pendingReoffer = true;
+      return;
+    }
+    P.pendingReoffer = false;
+    P.makingOffer = true;
+    enqueuePeerOp(P, function(){
+      if (peers[uid] !== P){ P.makingOffer = false; return; }
+      if (P.pc.signalingState !== 'stable'){
+        P.makingOffer = false;
+        P.pendingReoffer = true;
+        return;
+      }
+      return P.pc.createOffer()
+        .then(function(o){ return P.pc.setLocalDescription(o); })
+        .then(function(){
+          signal(uid, 'offer', P.pc.localDescription.toJSON());
+        })
+        .catch(function(){})
+        .then(function(){
+          P.makingOffer = false;
+          if (P.pendingReoffer && peers[uid] === P
+              && P.pc.signalingState === 'stable') makeOffer(uid);
+        });
+    });
+  }
+  function flushIce(P){
+    var q = P.iceQ;
+    P.iceQ = [];
+    q.forEach(function(c){ P.pc.addIceCandidate(c).catch(function(){}); });
+  }
+  function closePeer(uid){
+    var P = peers[uid];
+    if (!P) return;
+    delete peers[uid];
+    if (P.discTimer){ clearTimeout(P.discTimer); P.discTimer = null; }
+    try { P.pc.close(); } catch (e) {}
+    refreshDiag();
+  }
+  function attachRemote(uid, stream){
+    if (!isPanelist(uid)) return; /* watchers have no tile to fill */
+    var m = panelById[uid];
+    if (!m) return;
+    var T = ensureTile(m);
+    var P = peers[uid];
+    if (P) P.videoEl = T.video;
+    if (T.video.srcObject !== stream) T.video.srcObject = stream;
+    T.el.classList.add('has-video');
+    T.video.muted = soundOff;
+    T.video.play().catch(function(){
+      /* Autoplay with sound blocked: start muted, offer the sound
+         button — one tap fixes every tile. */
+      T.video.muted = true;
+      soundOff = true;
+      $('ctl-sound').textContent = '🔊 Tap for sound';
+      T.video.play().catch(function(){});
+    });
+    setStatus(null);
+  }
+  /* Who should I have a peer with right now? Panelists always (they
+     publish to me / we publish to each other); plus, if I publish,
+     every watcher in the audience list. */
+  function desiredPeers(){
+    var want = {};
+    panel.forEach(function(m){
+      if (m.user_id !== B.me) want[m.user_id] = 'panelist';
+    });
+    if (amMember){
+      audienceIds.forEach(function(uid){
+        if (uid !== B.me && !want[uid]) want[uid] = 'watcher';
+      });
+      watchersList.forEach(function(w){
+        if (w.user_id !== B.me && !want[w.user_id]) want[w.user_id] = 'watcher';
+      });
+    }
+    return want;
+  }
+  function reconcilePeers(){
+    if (ended) return;
+    var want = desiredPeers();
+    Object.keys(want).forEach(function(uidStr){
+      var uid = +uidStr;
+      var offer = shouldOfferTo(uid);
+      var P = peers[uid];
+      if (!P){
+        P = ensurePeer(uid, offer);
+        if (!offer && !P.helloSent) sayHelloTo(uid);
+      } else {
+        P.remoteKind = want[uidStr];
+        if (offer && !P.offered)
+          makeOffer(uid); /* makeOffer itself gates on stable/busy */
+        else if (!offer && !P.offered
+                 && P.pc.signalingState === 'stable'
+                 && (!P.helloSent
+                     || (mediaReady && !P.helloWithMedia)))
+          /* S1: re-hello once my media has landed if the first
+             hello went out before it — that first answer may have
+             carried zero tracks, and only a re-offer fixes it. */
+          sayHelloTo(uid);
+      }
+    });
+    Object.keys(peers).forEach(function(uidStr){
+      if (!want[uidStr]) closePeer(+uidStr);
+    });
+  }
+
+  function handleSignal(sig){
+    if (ended) return;
+    var from = sig.from_id;
+    if (from === B.me) return;
+    var P;
+    if (sig.kind === 'hello'){
+      /* Someone wants my stream. Only panel members ever send. A
+         hello from a LATER panelist is expected (I offer); a hello
+         from an EARLIER panelist would break the rule — ignore it,
+         they will offer and I will answer. */
+      if (!amMember) return;
+      if (isPanelist(from) && panelIndexOf(from) !== -1
+          && myIndex() !== -1 && panelIndexOf(from) < myIndex()) return;
+      P = ensurePeer(from, true);
+      /* S1: a hello landing while this pc is mid-negotiation is NOT
+         dropped — it is remembered (pendingHello) and acted on the
+         moment the pc reaches 'stable' (noteStable). Dropping it
+         lost the re-offer that carries a later joiner's tracks when
+         their first answer went out before their camera was ready. */
+      if (P.pc.signalingState === 'stable') makeOffer(from);
+      else P.pendingHello = true;
+    } else if (sig.kind === 'offer'){
+      P = ensurePeer(from, false);
+      /* S2: SDP work for this peer is serialized on P.chain. */
+      (function(Pp, payload){
+        enqueuePeerOp(Pp, function(){
+          if (peers[from] !== Pp) return;
+          if (amMember) addLocalTracks(Pp);
+          return Pp.pc.setRemoteDescription(
+              new RTCSessionDescription(payload || {}))
+            .then(function(){
+              flushIce(Pp);
+              return Pp.pc.createAnswer();
+            })
+            .then(function(a){ return Pp.pc.setLocalDescription(a); })
+            .then(function(){
+              signal(from, 'answer', Pp.pc.localDescription.toJSON());
+            })
+            .catch(function(){});
+        });
+      })(P, sig.payload);
+    } else if (sig.kind === 'answer'){
+      P = peers[from];
+      if (!P) return;
+      (function(Pp, payload){
+        enqueuePeerOp(Pp, function(){
+          if (peers[from] !== Pp) return;
+          return Pp.pc.setRemoteDescription(
+              new RTCSessionDescription(payload || {}))
+            .then(function(){ flushIce(Pp); })
+            .catch(function(){});
+        });
+      })(P, sig.payload);
+    } else if (sig.kind === 'ice'){
+      P = peers[from];
+      if (!P) return;
+      var cand = null;
+      try { cand = new RTCIceCandidate(sig.payload); } catch (e) {}
+      if (!cand) return;
+      if (P.pc.remoteDescription && P.pc.remoteDescription.type){
+        P.pc.addIceCandidate(cand).catch(function(){});
+      } else {
+        P.iceQ.push(cand);
+      }
+    } else if (sig.kind === 'bye'){
+      closePeer(from); /* tile removal rides the next panel diff */
+    }
+    refreshDiag();
+  }
+  function pollSignals(){
+    if (ended) return;
+    jget('/live/' + B.id + '/signals?since=' + lastSignal)
+      .then(function(d){
+        if (!d || !d.ok) return;
+        (d.signals || []).forEach(function(sig){
+          if (sig.id > lastSignal) lastSignal = sig.id;
+          handleSignal(sig);
+        });
+        if (d.status === 'ended') teardownEnded();
+      })
+      .catch(function(){});
+  }
+
+  /* ---------------- membership transitions ----------------
+     Flipping watcher <-> panelist tears down every peer and rebuilds
+     from the roster: simplest correct mesh reset, and it is what the
+     old guest flow did for the single-guest case. */
+  function teardownPeers(){
+    Object.keys(peers).forEach(function(uid){ closePeer(+uid); });
+  }
+  function enterPanelMode(){
+    teardownPeers();
+    $('live-member-banner').hidden = false;
+    post('/heartbeat').catch(function(){});
+    setupLocalMedia();
+    updateControls();
+    reconcilePeers(); /* hellos/offers resume once media lands too */
+  }
+  function enterWatcherMode(){
+    teardownPeers();
+    if (myStream){
+      myStream.getTracks().forEach(function(tr){ tr.stop(); });
+      myStream = null;
+    }
+    mediaReady = false;
+    forcedMuted = false;
+    var myTile = tiles[B.me];
+    if (myTile) myTile.el.classList.remove('has-video');
+    $('live-member-banner').hidden = true;
+    $('live-muted-note').hidden = true;
+    post('/heartbeat').catch(function(){});
+    updateControls();
+    reconcilePeers(); /* as a watcher: hello every panelist */
+  }
+  function syncMembership(){
+    if (!myPanel) return;
+    /* The host is ALWAYS a panelist (panelist #1 by role), whatever
+       a payload says — a false am_member here once demoted the host
+       to watcher, tearing down every peer (the two-way blackout). */
+    var member = !!(myPanel.am_member || myPanel.is_host);
+    forcedMuted = !!(member && myPanel.muted);
+    if (member === amMember){
+      membershipKnown = true;
+      if (amMember) applyLocalTrackStates();
+      return;
+    }
+    var wasKnown = membershipKnown;
+    membershipKnown = true;
+    amMember = member;
+    if (wasKnown)
+      toast(member ? '🎥 You are on the panel now.'
+                   : 'You left the panel — you are watching now.');
+    if (member) enterPanelMode();
+    else enterWatcherMode();
+  }
+
+  /* ---------------- likes + hearts ---------------- */
+  function spawnHeart(xPct, fromBottomPx){
+    var h = document.createElement('span');
+    h.className = 'live-heart';
+    h.textContent = '❤️';
+    var size = 20 + Math.floor(Math.random() * 16);
+    h.style.fontSize = size + 'px';
+    h.style.left = (xPct != null ? xPct : 62 + Math.random() * 30) + '%';
+    h.style.bottom = (fromBottomPx != null ? fromBottomPx : 14) + 'px';
+    h.style.setProperty('--dx', (Math.random() * 90 - 45) + 'px');
+    heartsEl.appendChild(h);
+    setTimeout(function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    }, 2500);
+  }
+  function paintLikes(){
+    likesEl.textContent = likeCount;
+    likeCountEl.textContent = likeCount;
+  }
+  function doLike(burstX, burstY){
+    if (ended) return;
+    ownLikesPending++;
+    post('/like', {}).then(function(d){
+      if (d && d.ok && typeof d.like_count === 'number'){
+        likeCount = d.like_count;
+        paintLikes();
+      }
+    }).catch(function(){});
+    if (burstX != null){
+      for (var i = 0; i < 5; i++){
+        (function(n){
+          setTimeout(function(){
+            spawnHeart(burstX + (Math.random() * 4 - 2), burstY);
+          }, n * 70);
+        })(i);
+      }
+    } else {
+      spawnHeart();
+    }
+  }
+  $('ctl-like').addEventListener('click', function(){ doLike(); });
+  /* Double-tap / double-click on the stage BACKGROUND only (grid
+     gaps, padding, status area) — never on a tile, its video, its
+     menu button, or the topbar. */
+  function stagePoint(ev){
+    var r = stageEl.getBoundingClientRect();
+    var x = (ev.clientX != null ? ev.clientX
+      : (ev.changedTouches && ev.changedTouches[0]
+         ? ev.changedTouches[0].clientX : 0));
+    var y = (ev.clientY != null ? ev.clientY
+      : (ev.changedTouches && ev.changedTouches[0]
+         ? ev.changedTouches[0].clientY : 0));
+    return {xPct: (x - r.left) / r.width * 100,
+            fromBottom: r.bottom - y};
+  }
+  function isStageBackground(ev){
+    var t = ev.target;
+    return t === stageEl || t === gridEl || t === statusEl;
+  }
+  stageEl.addEventListener('dblclick', function(ev){
+    if (!isStageBackground(ev)) return;
+    var p = stagePoint(ev);
+    doLike(p.xPct, p.fromBottom);
+  });
+  var lastTapAt = 0, lastTapTarget = null;
+  stageEl.addEventListener('touchend', function(ev){
+    if (!isStageBackground(ev)){ lastTapAt = 0; return; }
+    var now = Date.now();
+    if (lastTapTarget === ev.target && now - lastTapAt < 350){
+      var p = stagePoint(ev);
+      doLike(p.xPct, p.fromBottom);
+      lastTapAt = 0;
+    } else {
+      lastTapAt = now;
+      lastTapTarget = ev.target;
+    }
+  }, {passive: true});
+
+  /* ---------------- manage sheet ----------------
+     One shared sheet, portaled to <body> (base.html pattern: backdrop
+     at z 1990, sheet at z 2000 — see the CSS note above). JS fills it
+     with the actions MY role allows on the tapped target. */
+  var sheetBd = $('live-sheet-backdrop'), sheetEl = $('live-sheet'),
+      sheetTitle = $('live-sheet-title'),
+      sheetActions = $('live-sheet-actions');
+  document.body.appendChild(sheetBd);
+  document.body.appendChild(sheetEl);
+  document.body.appendChild(toastEl);
+  var manageTarget = null;
+  function closeSheet(){ sheetEl.hidden = true; sheetBd.hidden = true; manageTarget = null; }
+  sheetBd.addEventListener('click', closeSheet);
+  $('live-sheet-cancel').addEventListener('click', closeSheet);
+  function sheetBtn(label, danger, fn){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cmenu-item' + (danger ? ' danger' : '');
+    b.textContent = label;
+    b.addEventListener('click', function(){ closeSheet(); fn(); });
+    sheetActions.appendChild(b);
+  }
+  function personRow(target){
+    /* Normalize a panel row or a watchers row into one shape. */
+    if (!target) return null;
+    var uid = target.user_id != null ? target.user_id : target.id;
+    var prow = panelById[uid];
+    return {
+      user_id: uid,
+      name: target.name || (prow && prow.name) || '',
+      role: prow ? prow.role : (uid === (B.host && B.host.id) ? 'host' : 'guest'),
+      admin: target.admin != null ? !!target.admin
+        : (target.is_admin != null ? !!target.is_admin : !!(prow && prow.admin)),
+      muted: target.muted != null ? !!target.muted : !!(prow && prow.muted),
+      is_member: prow ? true : !!target.is_member
+    };
+  }
+  function openManageSheet(uid){
+    var raw = panelById[uid];
+    if (!raw) return;
+    var target = personRow(raw);
+    manageTarget = target;
+    sheetTitle.textContent = 'Manage ' + (target.name || 'panelist');
+    sheetActions.innerHTML = '';
+    if (!canActOn(target)){
+      var none = document.createElement('div');
+      none.style.cssText = 'padding:10px 8px;color:rgba(255,255,255,.78);font-size:14px';
+      none.textContent = 'No actions available for this person.';
+      sheetActions.appendChild(none);
+    } else {
+      (function(tg){
+        /* Mute / Unmute — host: anyone but the host; admin: guests
+           (non-admin panelists) only, per canActOn + this check. */
+        var muteOk = iAmHost() ? (tg.role !== 'host')
+          : (tg.is_member && !tg.admin && tg.role !== 'host');
+        if (tg.is_member && muteOk){
+          sheetBtn(tg.muted ? '🔊 Unmute' : '🔇 Mute', false, function(){
+            act('/mute', {user_id: tg.user_id, mute: tg.muted ? 0 : 1});
+          });
+        }
+        if (tg.is_member){
+          sheetBtn('◀ Move left', false, function(){
+            act('/move', {user_id: tg.user_id, dir: -1});
+          });
+          sheetBtn('Move right ▶', false, function(){
+            act('/move', {user_id: tg.user_id, dir: 1});
+          });
+          sheetBtn('🚪 Kick from panel', true, function(){
+            act('/kick', {user_id: tg.user_id, scope: 'panel'},
+                'Removed from the panel.');
+          });
+        }
+        sheetBtn('🚪 Kick from live', true, function(){
+          act('/kick', {user_id: tg.user_id, scope: 'room'},
+              'Removed from the live.');
+        });
+        if (iAmHost()){
+          if (tg.admin){
+            sheetBtn('🛡 Remove admin', false, function(){
+              act('/remove-admin', {user_id: tg.user_id});
+            });
+          } else {
+            sheetBtn('🛡 Make admin', false, function(){
+              act('/appoint-admin', {user_id: tg.user_id});
+            });
+          }
+        }
+      })(target);
+    }
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+
+  /* ---------------- requests & people ---------------- */
+  function avatarNode(person, cls){
+    if (person.avatar){
+      var img = document.createElement('img');
+      img.className = cls; img.src = person.avatar; img.alt = '';
+      return img;
+    }
+    var ph = document.createElement('span');
+    ph.className = 'ph-32';
+    ph.textContent = (person.name || '?').charAt(0).toUpperCase();
+    return ph;
+  }
+  function renderRequests(reqs){
+    var panelEl = $('live-requests-panel'), box = $('live-requests');
+    if (!canManage() || !reqs.length){ panelEl.hidden = true; return; }
+    panelEl.hidden = false;
+    box.innerHTML = '';
+    reqs.forEach(function(r){
+      var row = document.createElement('div');
+      row.className = 'live-req';
+      row.appendChild(avatarNode(r, 'av-32'));
+      var nm = document.createElement('span');
+      nm.style.fontWeight = '700';
+      nm.textContent = r.name;
+      var kind = document.createElement('span');
+      kind.className = 'kind';
+      kind.textContent = r.kind === 'invite' ? 'invited — waiting'
+                                             : 'asked to join';
+      row.appendChild(nm);
+      row.appendChild(kind);
+      var sp = document.createElement('span'); sp.style.flex = '1';
+      row.appendChild(sp);
+      if (r.kind !== 'invite'){
+        var ok = document.createElement('button');
+        ok.type = 'button'; ok.className = 'btn btn-sm'; ok.textContent = '✅ Let in';
+        ok.addEventListener('click', function(){
+          act('/join-decide', {request_id: r.id, approve: 1});
+        });
+        var no = document.createElement('button');
+        no.type = 'button'; no.className = 'btn-ghost btn-sm'; no.textContent = '❌ Not now';
+        no.addEventListener('click', function(){
+          act('/join-decide', {request_id: r.id, approve: 0});
+        });
+        row.appendChild(ok); row.appendChild(no);
+      }
+      box.appendChild(row);
+    });
+  }
+  function renderWatchers(list){
+    var panelEl = $('live-people-panel'), box = $('live-watchers');
+    if (!canManage()){ panelEl.hidden = true; return; }
+    panelEl.hidden = false;
+    box.innerHTML = '';
+    if (!list.length){
+      var empty = document.createElement('div');
+      empty.style.cssText = 'color:rgba(255,255,255,.78);font-size:13px;padding:6px 0';
+      empty.textContent = 'Nobody else is here yet.';
+      box.appendChild(empty);
+      return;
+    }
+    list.forEach(function(w){
+      var t = personRow(w);
+      if (!t) return;
+      var row = document.createElement('div');
+      row.className = 'live-req';
+      row.appendChild(avatarNode(w, 'av-32'));
+      var nm = document.createElement('span');
+      nm.style.fontWeight = '700';
+      nm.textContent = w.name;
+      var sub = document.createElement('span');
+      sub.className = 'kind';
+      var bits = [];
+      if (t.role === 'host') bits.push('👑 host');
+      if (t.is_member) bits.push('🎥 on panel');
+      if (t.admin) bits.push('🛡 admin');
+      if (t.muted) bits.push('🔇 muted');
+      sub.textContent = bits.join(' · ');
+      row.appendChild(nm);
+      row.appendChild(sub);
+      var sp = document.createElement('span'); sp.style.flex = '1';
+      row.appendChild(sp);
+      (function(tg){
+        if (!tg.is_member && tg.user_id !== B.me && canManage()){
+          var inv = document.createElement('button');
+          inv.type = 'button'; inv.className = 'mini-btn';
+          inv.textContent = '➕ Invite to panel';
+          inv.addEventListener('click', function(){
+            act('/invite', {user_id: tg.user_id}, 'Invite sent.');
+          });
+          row.appendChild(inv);
+        }
+        if (iAmHost() && tg.user_id !== B.me && tg.role !== 'host'){
+          var adm = document.createElement('button');
+          adm.type = 'button'; adm.className = 'mini-btn';
+          adm.textContent = tg.admin ? '🛡 Remove admin' : '🛡 Make admin';
+          adm.addEventListener('click', function(){
+            act(tg.admin ? '/remove-admin' : '/appoint-admin',
+                {user_id: tg.user_id});
+          });
+          row.appendChild(adm);
+        }
+        if (canActOn(tg)){
+          var kick = document.createElement('button');
+          kick.type = 'button'; kick.className = 'mini-btn';
+          kick.textContent = '🚪 Kick from live';
+          kick.addEventListener('click', function(){
+            act('/kick', {user_id: tg.user_id, scope: 'room'},
+                'Removed from the live.');
+          });
+          row.appendChild(kick);
+        }
+      })(t);
+      box.appendChild(row);
+    });
+  }
+  /* ---------------- "Invite others" sheet ----------------
+     Ken: the host/admin can invite people they're friends with or
+     following — not only people already in the room. Candidates
+     come from the state poll (invite_candidates, computed for the
+     requesting moderator: friends ∪ following ∪ watchers), split
+     here into "Watching now" and "Friends & following". Inviting
+     sends the bell + push server-side; the invitee accepts from
+     their invite banner on the live page. */
+  function openInviteSheet(){
+    sheetTitle.textContent = '➕ Invite others';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    function section(title, list, emptyText){
+      var h = document.createElement('div');
+      h.style.cssText = 'font-weight:800;font-size:13px;color:rgba(255,255,255,.78);padding:10px 4px 2px';
+      h.textContent = title;
+      sheetActions.appendChild(h);
+      if (!list.length){
+        var e = document.createElement('div');
+        e.style.cssText = 'padding:6px 4px;color:rgba(255,255,255,.78);font-size:13.5px';
+        e.textContent = emptyText;
+        sheetActions.appendChild(e);
+        return;
+      }
+      list.forEach(function(c){
+        var row = document.createElement('div');
+        row.className = 'live-req';
+        row.appendChild(avatarNode(c, 'av-32'));
+        var nm = document.createElement('span');
+        nm.style.fontWeight = '700';
+        nm.textContent = c.name;
+        row.appendChild(nm);
+        var sp = document.createElement('span'); sp.style.flex = '1';
+        row.appendChild(sp);
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'btn btn-sm';
+        b.textContent = c.invited ? 'Invited ✓' : 'Invite';
+        b.disabled = !!c.invited;
+        b.addEventListener('click', function(){
+          b.disabled = true;
+          act('/invite', {user_id: c.id}, 'Invite sent to ' + c.name + '.')
+            .then(function(d){
+              if (d && d.ok){ c.invited = true; b.textContent = 'Invited ✓'; }
+              else { b.disabled = false; b.textContent = 'Invite'; }
+            });
+        });
+        row.appendChild(b);
+        sheetActions.appendChild(row);
+      });
+    }
+    section('Watching now',
+            inviteCandidates.filter(function(c){ return c.watching; }),
+            'Nobody else is watching yet.');
+    section('Friends & following',
+            inviteCandidates.filter(function(c){ return !c.watching; }),
+            'No friends or people you follow to invite.');
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('ctl-invite-others').addEventListener('click', openInviteSheet);
+
+  /* ---------------- live polls + trivia (games pack) ----------------
+     The state poll carries active_poll (never with the trivia
+     answer) and last_closed_poll (answer + winners revealed once
+     closed, until a new poll starts). Voting posts to the room's
+     poll endpoint; the next state poll re-renders from the server. */
+  function pollPct(n, total){ return total ? Math.round(100 * n / total) : 0; }
+  function renderPollResults(container, p){
+    container.innerHTML = '';
+    [['a', p.a_text, p.a_votes], ['b', p.b_text, p.b_votes]]
+      .forEach(function (row) {
+        var wrap = document.createElement('div');
+        wrap.style.marginTop = '7px';
+        var head = document.createElement('div');
+        head.style.cssText = 'display:flex;gap:8px;font-size:14px';
+        var t = document.createElement('span');
+        t.style.flex = '1';
+        t.style.fontWeight = p.my_choice === row[0] ? '800' : '600';
+        t.textContent = row[1] + (p.my_choice === row[0] ? ' ✓ your pick' : '');
+        var pc = document.createElement('span');
+        pc.textContent = pollPct(row[2], p.total) + '% · ' + row[2];
+        head.appendChild(t);
+        head.appendChild(pc);
+        var track = document.createElement('div');
+        track.style.cssText = 'height:9px;background:rgba(255,255,255,.18);border-radius:99px;overflow:hidden;margin-top:3px';
+        var fill = document.createElement('div');
+        fill.style.cssText = 'height:100%;background:var(--red);width:'
+          + pollPct(row[2], p.total) + '%';
+        track.appendChild(fill);
+        wrap.appendChild(head);
+        wrap.appendChild(track);
+        container.appendChild(wrap);
+      });
+  }
+  function renderLivePoll(){
+    var card = $('live-poll-card'), closed = $('live-poll-closed');
+    var p = activePoll;
+    if (p) {
+      closed.hidden = true;
+      card.hidden = false;
+      $('live-poll-q').textContent = p.question + (p.is_trivia ? ' 🎲' : '');
+      var actions = $('live-poll-actions');
+      var results = $('live-poll-results');
+      var note = $('live-poll-note');
+      actions.innerHTML = '';
+      [['a', p.a_text], ['b', p.b_text]].forEach(function (row) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'live-ctl';
+        b.style.cssText = 'flex:1;font-size:14px;padding:6px 10px'
+          + (p.my_choice === row[0] ? ';background:var(--red);border-color:var(--red-dark)' : '');
+        b.textContent = row[1];
+        b.addEventListener('click', function () { voteLivePoll(row[0]); });
+        actions.appendChild(b);
+      });
+      if (p.my_choice) {
+        results.hidden = false;
+        renderPollResults(results, p);
+        note.textContent = p.total + (p.total === 1 ? ' vote' : ' votes')
+          + ' — tap the other side any time to change your vote.';
+      } else {
+        results.hidden = true;
+        note.textContent = 'Tap a side to vote.';
+      }
+    } else {
+      card.hidden = true;
+      if (closedPoll) {
+        var cp = closedPoll;
+        closed.hidden = false;
+        if (cp.is_trivia && cp.correct) {
+          $('live-poll-closed-text').textContent =
+            '✅ Correct: ' + cp.correct_text + ' — ' + cp.winners_count + ' got it 👑';
+        } else {
+          $('live-poll-closed-text').textContent = '📊 Poll closed: ' + cp.question;
+        }
+        $('live-poll-closed-detail').textContent =
+          cp.a_text + ': ' + cp.a_votes + ' · ' + cp.b_text + ': '
+          + cp.b_votes + ' (' + cp.total + ' votes)';
+      } else {
+        closed.hidden = true;
+      }
+    }
+  }
+  function voteLivePoll(choice) {
+    if (!activePoll || ended) return;
+    post('/poll/' + activePoll.id + '/vote', {choice: choice})
+      .then(function (d) {
+        if (d && d.ok && d.poll) { activePoll = d.poll; renderLivePoll(); }
+        else toast((d && d.error) || 'Could not vote.');
+        pollState();
+      })
+      .catch(function () { toast('Could not vote.'); });
+  }
+  /* The create form rides the shared manage sheet: question + two
+     options + an optional trivia correct-answer selector + a 🎲
+     random-trivia prefill. "End poll" appears while one is active. */
+  function openPollSheet() {
+    sheetTitle.textContent = '📊 Poll / Trivia';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    function field(ph, max) {
+      var i = document.createElement('input');
+      i.type = 'text';
+      i.maxLength = max;
+      i.placeholder = ph;
+      i.style.cssText = 'width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px';
+      sheetActions.appendChild(i);
+      return i;
+    }
+    var qIn = field('Question (max 120)', 120);
+    var aIn = field('Choice A (max 40)', 40);
+    var bIn = field('Choice B (max 40)', 40);
+    var sel = document.createElement('select');
+    sel.style.cssText = 'width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px';
+    [['', 'Just a poll — no right answer'],
+     ['a', '🎲 Trivia: A is correct'],
+     ['b', '🎲 Trivia: B is correct']].forEach(function (o) {
+      var op = document.createElement('option');
+      op.value = o[0];
+      op.textContent = o[1];
+      sel.appendChild(op);
+    });
+    sheetActions.appendChild(sel);
+    var rnd = document.createElement('button');
+    rnd.type = 'button';
+    rnd.className = 'cmenu-item';
+    rnd.textContent = '🎲 Random trivia';
+    rnd.addEventListener('click', function () {
+      jget('/live/' + B.id + '/trivia').then(function (d) {
+        if (!d || !d.ok) { toast('Could not fetch trivia.'); return; }
+        qIn.value = d.question || '';
+        aIn.value = d.a || '';
+        bIn.value = d.b || '';
+        sel.value = d.correct || '';
+      }).catch(function () { toast('Could not fetch trivia.'); });
+    });
+    sheetActions.appendChild(rnd);
+    var start = document.createElement('button');
+    start.type = 'button';
+    start.className = 'cmenu-item';
+    start.textContent = '▶ Start poll';
+    start.addEventListener('click', function () {
+      var body = {question: qIn.value.trim(), a: aIn.value.trim(),
+                  b: bIn.value.trim()};
+      if (sel.value) body.correct = sel.value;
+      if (!body.question || !body.a || !body.b) {
+        toast('A poll needs a question and two choices.');
+        return;
+      }
+      closeSheet();
+      act('/poll', body, 'Poll started 📊');
+    });
+    sheetActions.appendChild(start);
+    if (activePoll) {
+      var end = document.createElement('button');
+      end.type = 'button';
+      end.className = 'cmenu-item danger';
+      end.textContent = '⏹ End poll';
+      end.addEventListener('click', function () {
+        var pid = activePoll.id;
+        closeSheet();
+        act('/poll/' + pid + '/end', {}, 'Poll ended.');
+      });
+      sheetActions.appendChild(end);
+    }
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('ctl-poll').addEventListener('click', openPollSheet);
+
+  /* ---------------- live room games (Games Pack 2) ----------------
+     The state poll carries active_game (players + my_play — the
+     guess secret is NEVER in the payload while a game runs) and
+     last_game (winners + the revealed secret, only while no game
+     is active). Playing posts to the room's game endpoint; the
+     next state poll re-renders from the server. */
+  function renderLiveGame(){
+    var card = $('live-game-card'), closed = $('live-game-closed');
+    var g = activeGame;
+    if (g) {
+      closed.hidden = true;
+      card.hidden = false;
+      $('live-game-title').textContent = g.kind === 'guess'
+        ? "🔢 I'm thinking of a number 1–100…"
+        : '🎲 Dice Duel';
+      $('live-game-guess-ui').hidden = g.kind !== 'guess';
+      $('live-game-dice-ui').hidden = g.kind !== 'dice';
+      var list = $('live-game-players');
+      list.innerHTML = '';
+      (g.players || []).forEach(function (p) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;font-size:14.5px;padding:3px 0';
+        var nm = document.createElement('span');
+        nm.style.flex = '1';
+        nm.style.fontWeight = '600';
+        nm.textContent = p.name;
+        var dp = document.createElement('span');
+        dp.style.fontWeight = '800';
+        dp.textContent = p.display;
+        row.appendChild(nm);
+        row.appendChild(dp);
+        list.appendChild(row);
+      });
+      var note = $('live-game-note');
+      if (g.kind === 'guess') {
+        note.textContent = g.my_play != null
+          ? 'Your guess: ' + g.my_play + ' — guess again any time to change it. Closest wins!'
+          : 'Make your guess — closest to the number wins!';
+      } else {
+        note.textContent = g.my_play != null
+          ? 'Your best roll: ' + g.my_play + ' — keep rolling to beat it!'
+          : 'Roll the die — your best roll is your score!';
+      }
+    } else {
+      card.hidden = true;
+      if (lastGame) {
+        var lg = lastGame;
+        closed.hidden = false;
+        var names = (lg.winners || []).join(', ');
+        $('live-game-closed-text').textContent = names
+          ? '🏆 ' + names + ' win! ' + lg.summary
+          : '🎮 Game over — ' + lg.summary;
+        $('live-game-closed-detail').textContent =
+          lg.kind === 'guess' ? '🔢 Guess the Number' : '🎲 Dice Duel';
+      } else {
+        closed.hidden = true;
+      }
+    }
+  }
+  function playLiveGame(body) {
+    if (!activeGame || ended) return;
+    post('/game/play', body)
+      .then(function (d) {
+        if (d && d.ok && d.game) {
+          activeGame = d.game;
+          if (d.roll) toast('🎲 You rolled ' + d.roll + '!');
+          renderLiveGame();
+        } else toast((d && d.error) || 'Could not play.');
+        pollState();
+      })
+      .catch(function () { toast('Could not play.'); });
+  }
+  $('live-game-guess-btn').addEventListener('click', function () {
+    var v = parseInt($('live-game-guess').value, 10);
+    if (!v || v < 1 || v > 100) { toast('Guess a number 1–100.'); return; }
+    playLiveGame({guess: v});
+  });
+  $('live-game-roll').addEventListener('click', function () {
+    playLiveGame({});
+  });
+  /* The Games sheet rides the shared manage sheet: start either
+     game (starting one ends the running game) + End game. */
+  function openGameSheet() {
+    sheetTitle.textContent = '🎮 Games';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    sheetBtn('🔢 Guess the Number', false, function () {
+      act('/game/start', {kind: 'guess'}, 'Guess the Number started 🔢');
+    });
+    sheetBtn('🎲 Dice Duel', false, function () {
+      act('/game/start', {kind: 'dice'}, 'Dice Duel started 🎲');
+    });
+    if (activeGame) {
+      sheetBtn('⏹ End game', true, function () {
+        act('/game/end', {}, 'Game ended.');
+      });
+    }
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('ctl-games').addEventListener('click', openGameSheet);
+
+  function renderInviteBanner(){
+    var banner = $('live-invite-banner');
+    var inv = pendingInvites[0];
+    $('live-invite-text').textContent =
+      inv.from_name + ' invited you to join the panel';
+    banner.hidden = false;
+    banner.dataset.requestId = inv.id;
+  }
+  $('live-invite-join').addEventListener('click', function(){
+    var id = +($('live-invite-banner').dataset.requestId || 0);
+    if (!id) return;
+    act('/invite-decide', {request_id: id, accept: true},
+        'Joining the panel…');
+  });
+  $('live-invite-no').addEventListener('click', function(){
+    var id = +($('live-invite-banner').dataset.requestId || 0);
+    if (!id) return;
+    act('/invite-decide', {request_id: id, accept: false});
+  });
+
+  /* ---------------- comments (unchanged behavior; the server's
+     can_delete flag now also covers admins) ---------------- */
+  function addNotice(text){
+    var nearBottom = commentsEl.scrollTop + commentsEl.clientHeight
+      >= commentsEl.scrollHeight - 60;
+    var row = document.createElement('div');
+    row.className = 'live-notice';
+    row.textContent = text;
+    commentsEl.appendChild(row);
+    if (nearBottom) commentsEl.scrollTop = commentsEl.scrollHeight;
+  }
+  function noteRoomArrivals(d){
+    var next = {viewers: {}, panel: {}};
+    if (d.viewer_list){
+      d.viewer_list.forEach(function(v){ next.viewers[v.id] = v.name; });
+    }
+    panel.forEach(function(m){ next.panel[m.user_id] = m.name; });
+    var prevForDiff = roomSnap ? {
+      panel: roomSnap.panel,
+      viewers: (roomSnapHadViewers && d.viewer_list)
+        ? roomSnap.viewers : next.viewers
+    } : null;
+    liveRoomDiff(prevForDiff, next).forEach(function(ev){
+      if (ev.id === B.me) return;
+      addNotice(ev.kind === 'panel'
+        ? '🎤 ' + ev.name + ' is on the panel'
+        : '👋 ' + ev.name + ' joined the live');
+    });
+    roomSnap = next;
+    roomSnapHadViewers = !!d.viewer_list;
+  }
+  function addComment(c){
+    if (renderedComments[c.id]) return;
+    renderedComments[c.id] = 1;
+    var nearBottom = commentsEl.scrollTop + commentsEl.clientHeight
+      >= commentsEl.scrollHeight - 60;
+    var row = document.createElement('div');
+    row.className = 'live-comment';
+    row.id = 'live-comment-' + c.id;
+    if (c.avatar){
+      var img = document.createElement('img');
+      img.className = 'av-32'; img.src = c.avatar; img.alt = '';
+      row.appendChild(img);
+    } else {
+      var ph = document.createElement('span');
+      ph.className = 'ph-32';
+      ph.textContent = (c.name || '?').charAt(0).toUpperCase();
+      row.appendChild(ph);
+    }
+    var bodyWrap = document.createElement('div');
+    var who = document.createElement('span');
+    who.className = 'who'; who.textContent = c.name;
+    bodyWrap.appendChild(who);
+    if (c.from_host){
+      var tag = document.createElement('span');
+      tag.className = 'hosttag'; tag.textContent = 'HOST';
+      bodyWrap.appendChild(tag);
+    }
+    var body = document.createElement('div');
+    body.textContent = c.body;
+    bodyWrap.appendChild(body);
+    row.appendChild(bodyWrap);
+    if (c.can_delete){
+      var del = document.createElement('button');
+      del.type = 'button'; del.className = 'del'; del.textContent = '🗑';
+      del.title = 'Delete comment';
+      del.addEventListener('click', function(){
+        post('/comment/' + c.id + '/delete').then(function(d){
+          if (d && d.ok) row.remove();
+          else toast((d && d.error) || 'Could not delete that comment.');
+        });
+      });
+      row.appendChild(del);
+    }
+    commentsEl.appendChild(row);
+    if (nearBottom) commentsEl.scrollTop = commentsEl.scrollHeight;
+  }
+  $('live-comment-form').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var input = $('live-comment-input');
+    var body = input.value.trim();
+    if (!body || ended) return;
+    input.value = '';
+    post('/comment', {body: body}).then(function(d){
+      if (d && d.ok && d.comment) addComment(d.comment);
+      else if (d && d.error){
+        input.value = body;
+        toast(d.error);
+      }
+    });
+  });
+
+  /* ---------------- controls ---------------- */
+  function updateControls(){
+    var member = amMember;
+    $('ctl-mute').hidden = !member;
+    $('ctl-cam').hidden = !member;
+    $('ctl-flip').hidden = !member;
+    $('ctl-panel-leave').hidden = !(member && !iAmHost());
+    $('ctl-end').hidden = !iAmHost();
+    /* Sound toggle is for EVERYONE: remote tiles start muted (S3),
+       so panel members need it to hear each other too. */
+    $('ctl-sound').hidden = false;
+    $('ctl-leave').hidden = member;
+    $('ctl-join').hidden = member;
+    $('ctl-invite-others').hidden = !canManage();
+    $('ctl-poll').hidden = !canManage();
+    $('ctl-games').hidden = !canManage();
+    $('live-member-banner').hidden = !member;
+  }
+  function updateJoinButton(d){
+    var btn = $('ctl-join'), msg = $('live-join-msg');
+    if (amMember){ btn.hidden = true; return; }
+    btn.hidden = false;
+    if (panel.length >= 9){
+      btn.disabled = true;
+      btn.textContent = '🎥 Panel is full';
+      return;
+    }
+    if (d.my_join && d.my_join.status === 'pending'){
+      btn.disabled = true;
+      btn.textContent = '⏳ Waiting for the host…';
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = '✋ Ask to join';
+    if (d.my_join && d.my_join.status === 'declined' && d.my_join.decided_at){
+      var age = (Date.now() - Date.parse(d.my_join.decided_at)) / 1000;
+      if (age < 60){
+        btn.disabled = true;
+        btn.textContent = '✋ Ask again in ' + Math.ceil(60 - age) + 's';
+      }
+    }
+    if (msg.dataset.sticky !== '1') msg.hidden = true;
+  }
+  $('ctl-mute').addEventListener('click', function(){
+    if (forcedMuted || !myStream) return;
+    myMicOn = !myMicOn;
+    applyLocalTrackStates();
+  });
+  $('ctl-cam').addEventListener('click', function(){
+    if (!myStream) return;
+    myCamOn = !myCamOn;
+    applyLocalTrackStates();
+  });
+  $('ctl-flip').addEventListener('click', function(){
+    facing = facing === 'user' ? 'environment' : 'user';
+    setupLocalMedia();
+  });
+  $('ctl-end').addEventListener('click', function(){
+    if (!confirm('End this live for everyone?')) return;
+    post('/end').then(function(){
+      teardownEnded();
+    });
+  });
+  $('ctl-panel-leave').addEventListener('click', function(){
+    post('/guest-leave', {}).then(function(d){
+      if (d && d.ok){
+        /* The next state poll flips my_panel.am_member and
+           syncMembership drops me to watcher mode; force a poll
+           now so it feels instant. */
+        pollState();
+      } else {
+        toast((d && d.error) || 'Could not leave the panel.');
+      }
+    });
+  });
+  $('ctl-sound').addEventListener('click', function(){
+    soundOff = !soundOff;
+    Object.keys(tiles).forEach(function(uid){
+      if (+uid !== B.me) tiles[uid].video.muted = soundOff;
+    });
+    this.textContent = soundOff ? '🔊 Tap for sound' : '🔇 Sound off';
+    if (!soundOff){
+      Object.keys(tiles).forEach(function(uid){
+        tiles[uid].video.play().catch(function(){});
+      });
+    }
+  });
+  $('ctl-join').addEventListener('click', function(){
+    var msg = $('live-join-msg');
+    post('/join-request').then(function(d){
+      msg.hidden = false;
+      msg.dataset.sticky = '1';
+      if (d && d.ok){
+        msg.textContent = '✋ Request sent — the host or an admin can let you in.';
+      } else {
+        msg.textContent = (d && d.error) || 'Could not send the request.';
+      }
+      pollState();
+    });
+  });
+  $('ctl-leave').addEventListener('click', function(){
+    try {
+      navigator.sendBeacon('/live/' + B.id + '/leave');
+    } catch (e) {}
+    window.location.href = '/home';
+  });
+
+  /* ---------------- state poll ---------------- */
+  function fallbackPanel(d){
+    /* Pre-panel backends: synthesize host (+ legacy guest) so the
+       page still works while the new contract rolls out. */
+    var out = [];
+    if (B.host) out.push({user_id: B.host.id, name: B.host.name,
+      avatar: B.host.avatar || '', role: 'host', admin: false, muted: false});
+    var g = d.guest || B.guest;
+    if (g) out.push({user_id: g.id, name: g.name, avatar: g.avatar || '',
+      role: 'guest', admin: false, muted: false});
+    return out;
+  }
+  function pollState(){
+    if (ended) return;
+    jget('/live/' + B.id + '/state?since_comment=' + lastComment
+         + '&since_like=' + lastLikeCursor)
+      .then(function(d){
+        if (!d || !d.ok) return;
+        if (d.status === 'ended'){ teardownEnded(); return; }
+        viewersEl.textContent = d.viewers;
+        (d.comments || []).forEach(function(c){
+          if (c.id > lastComment) lastComment = c.id;
+          addComment(c);
+        });
+        /* Likes: remote hearts = fresh like events minus the ones
+           I tapped myself since the last poll. */
+        if (typeof d.like_count === 'number'){
+          likeCount = d.like_count;
+          paintLikes();
+        }
+        if (typeof d.like_cursor === 'number')
+          lastLikeCursor = Math.max(lastLikeCursor, d.like_cursor);
+        var newLikes = d.new_likes || 0;
+        if (newLikes > 0){
+          var remote = Math.max(0, newLikes - ownLikesPending);
+          ownLikesPending = 0;
+          var n = Math.min(remote, 8);
+          for (var i = 0; i < n; i++){
+            (function(k){ setTimeout(spawnHeart, k * 90); })(i);
+          }
+        } else {
+          ownLikesPending = 0;
+        }
+        /* Panel roster (authoritative order) + my standing. */
+        panel = (d.panel && d.panel.length) ? d.panel : fallbackPanel(d);
+        panelById = {};
+        panel.forEach(function(m){ panelById[m.user_id] = m; });
+        noteRoomArrivals(d);
+        if (d.my_panel){
+          myPanel = d.my_panel;
+        } else {
+          myPanel = {
+            am_member: panelIndexOf(B.me) !== -1
+              || (d.my_role && d.my_role !== 'watcher'),
+            muted: false,
+            is_admin: false,
+            is_host: B.me === (B.host && B.host.id)
+          };
+        }
+        isHost = !!myPanel.is_host;
+        pendingInvites = d.pending_invites_for_me || [];
+        activePoll = d.active_poll || null;
+        closedPoll = d.last_closed_poll || null;
+        renderLivePoll();
+        activeGame = d.active_game || null;
+        lastGame = d.last_game || null;
+        renderLiveGame();
+        watchersList = d.watchers || [];
+        inviteCandidates = d.invite_candidates || [];
+        if (d.viewer_list)
+          audienceIds = d.viewer_list.map(function(v){ return v.id; });
+        syncMembership();
+        renderTiles();
+        if (amMember) bindLocalTile();
+        reconcilePeers();
+        renderRequests(d.pending_requests || []);
+        renderWatchers(watchersList);
+        renderInviteBanner();
+        updateControls();
+        updateJoinButton(d);
+      })
+      .catch(function(){});
+  }
+
+  /* ---------------- lifecycle ---------------- */
+  function teardownEnded(){
+    if (ended) return;
+    ended = true;
+    if (minimized) restoreLive(); /* ended face belongs fullscreen */
+    /* Ken's rule: when a live ends, the HOST goes straight back to
+       their own profile — whether they ended it themselves or it
+       ended under them (e.g. the owner's kill switch). One-shot:
+       the `ended` flag above is already set, and navigating away
+       leaves this page entirely, so this cannot loop. Watchers and
+       guests keep the ended face below. */
+    if (isHost){
+      try {
+        timers.forEach(clearInterval);
+        if (myStream)
+          myStream.getTracks().forEach(function(tr){ tr.stop(); });
+      } catch (e) {}
+      window.location.href = '/user/' + B.host.id;
+      return;
+    }
+    timers.forEach(clearInterval);
+    teardownPeers();
+    if (myStream){
+      myStream.getTracks().forEach(function(tr){ tr.stop(); });
+      myStream = null;
+    }
+    Object.keys(tiles).forEach(function(uid){
+      try { tiles[uid].video.srcObject = null; } catch (e) {}
+    });
+    closeSheet();
+    setStatus('📺 This live has ended.');
+    $('live-comment-input').disabled = true;
+    ['ctl-mute','ctl-cam','ctl-flip','ctl-end','ctl-panel-leave',
+     'ctl-join','ctl-like','ctl-poll','ctl-games','live-requests-panel','live-people-panel',
+     'live-invite-banner','live-member-banner','live-poll-card',
+     'live-poll-closed','live-game-card','live-game-closed'].forEach(function(id){
+      var el = $(id);
+      if (el) el.hidden = true;
+    });
+  }
+  window.addEventListener('beforeunload', function(){
+    if (ended) return;
+    try {
+      if (iAmHost())
+        navigator.sendBeacon('/live/' + B.id + '/end');
+      else
+        navigator.sendBeacon('/live/' + B.id + '/leave');
+    } catch (e) {}
+  });
+  setInterval(function(){
+    var s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    timerEl.textContent = Math.floor(s / 60) + ':'
+      + ('0' + (s % 60)).slice(-2);
+  }, 1000);
+
+  /* ---------------- fullscreen chrome + minimize-to-tile -------
+     The stage fills the viewport (#live-fs, 100dvh). Chrome (top
+     bar + rail + bottom bar) auto-dims after ~3.5s idle; any
+     pointerdown/touchstart on the stage wakes it. The ✕ exit
+     button lives OUTSIDE the chrome wrapper so it never dims
+     below .35. Minimizing MOVES the stage element itself (with
+     every <video> node and stream inside it) into the floating
+     tile via appendChild — elements are never recreated and
+     srcObject is never reassigned, so peers/streams are
+     untouched and nothing renegotiates. Polls + heartbeats keep
+     running while minimized; the page behind the tile becomes
+     the server-rendered browse section. */
+  var fsEl = $('live-fs'), miniEl = $('live-mini'),
+      miniSlot = $('live-mini-slot'), stageSlot = $('live-stage-slot'),
+      browseEl = $('live-browse');
+  var minimized = false;
+  var chromeTimer = null;
+  function wakeChrome(){
+    fsEl.classList.remove('chrome-dim');
+    if (chromeTimer) clearTimeout(chromeTimer);
+    chromeTimer = setTimeout(function(){
+      if (!minimized && !ended) fsEl.classList.add('chrome-dim');
+    }, 3500);
+  }
+  fsEl.addEventListener('pointerdown', wakeChrome);
+  fsEl.addEventListener('touchstart', wakeChrome, {passive: true});
+  function minimizeLive(){
+    if (minimized || ended) return;
+    minimized = true;
+    closeSheet();
+    miniSlot.appendChild(stageEl);
+    stageEl.classList.add('in-mini');
+    fsEl.hidden = true;
+    miniEl.hidden = false;
+    browseEl.hidden = false;
+    $('live-mini-host').hidden = !iAmHost();
+  }
+  function restoreLive(){
+    if (!minimized) return;
+    minimized = false;
+    stageSlot.appendChild(stageEl);
+    stageEl.classList.remove('in-mini');
+    miniEl.hidden = true;
+    browseEl.hidden = true;
+    fsEl.hidden = false;
+    wakeChrome();
+  }
+  window.__liveFs = {minimize: minimizeLive, restore: restoreLive,
+                     isMinimized: function(){ return minimized; }};
+  function openExitSheet(){
+    sheetTitle.textContent = 'Leave the stage?';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    sheetBtn('Shrink — keep my live running', false, function(){
+      minimizeLive();
+    });
+    sheetBtn('End live', true, function(){
+      post('/end').then(function(){ teardownEnded(); });
+    });
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('live-exit').addEventListener('click', function(){
+    if (iAmHost()) openExitSheet();
+    else minimizeLive();
+  });
+  $('ctl-comment-focus').addEventListener('click', function(){
+    var inp = $('live-comment-input');
+    if (inp) inp.focus();
+  });
+  $('live-mini-close').addEventListener('click', function(ev){
+    ev.stopPropagation();
+    if (iAmHost()){ openExitSheet(); return; }
+    try { navigator.sendBeacon('/live/' + B.id + '/leave'); } catch (e) {}
+    window.location.href = '/lives';
+  });
+  $('live-mini-end').addEventListener('click', function(ev){
+    ev.stopPropagation();
+    post('/end').then(function(){ teardownEnded(); });
+  });
+  /* Mini tile: drag to move (pointer events, clamped to the
+     viewport); a tap without a drag restores fullscreen. */
+  var miniDrag = null, miniDragged = false;
+  miniEl.addEventListener('pointerdown', function(ev){
+    if (ev.target && ev.target.closest
+        && ev.target.closest('button')) return;
+    miniDrag = {x: ev.clientX, y: ev.clientY,
+                l: miniEl.offsetLeft, t: miniEl.offsetTop};
+    miniDragged = false;
+    try { miniEl.setPointerCapture(ev.pointerId); } catch (e) {}
+  });
+  miniEl.addEventListener('pointermove', function(ev){
+    if (!miniDrag) return;
+    var dx = ev.clientX - miniDrag.x, dy = ev.clientY - miniDrag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) miniDragged = true;
+    if (miniDragged){
+      miniEl.style.left = Math.min(Math.max(0, miniDrag.l + dx),
+        window.innerWidth - miniEl.offsetWidth) + 'px';
+      miniEl.style.top = Math.min(Math.max(0, miniDrag.t + dy),
+        window.innerHeight - miniEl.offsetHeight) + 'px';
+      miniEl.style.right = 'auto';
+      miniEl.style.bottom = 'auto';
+    }
+  });
+  miniEl.addEventListener('pointerup', function(){
+    if (miniDrag && !miniDragged) restoreLive();
+    miniDrag = null;
+  });
+  wakeChrome();
+
+  /* ---------------- boot ---------------- */
+  /* Seed an initial panel from the boot JSON so the stage paints
+     before the first state poll lands; the poll replaces it with
+     the authoritative roster. */
+  panel = fallbackPanel({});
+  panelById = {};
+  panel.forEach(function(m){ panelById[m.user_id] = m; });
+  myPanel = {am_member: amMember, muted: false,
+             is_admin: false, is_host: isHost};
+  renderTiles();
+  updateControls();
+  paintLikes();
+  if (amMember){
+    setStatus(isHost ? 'You are live 🔴 — setting up your camera…'
+                     : 'Joining the panel…');
+    setupLocalMedia();
+  } else {
+    setStatus('Joining the live…');
+    post('/heartbeat').catch(function(){});
+  }
+  every(2000, pollSignals);
+  every(3000, pollState);
+  every(1000, refreshDiag);
+  every(10000, function(){ post('/heartbeat').catch(function(){}); });
+  pollState();
+  pollSignals();
+})();
+</script>
+{% endif %}
+{% endblock %}
