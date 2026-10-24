@@ -118,8 +118,54 @@
 .live-gift-banner[hidden]{display:none}
 .live-gift-banner .gb-emoji{font-size:84px;line-height:1.05;
   text-shadow:0 4px 18px rgba(0,0,0,.5)}
+.live-gift-banner .gb-img{width:124px;height:124px;object-fit:contain;
+  filter:drop-shadow(0 6px 22px rgba(0,0,0,.55))}
 .live-gift-banner .gb-text{font-size:16px;font-weight:800;margin-top:6px;
   text-shadow:var(--lg-text-shadow)}
+/* Build P-GIFTS: art gift tiers — tier2 pop, tier4 takeover, tray
+   tabs, rank/level chips. */
+.gift-pop{position:absolute;opacity:0;pointer-events:none;
+  animation:giftpop 2.8s ease-out forwards;will-change:transform,opacity;
+  filter:drop-shadow(0 0 14px rgba(255,215,130,.85))
+    drop-shadow(0 4px 10px rgba(0,0,0,.5))}
+@keyframes giftpop{0%{opacity:0;transform:translateY(12px) scale(.4) rotate(-6deg)}
+  18%{opacity:1;transform:translateY(0) scale(1.14) rotate(3deg)}
+  30%{transform:scale(1)}78%{opacity:1}
+  100%{opacity:0;transform:translateY(-30vh) scale(1.05)}}
+.live-heart img{display:block}
+.live-gift-takeover{position:absolute;inset:0;z-index:9;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;
+  pointer-events:none;overflow:hidden}
+.live-gift-takeover[hidden]{display:none}
+.live-gift-takeover .gt-rays{position:absolute;inset:-40%;
+  background:repeating-conic-gradient(from 0deg,
+    rgba(255,215,130,.20) 0deg 10deg, transparent 10deg 24deg);
+  animation:gtspin 7s linear infinite}
+@keyframes gtspin{to{transform:rotate(360deg)}}
+.live-gift-takeover .gt-img{width:min(56vw,290px);height:min(56vw,290px);
+  object-fit:contain;position:relative;
+  filter:drop-shadow(0 10px 34px rgba(0,0,0,.65));
+  animation:gtin .45s cubic-bezier(.2,1.6,.4,1)}
+@keyframes gtin{from{transform:scale(.3);opacity:0}
+  to{transform:scale(1);opacity:1}}
+.live-gift-takeover .gt-text{position:relative;margin-top:14px;
+  font-size:19px;font-weight:900;color:#fff;
+  text-shadow:0 2px 12px rgba(0,0,0,.85);background:var(--lg-bg-strong);
+  border:var(--lg-border);border-radius:999px;padding:8px 18px;
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
+.gift-tabs{display:flex;gap:6px;padding:6px 4px 2px}
+.gift-tab{flex:1;background:rgba(255,255,255,.10);
+  border:1px solid rgba(255,255,255,.18);color:#fff;border-radius:999px;
+  padding:7px 4px;font-size:12.5px;font-weight:800;cursor:pointer}
+.gift-tab.on{background:var(--red);border-color:var(--red-dark)}
+.rank-chip{display:inline-block;font-size:10px;font-weight:800;
+  color:#ffd97a;background:rgba(255,217,122,.16);
+  border:1px solid rgba(255,217,122,.45);border-radius:999px;
+  padding:0 6px;margin-left:6px;vertical-align:1px;white-space:nowrap}
+.lvl-chip{display:inline-block;font-size:10.5px;font-weight:800;
+  color:#ffd97a;background:rgba(0,0,0,.35);
+  border:1px solid rgba(255,217,122,.5);border-radius:999px;
+  padding:1px 8px;margin-left:6px;vertical-align:2px;white-space:nowrap}
 .live-float{flex-direction:column;gap:6px}
 .live-shout{pointer-events:auto;background:rgba(212,31,46,.55);
   border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:7px 11px;
@@ -133,8 +179,12 @@
 .gift-cell{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.18);
   border-radius:12px;padding:10px 4px 8px;text-align:center;cursor:pointer;color:#fff}
 .gift-cell .g-emoji{font-size:34px;line-height:1.1}
+.gift-cell img.g-art{width:54px;height:54px;object-fit:contain;
+  filter:drop-shadow(0 3px 8px rgba(0,0,0,.5))}
+.gift-cell.cant{opacity:.45}
 .gift-cell .g-name{font-size:11px;font-weight:700;margin-top:3px;line-height:1.15}
 .gift-cell .g-cost{font-size:11.5px;color:#ffd97a;font-weight:800;margin-top:2px}
+.gift-cell .g-cost.free{color:#7dff9a}
 .gift-cell.armed{background:rgba(212,31,46,.75)}
 /* ===== controls / action bar ===== */
 .live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
@@ -302,7 +352,7 @@
   <div class="live-topbar">
     <span class="live-pill"><span class="dot">●</span> LIVE</span>
     <div class="live-meta">
-      <div class="live-host">{{ host.name|e }}</div>
+      <div class="live-host">{{ host.name|e }}{% if host.live_level %} <span class="lvl-chip" title="Streamer Live Level">{{ host.live_level.label|e }}</span>{% endif %}</div>
       {% if live.title %}<div class="live-title">{{ live.title|e }}</div>{% endif %}
       <div class="live-topgifters" id="live-top-gifters" hidden></div>
     </div>
@@ -314,8 +364,14 @@
   <div class="live-statusline" id="live-status">Connecting…</div>
   <div class="live-hearts" id="live-hearts"></div>
   <div class="live-gift-banner" id="live-gift-banner" hidden>
+    <img class="gb-img" id="live-gift-banner-img" alt="" hidden>
     <div class="gb-emoji" id="live-gift-banner-emoji">🎁</div>
     <div class="gb-text" id="live-gift-banner-text"></div>
+  </div>
+  <div class="live-gift-takeover" id="live-gift-takeover" hidden>
+    <div class="gt-rays"></div>
+    <img class="gt-img" id="live-gift-takeover-img" alt="">
+    <div class="gt-text" id="live-gift-takeover-text"></div>
   </div>
   <div class="live-float" id="live-float"><div class="live-shout" id="live-shout" hidden></div><div class="live-comments" id="live-comments"></div></div>
 </div>
@@ -542,6 +598,8 @@ function liveRoomDiff(prev, next){
   var giftSheetOpen = false;
   var armedGiftKey = null, armedGiftAt = 0;   /* ≥500 two-tap confirm */
   var giftBannerTimer = null;
+  var giftTakeoverTimer = null;
+  var giftCat = 'money';            /* gift tray tab (Build P-GIFTS) */
   var activeShout = null;         /* state payload's active_shout */
 
   var peers = {};   /* uid -> {pc, iceQ, offered, helloSent, remoteKind, videoEl} */
@@ -2739,6 +2797,12 @@ function liveRoomDiff(prev, next){
       tag.className = 'hosttag'; tag.textContent = 'HOST';
       bodyWrap.appendChild(tag);
     }
+    if (c.sender_rank && c.sender_rank.rank >= 1 && c.sender_rank.label){
+      var chip = document.createElement('span');
+      chip.className = 'rank-chip';
+      chip.textContent = c.sender_rank.label;
+      bodyWrap.appendChild(chip);
+    }
     var body = document.createElement('div');
     body.textContent = c.body;
     bodyWrap.appendChild(body);
@@ -2786,12 +2850,30 @@ function liveRoomDiff(prev, next){
     var bal = $('gift-balance');
     if (bal) bal.textContent = myTickets;
   }
-  function spawnGiftFloat(emoji){
+  function giftSenderLabel(g){
+    var r = g.sender_rank;
+    return (r && r.rank >= 1 && r.label)
+      ? r.label + ' ' + g.sender_name : g.sender_name;
+  }
+  function giftArtEl(g, px){
+    /* The gift's art image at px size; emoji text as the fallback
+       for legacy/unknown keys that carry no art. */
+    if (g.img){
+      var im = document.createElement('img');
+      im.src = g.img; im.alt = g.name || '';
+      im.style.width = px + 'px'; im.style.height = px + 'px';
+      im.style.objectFit = 'contain';
+      return im;
+    }
+    var s = document.createElement('span');
+    s.textContent = g.emoji || '🎁';
+    s.style.fontSize = Math.round(px * 0.8) + 'px';
+    return s;
+  }
+  function spawnGiftFloat(g){
     var h = document.createElement('span');
     h.className = 'live-heart';
-    h.textContent = emoji;
-    var size = 30 + Math.floor(Math.random() * 16);
-    h.style.fontSize = size + 'px';
+    h.appendChild(giftArtEl(g, 46));
     h.style.left = (58 + Math.random() * 34) + '%';
     h.style.bottom = '14px';
     h.style.setProperty('--dx', (Math.random() * 90 - 45) + 'px');
@@ -2804,20 +2886,56 @@ function liveRoomDiff(prev, next){
       if (h.parentNode) h.parentNode.removeChild(h);
     }, 3700);
   }
+  function spawnGiftPop(g){
+    var h = document.createElement('span');
+    h.className = 'gift-pop';
+    h.appendChild(giftArtEl(g, 74));
+    h.style.left = (52 + Math.random() * 30) + '%';
+    h.style.bottom = '16%';
+    heartsEl.appendChild(h);
+    h.addEventListener('animationend', function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    });
+    setTimeout(function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    }, 2900);
+  }
   function showGiftBanner(g){
     var b = $('live-gift-banner');
-    $('live-gift-banner-emoji').textContent = g.emoji;
+    var im = $('live-gift-banner-img'), em = $('live-gift-banner-emoji');
+    if (g.img){ im.src = g.img; im.hidden = false; em.hidden = true; }
+    else {
+      im.hidden = true; em.hidden = false;
+      em.textContent = g.emoji || '🎁';
+    }
     $('live-gift-banner-text').textContent =
-      g.sender_name + ' sent ' + g.name + '!';
+      giftSenderLabel(g) + ' sent ' + g.name + '!';
     b.hidden = false;
     if (giftBannerTimer) clearTimeout(giftBannerTimer);
     giftBannerTimer = setTimeout(function(){ b.hidden = true; }, 3000);
   }
+  function showGiftTakeover(g){
+    var t = $('live-gift-takeover');
+    var im = $('live-gift-takeover-img');
+    if (g.img) im.src = g.img;
+    im.alt = g.name || '';
+    $('live-gift-takeover-text').textContent =
+      giftSenderLabel(g) + ' sent ' + g.name + '!';
+    t.hidden = false;
+    if (giftTakeoverTimer) clearTimeout(giftTakeoverTimer);
+    giftTakeoverTimer = setTimeout(function(){ t.hidden = true; },
+                                     3200);
+  }
   function handleGiftEvent(g){
     if (!g || g.id <= lastGiftId) return;
     lastGiftId = g.id;
-    if (g.tickets >= 100) showGiftBanner(g); else spawnGiftFloat(g.emoji);
-    addNotice('🎁 ' + g.sender_name + ' sent ' + g.emoji + ' ' + g.name);
+    var tier = g.anim || (g.tickets >= 5000 ? 4
+      : g.tickets >= 500 ? 3 : g.tickets >= 50 ? 2 : 1);
+    if (tier >= 4) showGiftTakeover(g);
+    else if (tier === 3) showGiftBanner(g);
+    else if (tier === 2) spawnGiftPop(g);
+    else spawnGiftFloat(g);
+    addNotice('🎁 ' + giftSenderLabel(g) + ' sent ' + g.name);
   }
   function renderTopGifters(list){
     var el = $('live-top-gifters');
@@ -2876,7 +2994,7 @@ function liveRoomDiff(prev, next){
         myTickets = d.balance;
         paintTickets();
         if (d.gift_id) lastGiftId = Math.max(lastGiftId, d.gift_id);
-        toast('Sent ' + g.emoji + ' ' + g.name + '!');
+        toast('Sent ' + g.name + '!');
         renderGiftSheet();
       } else {
         toast((d && d.error) || 'Could not send that gift.');
@@ -2894,25 +3012,52 @@ function liveRoomDiff(prev, next){
       + 'rel="noopener" style="color:#ffd97a;font-weight:700">'
       + 'Get tickets 🎟️</a>';
     sheetActions.appendChild(bal);
+    var tabs = document.createElement('div');
+    tabs.className = 'gift-tabs';
+    [['money', '💰 Money'], ['love', '❤️ Love'],
+     ['luxury', '👑 Luxury']].forEach(function(pair){
+      var tb = document.createElement('button');
+      tb.type = 'button';
+      tb.className = 'gift-tab' + (giftCat === pair[0] ? ' on' : '');
+      tb.textContent = pair[1];
+      tb.addEventListener('click', function(){
+        giftCat = pair[0];
+        armedGiftKey = null;
+        renderGiftSheet();
+      });
+      tabs.appendChild(tb);
+    });
+    sheetActions.appendChild(tabs);
     var grid = document.createElement('div');
     grid.className = 'gift-grid';
-    (B.gifts || []).forEach(function(g){
+    (B.gifts || []).filter(function(g){
+      return (g.category || 'money') === giftCat;
+    }).forEach(function(g){
       var cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'gift-cell';
       var armed = g.tickets >= 500 && armedGiftKey === g.key
         && (Date.now() - armedGiftAt) <= 3000;
       if (armed) cell.className += ' armed';
-      var em = document.createElement('div');
-      em.className = 'g-emoji'; em.textContent = g.emoji;
+      if (g.tickets > myTickets) cell.className += ' cant';
+      if (g.img){
+        var im = document.createElement('img');
+        im.className = 'g-art'; im.src = g.img; im.alt = g.name;
+        im.loading = 'lazy';
+        cell.appendChild(im);
+      } else {
+        var em = document.createElement('div');
+        em.className = 'g-emoji'; em.textContent = g.emoji || '🎁';
+        cell.appendChild(em);
+      }
       var nm = document.createElement('div');
       nm.className = 'g-name'; nm.textContent = g.name;
       var ct = document.createElement('div');
-      ct.className = 'g-cost';
+      ct.className = 'g-cost' + (g.tickets === 0 ? ' free' : '');
       ct.textContent = armed
-        ? ('Tap again to send ' + g.emoji + ' ' + g.tickets + '?')
-        : (g.tickets + ' 🎟️');
-      cell.appendChild(em); cell.appendChild(nm); cell.appendChild(ct);
+        ? ('Tap again to send ' + g.tickets + '?')
+        : (g.tickets === 0 ? 'FREE' : (g.tickets + ' 🎟️'));
+      cell.appendChild(nm); cell.appendChild(ct);
       cell.addEventListener('click', function(){ sendGift(g); });
       grid.appendChild(cell);
     });
