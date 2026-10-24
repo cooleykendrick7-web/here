@@ -4,7 +4,11 @@
 
 <style>
 .lives-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.lives-section-title{font-size:19px;margin:20px 0 4px}
 .live-card{background:#fff;border-top:3px solid #d41f2e}
+.live-card.vip{border:2px solid #d4af37;border-top:3px solid #d4af37;
+  box-shadow:0 0 0 3px rgba(212,175,55,.25),0 6px 18px rgba(212,175,55,.35)}
+.lvl-tag{color:#8a6d1f;font-weight:800;font-size:12px}
 .live-card-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .live-card-head a{font-weight:700}
 .live-badge{color:#d41f2e;font-weight:800;font-size:12px;margin-left:auto;animation:livepulse 1.2s infinite}
@@ -18,9 +22,12 @@
   <p style="color:var(--muted);margin-top:6px">Watch people who are live right now — friends and people you follow come first.</p>
 </div>
 
-<div id="lives-grid" class="lives-grid">
-  {% for l in lives %}
-  <div class="card live-card">
+<div id="lives-sections">
+  {% for s in sections %}
+  <h3 class="lives-section-title">{{ s.title|e }}</h3>
+  <div class="lives-grid" data-section="{{ s.key|e }}">
+  {% for l in s.lives %}
+  <div class="card live-card{% if l.host_level >= 5 %} vip{% endif %}">
     <div class="live-card-head">
       {% if l.avatar %}<img class="avatar av-40" src="{{ l.avatar|e }}" alt="">
       {% else %}<span class="av-ph av-40">{{ l.name[:1]|upper|e }}</span>{% endif %}
@@ -28,7 +35,7 @@
       <span class="live-badge" style="animation:livepulse 1.2s infinite">🔴 LIVE</span>
     </div>
     <div class="live-title">{{ l.title|e if l.title else 'Live now' }}</div>
-    <div class="live-meta">👁 {{ l.viewers }} watching · 👥 {{ l.panel_count }} on panel</div>
+    <div class="live-meta">👁 {{ l.viewers }} watching · 👥 {{ l.panel_count }} on panel{% if l.host_level_label %} · <span class="lvl-tag">{{ l.host_level_label|e }}</span>{% endif %}</div>
     <div class="live-actions">
       <a class="btn" href="/live/{{ l.id }}">▶ Watch</a>
       {% if not l.is_self %}
@@ -41,6 +48,8 @@
       {% endif %}
       {% endif %}
     </div>
+  </div>
+  {% endfor %}
   </div>
   {% endfor %}
 </div>
@@ -57,7 +66,8 @@
 (function(){
   function buildCard(live){
     var card = document.createElement('div');
-    card.className = 'card live-card';
+    card.className = 'card live-card'
+      + ((live.host_level || 1) >= 5 ? ' vip' : '');
     var head = document.createElement('div');
     head.className = 'live-card-head';
     if (live.host_avatar){
@@ -89,6 +99,12 @@
     var meta = document.createElement('div');
     meta.className = 'live-meta';
     meta.textContent = '👁 ' + live.viewers + ' watching · 👥 ' + live.panel_count + ' on panel';
+    if (live.host_level_label){
+      var lt = document.createElement('span');
+      lt.className = 'lvl-tag';
+      lt.textContent = ' · ' + live.host_level_label;
+      meta.appendChild(lt);
+    }
     card.appendChild(meta);
     var actions = document.createElement('div');
     actions.className = 'live-actions';
@@ -119,11 +135,28 @@
     card.appendChild(actions);
     return card;
   }
+  var SECTIONS = [
+    ['vip', '👑 VIP Lives', function(l){ return (l.host_level || 1) >= 5; }],
+    ['star', '🔥 Star Lives', function(l){ var n = l.host_level || 1; return n >= 3 && n <= 4; }],
+    ['new', '🌱 New & Rising', function(l){ return (l.host_level || 1) <= 2; }]
+  ];
   function renderLives(list){
-    var grid = document.getElementById('lives-grid');
-    if (!grid) return;
-    while (grid.firstChild) grid.removeChild(grid.firstChild);
-    list.forEach(function(live){ grid.appendChild(buildCard(live)); });
+    var wrap = document.getElementById('lives-sections');
+    if (!wrap) return;
+    while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+    SECTIONS.forEach(function(s){
+      var rows = list.filter(s[2]);
+      if (!rows.length) return;
+      var h = document.createElement('h3');
+      h.className = 'lives-section-title';
+      h.textContent = s[1];
+      wrap.appendChild(h);
+      var grid = document.createElement('div');
+      grid.className = 'lives-grid';
+      grid.setAttribute('data-section', s[0]);
+      rows.forEach(function(live){ grid.appendChild(buildCard(live)); });
+      wrap.appendChild(grid);
+    });
     var empty = document.getElementById('lives-empty');
     if (empty) empty.hidden = list.length > 0;
   }
