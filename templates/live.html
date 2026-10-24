@@ -20,16 +20,36 @@
 
 {% else %}
 <style>
-/* ===== stage: square-tile panel grid (TikTok-style) ===== */
-.live-stage{position:relative;background:#000;border-radius:14px;overflow:hidden;
-  box-shadow:0 8px 28px rgba(0,0,0,.35)}
-.live-grid{display:grid;gap:6px;padding:6px;background:#000;min-height:330px}
-.live-grid.cols-1{grid-template-columns:1fr;max-width:min(100%,60vh);margin:0 auto;width:100%}
-.live-grid.cols-2{grid-template-columns:repeat(2,1fr)}
-.live-grid.cols-3{grid-template-columns:repeat(3,1fr)}
-.live-grid.cols-4{grid-template-columns:repeat(4,1fr)}
-@media (max-width:600px) and (orientation:portrait){
-  .live-grid.cols-4{grid-template-columns:repeat(3,1fr)}
+/* ===== FULLSCREEN stage (TikTok-style): the live fills the whole
+   viewport (100dvh). #live-fs is a fixed full-viewport layer; the
+   stage fills it; the HOST tile (.stage-bg) is the full-bleed
+   background layer (video object-fit:cover) and the remaining
+   panel tiles form a compact overlay stack — a right-side vertical
+   column on tall/portrait stages, a bottom strip on wide ones.
+   Solo (no panel), the single host/local tile fills the stage. */
+.live-fs{position:fixed;inset:0;height:100dvh;background:#000;z-index:1150;
+  overflow:hidden}
+.live-fs[hidden]{display:none}
+#live-stage-slot{position:absolute;inset:0}
+.live-stage{position:absolute;inset:0;height:100%;background:#000;overflow:hidden}
+.live-grid{position:absolute;inset:0;background:#000}
+.live-grid.cols-1 .live-tile{position:absolute;inset:0;width:100%;height:100%;
+  aspect-ratio:auto;border-radius:0}
+.live-tile.stage-bg{position:absolute;inset:0;width:100%;height:100%;
+  aspect-ratio:auto;border-radius:0;z-index:0}
+.live-grid.has-panel{display:flex;flex-direction:column;align-items:flex-end;
+  overflow-y:auto;overflow-x:hidden;padding:64px 8px 110px;gap:6px}
+.live-grid.has-panel .live-tile{position:relative;width:min(32%,180px);
+  aspect-ratio:3/4;flex:none;z-index:2}
+.live-grid.has-panel .live-tile.stage-bg{position:absolute;inset:0;width:100%;
+  height:100%;aspect-ratio:auto;z-index:0}
+@media (orientation:landscape){
+  .live-grid.has-panel{flex-direction:row;align-items:flex-end;
+    justify-content:flex-start;overflow-x:auto;overflow-y:hidden;
+    padding:8px 8px 96px}
+  .live-grid.has-panel .live-tile{height:min(30%,170px);width:auto;
+    aspect-ratio:3/4}
+  .live-grid.has-panel .live-tile.stage-bg{width:100%;height:100%}
 }
 .live-tile{position:relative;aspect-ratio:1/1;background:#181818;border-radius:10px;
   overflow:hidden}
@@ -48,6 +68,10 @@
   font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,.9);
   background:linear-gradient(transparent,rgba(0,0,0,.65))}
 .live-tile .tile-label .tname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-conn-dot{width:10px;height:10px;border-radius:50%;background:#8a8d91;flex:none;
+  cursor:pointer;border:1px solid rgba(255,255,255,.75);padding:0}
+.live-conn-dot.ok{background:#31a24c}
+.live-conn-dot.bad{background:#e02b20}
 .live-tile .tile-menu{position:absolute;top:6px;right:6px;z-index:3;width:30px;height:30px;
   border-radius:50%;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:16px;
   font-weight:800;cursor:pointer;line-height:1}
@@ -137,8 +161,80 @@
   border-radius:10px;padding:10px 14px;font-size:14px;text-align:center;
   box-shadow:0 8px 24px rgba(0,0,0,.4)}
 #live-toast[hidden]{display:none}
+/* ===== chrome: auto-fading overlay UI (Build G translucency) =====
+   #live-chrome wraps the top bar, the right action rail and the
+   bottom control bar. After ~3.5s without pointer/touch activity
+   on the stage, #live-fs gains .chrome-dim and the chrome fades to
+   opacity .08 — pointer-events stay ON (the wrapper itself is
+   click-through, its children are not), so a tap both wakes the
+   chrome and works. The ✕ exit button is NOT inside the wrapper:
+   it is exempt from the full dim and never drops below .35. */
+.live-chrome{position:absolute;inset:0;z-index:9;pointer-events:none;
+  transition:opacity .4s ease}
+.live-chrome>*{pointer-events:auto}
+#live-fs.chrome-dim .live-chrome{opacity:.08}
+#live-exit{position:absolute;top:10px;left:10px;z-index:11;width:38px;height:38px;
+  border-radius:50%;border:none;background:rgba(28,30,33,.55);color:#fff;
+  font-size:17px;font-weight:800;cursor:pointer;line-height:1;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  transition:opacity .4s ease}
+#live-fs.chrome-dim #live-exit{opacity:.35}
+.live-topbar{padding-left:56px;transition:opacity .4s ease}
+#live-fs.chrome-dim .live-topbar{opacity:.08}
+.live-stage.in-mini .live-topbar{display:none}
+.live-rail{position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  display:flex;flex-direction:column;gap:10px;align-items:center;z-index:9}
+.live-rail .live-like-btn{box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.live-controls{position:absolute;left:0;right:0;bottom:0;margin:0;z-index:9;
+  padding:22px 10px 10px;background:linear-gradient(transparent,rgba(0,0,0,.55))}
+@media (prefers-reduced-motion: reduce){
+  .live-chrome,#live-exit{transition:none}
+}
+/* ===== overlay stack: poll/game cards, panels, comment form =====
+   Everything that used to sit BELOW the stage now floats over it,
+   translucent (Build G), in a scrollable stack above the bottom
+   control bar. Reachable in fullscreen; simply not reachable
+   while the live is minimized (the tile has no panel buttons). */
+.live-overlay-stack{position:absolute;left:10px;bottom:84px;z-index:8;
+  width:min(94vw,430px);max-height:46%;overflow-y:auto;display:flex;
+  flex-direction:column;gap:8px}
+.live-overlay-stack .live-panel{margin-bottom:0}
+.live-overlay-stack:empty{display:none}
+/* ===== minimized live: floating tile + browse mode ===== */
+#live-mini{position:fixed;right:12px;bottom:12px;width:min(34vw,180px);
+  aspect-ratio:3/4;z-index:1600;background:#000;
+  border:2px solid rgba(255,255,255,.55);border-radius:12px;overflow:hidden;
+  box-shadow:0 10px 28px rgba(0,0,0,.5);color:#fff;touch-action:none;cursor:pointer}
+#live-mini[hidden]{display:none}
+#live-mini-slot{position:absolute;inset:0}
+.live-stage.in-mini .live-float{display:none}
+.live-stage.in-mini .live-statusline{display:none}
+.live-stage.in-mini .live-grid.has-panel{padding:4px;gap:3px}
+.live-stage.in-mini .live-grid.has-panel .live-tile{width:46%}
+#live-mini-close{position:absolute;top:4px;right:4px;z-index:3;width:26px;height:26px;
+  border-radius:50%;border:none;background:rgba(0,0,0,.6);color:#fff;
+  font-size:13px;font-weight:800;cursor:pointer;line-height:1}
+#live-mini-host{position:absolute;left:0;right:0;bottom:0;z-index:3;display:flex;
+  gap:6px;align-items:center;padding:5px 6px;background:rgba(0,0,0,.55);
+  font-size:11.5px;font-weight:800}
+#live-mini-host[hidden]{display:none}
+#live-mini-end{background:var(--red);border:none;color:#fff;border-radius:999px;
+  padding:4px 10px;font-size:11.5px;font-weight:800;cursor:pointer;margin-left:auto}
+/* ===== browse mode section (server-rendered; shown minimized) == */
+#live-browse[hidden]{display:none}
+.live-browse-lives{display:flex;gap:10px;overflow-x:auto;padding:4px 0 10px}
+.live-browse-card{flex:none;width:150px;background:var(--card);
+  border:1px solid var(--border);border-radius:12px;padding:10px;color:inherit;
+  display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.live-browse-card img{width:44px;height:44px;border-radius:50%;object-fit:cover}
+.live-browse-card .nm{font-weight:800;font-size:14px}
+.live-browse-card .ti{font-size:12.5px;color:var(--muted);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.live-browse-card .vw{font-size:12px;font-weight:700;color:var(--red)}
 </style>
 
+<div class="live-fs" id="live-fs">
+ <div id="live-stage-slot">
 <div class="live-stage" id="live-stage">
   <div class="live-grid cols-1" id="live-grid"></div>
   <div class="live-topbar">
@@ -157,6 +253,32 @@
   <div class="live-float" id="live-float"><div class="live-comments" id="live-comments"></div></div>
 </div>
 
+ </div>
+ <button type="button" id="live-exit" title="Shrink live">✕</button>
+ <div class="live-chrome" id="live-chrome">
+ <div class="live-rail">
+  <button type="button" class="live-like-btn" id="ctl-like">❤️ <span id="live-like-count">0</span></button>
+  <button type="button" class="live-like-btn" id="ctl-share" data-copy-path="/l/{{ live.id }}">🔗 Share this live</button>
+  <button type="button" class="live-ctl" id="ctl-comment-focus" title="Comment">💬</button>
+  <button type="button" class="live-ctl" id="ctl-poll" hidden>📊 Poll / Trivia</button>
+  <button type="button" class="live-ctl" id="ctl-games" hidden>🎮 Games</button>
+ </div>
+<div class="live-controls" id="live-controls">
+  <!-- panel members -->
+  <button type="button" class="live-ctl" id="ctl-mute" hidden>🎤 Mute</button>
+  <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
+  <button type="button" class="live-ctl" id="ctl-flip" hidden>🔄 Flip</button>
+  <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>🚪 Leave panel</button>
+  <!-- host -->
+  <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
+  <!-- watcher -->
+  <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
+  <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
+  <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
+  <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
+</div>
+ </div>
+ <div class="live-overlay-stack" id="live-overlay-stack">
 <div class="live-err" id="live-error" hidden>
   <div id="live-error-text"></div>
   <button type="button" class="live-ctl" id="live-error-retry" style="margin-top:8px">🔁 Try again</button>
@@ -170,24 +292,6 @@
   </span>
 </div>
 
-<div class="live-controls" id="live-controls">
-  <button type="button" class="live-like-btn" id="ctl-like">❤️ <span id="live-like-count">0</span></button>
-  <button type="button" class="live-like-btn" id="ctl-share" data-copy-path="/l/{{ live.id }}">🔗 Share this live</button>
-  <!-- panel members -->
-  <button type="button" class="live-ctl" id="ctl-mute" hidden>🎤 Mute</button>
-  <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
-  <button type="button" class="live-ctl" id="ctl-flip" hidden>🔄 Flip</button>
-  <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>🚪 Leave panel</button>
-  <!-- host -->
-  <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
-  <!-- watcher -->
-  <button type="button" class="live-ctl" id="ctl-sound" hidden>🔇 Sound off</button>
-  <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
-  <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
-  <button type="button" class="live-ctl" id="ctl-poll" hidden>📊 Poll / Trivia</button>
-  <button type="button" class="live-ctl" id="ctl-games" hidden>🎮 Games</button>
-  <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
-</div>
 <div class="live-panel" id="live-poll-card" hidden style="border-color:var(--red)">
   <div style="font-weight:800;margin-bottom:8px">📊 <span id="live-poll-q"></span></div>
   <div id="live-poll-actions" style="display:flex;gap:8px;flex-wrap:wrap"></div>
@@ -242,6 +346,36 @@
   </form>
 </div>
 
+ </div>
+</div>
+<div id="live-mini" hidden>
+  <div id="live-mini-slot"></div>
+  <button type="button" id="live-mini-close" title="Leave live">✕</button>
+  <div id="live-mini-host" hidden><span>🔴 You're live</span><button type="button" id="live-mini-end">End</button></div>
+</div>
+<div id="live-browse" hidden>
+  <h2 style="margin:14px 0 6px">🔴 More lives</h2>
+  {% if more_lives %}
+  <div class="live-browse-lives">
+    {% for l in more_lives %}
+    <a class="live-browse-card" href="/live/{{ l.id }}">
+      {% if l.avatar %}<img src="{{ l.avatar|e }}" alt="">{% else %}<span class="av-ph av-40">{{ l.name[:1]|upper|e }}</span>{% endif %}
+      <span class="nm">{{ l.name|e }}</span>
+      {% if l.title %}<span class="ti">{{ l.title|e }}</span>{% endif %}
+      <span class="vw">👁 {{ l.viewers }} watching</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:var(--muted)">No other lives right now.</p>
+  {% endif %}
+  <h2 style="margin:16px 0 8px">Latest posts</h2>
+  {% for post in browse_posts %}
+  {% include "partials/post_card.html" %}
+  {% else %}
+  <div class="card"><p style="color:var(--muted)">No posts yet.</p></div>
+  {% endfor %}
+</div>
 <!-- Manage sheet: moved to <body> by JS on init (body-level sheet
      pattern — sheets inside cards get trapped by stacking contexts). -->
 <div id="live-sheet-backdrop" hidden></div>
@@ -276,7 +410,13 @@ function liveRoomDiff(prev, next){
 (function(){
   'use strict';
   var B = LIVE_BOOT;
-  /* Same ICE config as 1:1 calls in base.html — keep the two in sync. */
+  /* ICE config: GET /ice.json is the single source (app.py, with the
+     HERE_ICE_SERVERS env override). The literal below is the FALLBACK
+     (same defaults as base.html's calls copy) used when the fetch
+     fails or takes >1.5s — peer creation never waits longer than
+     that race; new RTCPeerConnections read the current ICE_CONFIG,
+     which the fetch replaces as soon as it lands (normally long
+     before the first peer is created). */
   var ICE_CONFIG = {iceServers: [
     {urls: 'stun:stun.l.google.com:19302'},
     {urls: 'stun:stun1.l.google.com:19302'},
@@ -284,6 +424,25 @@ function liveRoomDiff(prev, next){
     {urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject'},
     {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'}
   ]};
+  var _iceConfigPromise = null;
+  function getIceConfig(){
+    if (_iceConfigPromise) return _iceConfigPromise;
+    var fetched = fetch('/ice.json', {credentials: 'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.iceServers && d.iceServers.length)
+          return {iceServers: d.iceServers};
+        return ICE_CONFIG;
+      })
+      .catch(function(){ return ICE_CONFIG; });
+    var timeout = new Promise(function(res){
+      setTimeout(function(){ res(ICE_CONFIG); }, 1500);
+    });
+    _iceConfigPromise = Promise.race([fetched, timeout])
+      .then(function(cfg){ ICE_CONFIG = cfg; return cfg; });
+    return _iceConfigPromise;
+  }
+  getIceConfig();
   var $ = function(id){ return document.getElementById(id); };
   var stageEl = $('live-stage'), gridEl = $('live-grid'),
       heartsEl = $('live-hearts'), statusEl = $('live-status'),
@@ -313,7 +472,11 @@ function liveRoomDiff(prev, next){
   var tiles = {};   /* uid -> {el, video, ph, labelName, badges, menuBtn, member} */
   var myStream = null, mediaReady = false, facing = 'user';
   var myMicOn = true, myCamOn = true, forcedMuted = false;
-  var soundOff = false;
+  /* Remote videos START MUTED (iOS autoplay requires it; unmuted
+     autoplay is what silently failed on phones). Sound is one tap
+     on the 🔊 button — shown to panel members too, not just
+     watchers, since members need it to hear the other panelists. */
+  var soundOff = true;
   var lastSignal = 0, lastComment = 0, renderedComments = {};
   var roomSnap = null;
   var roomSnapHadViewers = false;
@@ -418,12 +581,30 @@ function liveRoomDiff(prev, next){
     var video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    /* EVERY tile starts muted: the local one forever (feedback),
+       remote ones until the 🔊 toggle (iOS autoplay policy). */
+    video.muted = true;
     if (uid === B.me){
       video.className = 'localvid';
-      video.muted = true;
     }
     var label = document.createElement('div');
     label.className = 'tile-label';
+    var dot = null;
+    if (uid !== B.me){
+      dot = document.createElement('button');
+      dot.type = 'button';
+      dot.className = 'live-conn-dot';
+      dot.title = 'Connection status';
+      dot.dataset.state = 'new';
+      (function(targetId){
+        dot.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          if (dot.dataset.state === 'bad') manualRestart(targetId);
+        });
+      })(uid);
+      label.appendChild(dot);
+    }
     var tname = document.createElement('span');
     tname.className = 'tname';
     var badges = document.createElement('span');
@@ -448,7 +629,8 @@ function liveRoomDiff(prev, next){
     el.appendChild(menuBtn);
     gridEl.appendChild(el);
     tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
-                  badges: badges, menuBtn: menuBtn, member: member};
+                  badges: badges, menuBtn: menuBtn, member: member,
+                  dot: dot};
     updateTile(member);
     var P = peers[uid];
     if (P) P.videoEl = video;
@@ -465,6 +647,7 @@ function liveRoomDiff(prev, next){
     if (member.admin) b += '🛡 ';
     if (member.muted) b += '🔇';
     T.badges.textContent = b;
+    T.el.classList.toggle('stage-bg', member.role === 'host');
     T.menuBtn.hidden = !(canManage() && canActOn(member));
   }
   function removeTile(uid){
@@ -486,7 +669,8 @@ function liveRoomDiff(prev, next){
     Object.keys(tiles).forEach(function(uid){
       if (!panelById[uid]) removeTile(+uid);
     });
-    gridEl.className = 'live-grid cols-' + gridCols(panel.length);
+    gridEl.className = 'live-grid cols-' + gridCols(panel.length)
+      + (panel.length > 1 ? ' has-panel' : '');
   }
 
   /* ---------------- local media (panel members) ---------------- */
@@ -562,9 +746,9 @@ function liveRoomDiff(prev, next){
       Object.keys(peers).forEach(function(uid){
         var P = peers[uid];
         addLocalTracks(P);
-        if (P.offered && P.pc.signalingState === 'stable') makeOffer(+uid);
-        else if (!P.offered) sayHelloTo(+uid); /* nudge a fresh offer
-          now that my tracks can ride the answer (old guest trick) */
+        if (P.offered) makeOffer(+uid); /* queues if mid-negotiation */
+        else sayHelloTo(+uid); /* nudge a fresh offer now that my
+          tracks can ride the answer (old guest trick) */
       });
       reconcilePeers();
     }).catch(function(){
@@ -607,14 +791,120 @@ function liveRoomDiff(prev, next){
   }
   function sayHelloTo(uid){
     var P = peers[uid];
-    if (P) P.helloSent = true;
+    if (P){
+      P.helloSent = true;
+      if (mediaReady) P.helloWithMedia = true;
+    }
     signal(uid, 'hello', {watch: 1});
+  }
+  /* ---------------- diagnostics (window.__liveDiag + tile dots) ----
+     __liveDiag.peers[uid] = {state, iceState, signalingState,
+     hasRemoteTrack, hasLocalSenders, restarts} — refreshed on every
+     peer event and on a 1s interval. The dot on each remote tile's
+     label row mirrors connectionState: grey = connecting/new,
+     green = connected, red = failed (or disconnected past the
+     grace window); tapping a RED dot retries that peer. */
+  window.__liveDiag = {peers: {}};
+  var restartCounts = {};   /* uid -> ICE restarts this failure episode */
+  function peerHasRemoteTrack(P){
+    try {
+      return P.pc.getReceivers().some(function(r){
+        return r.track && r.track.readyState === 'live';
+      });
+    } catch (e) { return false; }
+  }
+  function peerHasLocalSenders(P){
+    try {
+      return P.pc.getSenders().some(function(s){ return !!s.track; });
+    } catch (e) { return false; }
+  }
+  function refreshDiag(){
+    var out = {};
+    Object.keys(peers).forEach(function(uid){
+      var P = peers[uid];
+      out[uid] = {
+        state: P.pc.connectionState,
+        iceState: P.pc.iceConnectionState,
+        signalingState: P.pc.signalingState,
+        hasRemoteTrack: peerHasRemoteTrack(P),
+        hasLocalSenders: peerHasLocalSenders(P),
+        restarts: restartCounts[uid] || 0
+      };
+      updateDot(+uid);
+    });
+    window.__liveDiag = {peers: out};
+  }
+  function updateDot(uid){
+    var T = tiles[uid], P = peers[uid];
+    if (!T || !T.dot) return;
+    var st = P ? P.pc.connectionState : 'closed';
+    var cls = 'live-conn-dot', ds = 'new';
+    if (st === 'connected'){ cls += ' ok'; ds = 'ok'; }
+    else if (st === 'failed' || (P && P.discBad)){ cls += ' bad'; ds = 'bad'; }
+    T.dot.className = cls;
+    T.dot.dataset.state = ds;
+  }
+  /* Per-peer promise chain serializing ALL SDP work (S2): offers,
+     answers and renegotiations for one peer never run concurrently,
+     so setRemoteDescription calls can't interleave into a swallowed
+     InvalidStateError. The fixed offer rule is unchanged. */
+  function enqueuePeerOp(P, fn){
+    var run = P.chain.then(fn, fn);
+    P.chain = run.catch(function(){});
+    return run;
+  }
+  function noteStable(uid){
+    var P = peers[uid];
+    if (!P) return;
+    if (P.pendingHello){
+      P.pendingHello = false;
+      if (P.offered) makeOffer(uid);
+    }
+    if (P.pendingReoffer) makeOffer(uid);
+  }
+  function handleFailed(uid){
+    var P = peers[uid];
+    if (!P) return;
+    setStatus('Connection problem — reconnecting…');
+    if ((restartCounts[uid] || 0) >= 1){
+      /* S4: ONE automatic restart per failure episode; after that
+         the red tile dot is the (manual) retry path. The counter
+         resets when the peer reaches 'connected'. */
+      refreshDiag();
+      return;
+    }
+    restartCounts[uid] = (restartCounts[uid] || 0) + 1;
+    if (P.offered){ /* I drive this pair: restart ICE + re-offer */
+      try { P.pc.restartIce(); } catch (e) {}
+      makeOffer(uid);
+    } else { /* the other side drives: drop it and re-hello */
+      closePeer(uid);
+      reconcilePeers();
+    }
+    refreshDiag();
+  }
+  function manualRestart(uid){
+    restartCounts[uid] = 0;
+    var P = peers[uid];
+    if (P && P.offered){
+      try { P.pc.restartIce(); } catch (e) {}
+      makeOffer(uid);
+    } else {
+      if (P) closePeer(uid);
+      reconcilePeers();
+      var P2 = peers[uid];
+      if (P2 && !P2.offered && !P2.helloSent) sayHelloTo(uid);
+    }
+    refreshDiag();
   }
   function ensurePeer(uid, offerer){
     if (peers[uid]) return peers[uid];
     var pc = new RTCPeerConnection(ICE_CONFIG);
     var T = tiles[uid];
     var P = {pc: pc, iceQ: [], offered: false, helloSent: false,
+             helloWithMedia: false, pendingHello: false,
+             pendingReoffer: false, makingOffer: false,
+             chain: Promise.resolve(), discBad: false, discTimer: null,
              remoteKind: isPanelist(uid) ? 'panelist' : 'watcher',
              videoEl: T ? T.video : null};
     peers[uid] = P;
@@ -623,24 +913,40 @@ function liveRoomDiff(prev, next){
     };
     pc.ontrack = function(ev){
       if (ev.streams && ev.streams[0]) attachRemote(uid, ev.streams[0]);
+      refreshDiag();
     };
+    pc.onsignalingstatechange = function(){
+      if (peers[uid] !== P) return;
+      if (pc.signalingState === 'stable') noteStable(uid);
+      refreshDiag();
+    };
+    pc.oniceconnectionstatechange = function(){ refreshDiag(); };
     pc.onconnectionstatechange = function(){
       if (ended || peers[uid] !== P) return;
       var st = pc.connectionState;
-      if (st === 'connected'){ setStatus(null); }
-      else if (st === 'disconnected'){ setStatus('Reconnecting…'); }
-      else if (st === 'failed'){
-        setStatus('Connection problem — reconnecting…');
-        if (P.offered){ /* I drive this pair: restart ICE + re-offer */
-          try { pc.restartIce(); } catch (e) {}
-          makeOffer(uid);
-        } else { /* the other side drives: drop it and re-hello */
-          closePeer(uid);
-          if (desiredPeers()[uid]) sayHelloTo(uid);
+      if (st === 'connected'){
+        restartCounts[uid] = 0;
+        P.discBad = false;
+        if (P.discTimer){ clearTimeout(P.discTimer); P.discTimer = null; }
+        setStatus(null);
+      } else if (st === 'disconnected'){
+        setStatus('Reconnecting…');
+        if (!P.discTimer){
+          P.discTimer = setTimeout(function(){
+            P.discTimer = null;
+            if (peers[uid] === P && pc.connectionState === 'disconnected'){
+              P.discBad = true;
+              refreshDiag();
+            }
+          }, 5000);
         }
+      } else if (st === 'failed'){
+        handleFailed(uid);
       }
+      refreshDiag();
     };
     if (myStream && amMember) addLocalTracks(P);
+    refreshDiag();
     if (offerer) makeOffer(uid);
     return P;
   }
@@ -648,13 +954,33 @@ function liveRoomDiff(prev, next){
     var P = peers[uid];
     if (!P) return;
     P.offered = true;
-    var pc = P.pc;
-    pc.createOffer()
-      .then(function(o){ return pc.setLocalDescription(o); })
-      .then(function(){
-        signal(uid, 'offer', pc.localDescription.toJSON());
-      })
-      .catch(function(){});
+    if (P.makingOffer || P.pc.signalingState !== 'stable'){
+      /* Coalesce into ONE re-offer when the pc settles (S1/S2):
+         never run two SDP operations for this peer at once. */
+      P.pendingReoffer = true;
+      return;
+    }
+    P.pendingReoffer = false;
+    P.makingOffer = true;
+    enqueuePeerOp(P, function(){
+      if (peers[uid] !== P){ P.makingOffer = false; return; }
+      if (P.pc.signalingState !== 'stable'){
+        P.makingOffer = false;
+        P.pendingReoffer = true;
+        return;
+      }
+      return P.pc.createOffer()
+        .then(function(o){ return P.pc.setLocalDescription(o); })
+        .then(function(){
+          signal(uid, 'offer', P.pc.localDescription.toJSON());
+        })
+        .catch(function(){})
+        .then(function(){
+          P.makingOffer = false;
+          if (P.pendingReoffer && peers[uid] === P
+              && P.pc.signalingState === 'stable') makeOffer(uid);
+        });
+    });
   }
   function flushIce(P){
     var q = P.iceQ;
@@ -665,7 +991,9 @@ function liveRoomDiff(prev, next){
     var P = peers[uid];
     if (!P) return;
     delete peers[uid];
+    if (P.discTimer){ clearTimeout(P.discTimer); P.discTimer = null; }
     try { P.pc.close(); } catch (e) {}
+    refreshDiag();
   }
   function attachRemote(uid, stream){
     if (!isPanelist(uid)) return; /* watchers have no tile to fill */
@@ -717,10 +1045,15 @@ function liveRoomDiff(prev, next){
         if (!offer && !P.helloSent) sayHelloTo(uid);
       } else {
         P.remoteKind = want[uidStr];
-        if (offer && !P.offered && P.pc.signalingState === 'stable')
-          makeOffer(uid);
-        else if (!offer && !P.offered && !P.helloSent
-                 && P.pc.signalingState === 'stable')
+        if (offer && !P.offered)
+          makeOffer(uid); /* makeOffer itself gates on stable/busy */
+        else if (!offer && !P.offered
+                 && P.pc.signalingState === 'stable'
+                 && (!P.helloSent
+                     || (mediaReady && !P.helloWithMedia)))
+          /* S1: re-hello once my media has landed if the first
+             hello went out before it — that first answer may have
+             carried zero tracks, and only a re-offer fixes it. */
           sayHelloTo(uid);
       }
     });
@@ -733,7 +1066,7 @@ function liveRoomDiff(prev, next){
     if (ended) return;
     var from = sig.from_id;
     if (from === B.me) return;
-    var pc, P;
+    var P;
     if (sig.kind === 'hello'){
       /* Someone wants my stream. Only panel members ever send. A
          hello from a LATER panelist is expected (I offer); a hello
@@ -743,29 +1076,45 @@ function liveRoomDiff(prev, next){
       if (isPanelist(from) && panelIndexOf(from) !== -1
           && myIndex() !== -1 && panelIndexOf(from) < myIndex()) return;
       P = ensurePeer(from, true);
-      if (P.pc.signalingState === 'stable' && P.offered)
-        makeOffer(from); /* re-offer (their camera just got ready) */
+      /* S1: a hello landing while this pc is mid-negotiation is NOT
+         dropped — it is remembered (pendingHello) and acted on the
+         moment the pc reaches 'stable' (noteStable). Dropping it
+         lost the re-offer that carries a later joiner's tracks when
+         their first answer went out before their camera was ready. */
+      if (P.pc.signalingState === 'stable') makeOffer(from);
+      else P.pendingHello = true;
     } else if (sig.kind === 'offer'){
       P = ensurePeer(from, false);
-      pc = P.pc;
-      if (amMember) addLocalTracks(P);
-      pc.setRemoteDescription(new RTCSessionDescription(sig.payload || {}))
-        .then(function(){
-          flushIce(P);
-          return pc.createAnswer();
-        })
-        .then(function(a){ return pc.setLocalDescription(a); })
-        .then(function(){
-          signal(from, 'answer', pc.localDescription.toJSON());
-        })
-        .catch(function(){});
+      /* S2: SDP work for this peer is serialized on P.chain. */
+      (function(Pp, payload){
+        enqueuePeerOp(Pp, function(){
+          if (peers[from] !== Pp) return;
+          if (amMember) addLocalTracks(Pp);
+          return Pp.pc.setRemoteDescription(
+              new RTCSessionDescription(payload || {}))
+            .then(function(){
+              flushIce(Pp);
+              return Pp.pc.createAnswer();
+            })
+            .then(function(a){ return Pp.pc.setLocalDescription(a); })
+            .then(function(){
+              signal(from, 'answer', Pp.pc.localDescription.toJSON());
+            })
+            .catch(function(){});
+        });
+      })(P, sig.payload);
     } else if (sig.kind === 'answer'){
       P = peers[from];
       if (!P) return;
-      P.pc.setRemoteDescription(
-          new RTCSessionDescription(sig.payload || {}))
-        .then(function(){ flushIce(P); })
-        .catch(function(){});
+      (function(Pp, payload){
+        enqueuePeerOp(Pp, function(){
+          if (peers[from] !== Pp) return;
+          return Pp.pc.setRemoteDescription(
+              new RTCSessionDescription(payload || {}))
+            .then(function(){ flushIce(Pp); })
+            .catch(function(){});
+        });
+      })(P, sig.payload);
     } else if (sig.kind === 'ice'){
       P = peers[from];
       if (!P) return;
@@ -780,6 +1129,7 @@ function liveRoomDiff(prev, next){
     } else if (sig.kind === 'bye'){
       closePeer(from); /* tile removal rides the next panel diff */
     }
+    refreshDiag();
   }
   function pollSignals(){
     if (ended) return;
@@ -828,7 +1178,10 @@ function liveRoomDiff(prev, next){
   }
   function syncMembership(){
     if (!myPanel) return;
-    var member = !!myPanel.am_member;
+    /* The host is ALWAYS a panelist (panelist #1 by role), whatever
+       a payload says — a false am_member here once demoted the host
+       to watcher, tearing down every peer (the two-way blackout). */
+    var member = !!(myPanel.am_member || myPanel.is_host);
     forcedMuted = !!(member && myPanel.muted);
     if (member === amMember){
       membershipKnown = true;
@@ -1583,7 +1936,9 @@ function liveRoomDiff(prev, next){
     $('ctl-flip').hidden = !member;
     $('ctl-panel-leave').hidden = !(member && !iAmHost());
     $('ctl-end').hidden = !iAmHost();
-    $('ctl-sound').hidden = member;
+    /* Sound toggle is for EVERYONE: remote tiles start muted (S3),
+       so panel members need it to hear each other too. */
+    $('ctl-sound').hidden = false;
     $('ctl-leave').hidden = member;
     $('ctl-join').hidden = member;
     $('ctl-invite-others').hidden = !canManage();
@@ -1595,7 +1950,7 @@ function liveRoomDiff(prev, next){
     var btn = $('ctl-join'), msg = $('live-join-msg');
     if (amMember){ btn.hidden = true; return; }
     btn.hidden = false;
-    if (panel.length >= 16){
+    if (panel.length >= 9){
       btn.disabled = true;
       btn.textContent = '🎥 Panel is full';
       return;
@@ -1768,6 +2123,7 @@ function liveRoomDiff(prev, next){
   function teardownEnded(){
     if (ended) return;
     ended = true;
+    if (minimized) restoreLive(); /* ended face belongs fullscreen */
     /* Ken's rule: when a live ends, the HOST goes straight back to
        their own profile — whether they ended it themselves or it
        ended under them (e.g. the owner's kill switch). One-shot:
@@ -1818,6 +2174,116 @@ function liveRoomDiff(prev, next){
       + ('0' + (s % 60)).slice(-2);
   }, 1000);
 
+  /* ---------------- fullscreen chrome + minimize-to-tile -------
+     The stage fills the viewport (#live-fs, 100dvh). Chrome (top
+     bar + rail + bottom bar) auto-dims after ~3.5s idle; any
+     pointerdown/touchstart on the stage wakes it. The ✕ exit
+     button lives OUTSIDE the chrome wrapper so it never dims
+     below .35. Minimizing MOVES the stage element itself (with
+     every <video> node and stream inside it) into the floating
+     tile via appendChild — elements are never recreated and
+     srcObject is never reassigned, so peers/streams are
+     untouched and nothing renegotiates. Polls + heartbeats keep
+     running while minimized; the page behind the tile becomes
+     the server-rendered browse section. */
+  var fsEl = $('live-fs'), miniEl = $('live-mini'),
+      miniSlot = $('live-mini-slot'), stageSlot = $('live-stage-slot'),
+      browseEl = $('live-browse');
+  var minimized = false;
+  var chromeTimer = null;
+  function wakeChrome(){
+    fsEl.classList.remove('chrome-dim');
+    if (chromeTimer) clearTimeout(chromeTimer);
+    chromeTimer = setTimeout(function(){
+      if (!minimized && !ended) fsEl.classList.add('chrome-dim');
+    }, 3500);
+  }
+  fsEl.addEventListener('pointerdown', wakeChrome);
+  fsEl.addEventListener('touchstart', wakeChrome, {passive: true});
+  function minimizeLive(){
+    if (minimized || ended) return;
+    minimized = true;
+    closeSheet();
+    miniSlot.appendChild(stageEl);
+    stageEl.classList.add('in-mini');
+    fsEl.hidden = true;
+    miniEl.hidden = false;
+    browseEl.hidden = false;
+    $('live-mini-host').hidden = !iAmHost();
+  }
+  function restoreLive(){
+    if (!minimized) return;
+    minimized = false;
+    stageSlot.appendChild(stageEl);
+    stageEl.classList.remove('in-mini');
+    miniEl.hidden = true;
+    browseEl.hidden = true;
+    fsEl.hidden = false;
+    wakeChrome();
+  }
+  window.__liveFs = {minimize: minimizeLive, restore: restoreLive,
+                     isMinimized: function(){ return minimized; }};
+  function openExitSheet(){
+    sheetTitle.textContent = 'Leave the stage?';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    sheetBtn('Shrink — keep my live running', false, function(){
+      minimizeLive();
+    });
+    sheetBtn('End live', true, function(){
+      post('/end').then(function(){ teardownEnded(); });
+    });
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('live-exit').addEventListener('click', function(){
+    if (iAmHost()) openExitSheet();
+    else minimizeLive();
+  });
+  $('ctl-comment-focus').addEventListener('click', function(){
+    var inp = $('live-comment-input');
+    if (inp) inp.focus();
+  });
+  $('live-mini-close').addEventListener('click', function(ev){
+    ev.stopPropagation();
+    if (iAmHost()){ openExitSheet(); return; }
+    try { navigator.sendBeacon('/live/' + B.id + '/leave'); } catch (e) {}
+    window.location.href = '/lives';
+  });
+  $('live-mini-end').addEventListener('click', function(ev){
+    ev.stopPropagation();
+    post('/end').then(function(){ teardownEnded(); });
+  });
+  /* Mini tile: drag to move (pointer events, clamped to the
+     viewport); a tap without a drag restores fullscreen. */
+  var miniDrag = null, miniDragged = false;
+  miniEl.addEventListener('pointerdown', function(ev){
+    if (ev.target && ev.target.closest
+        && ev.target.closest('button')) return;
+    miniDrag = {x: ev.clientX, y: ev.clientY,
+                l: miniEl.offsetLeft, t: miniEl.offsetTop};
+    miniDragged = false;
+    try { miniEl.setPointerCapture(ev.pointerId); } catch (e) {}
+  });
+  miniEl.addEventListener('pointermove', function(ev){
+    if (!miniDrag) return;
+    var dx = ev.clientX - miniDrag.x, dy = ev.clientY - miniDrag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) miniDragged = true;
+    if (miniDragged){
+      miniEl.style.left = Math.min(Math.max(0, miniDrag.l + dx),
+        window.innerWidth - miniEl.offsetWidth) + 'px';
+      miniEl.style.top = Math.min(Math.max(0, miniDrag.t + dy),
+        window.innerHeight - miniEl.offsetHeight) + 'px';
+      miniEl.style.right = 'auto';
+      miniEl.style.bottom = 'auto';
+    }
+  });
+  miniEl.addEventListener('pointerup', function(){
+    if (miniDrag && !miniDragged) restoreLive();
+    miniDrag = null;
+  });
+  wakeChrome();
+
   /* ---------------- boot ---------------- */
   /* Seed an initial panel from the boot JSON so the stage paints
      before the first state poll lands; the poll replaces it with
@@ -1840,6 +2306,7 @@ function liveRoomDiff(prev, next){
   }
   every(2000, pollSignals);
   every(3000, pollState);
+  every(1000, refreshDiag);
   every(10000, function(){ post('/heartbeat').catch(function(){}); });
   pollState();
   pollSignals();

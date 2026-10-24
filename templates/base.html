@@ -1402,10 +1402,14 @@ document.addEventListener('click', function(ev){
       reqKind = $('req-kind'), reqAccept = $('req-accept'),
       reqDeclineBtn = $('req-decline-btn');
 
-  /* STUN finds a direct path; the TURN entries are the Open Relay
-     project's free community relay (best-effort) for strict networks
-     where no direct path opens — swap in private TURN credentials here
-     if call reliability ever needs a guaranteed relay. */
+  /* ICE config: GET /ice.json is the single source (app.py, with the
+     HERE_ICE_SERVERS env override). STUN finds a direct path; the
+     TURN entries are the Open Relay project's free community relay
+     (best-effort, data-capped) for strict networks where no direct
+     path opens. The literal below is the FALLBACK used when the
+     fetch fails or takes >1.5s — peer creation never waits longer
+     than that race; new RTCPeerConnections read the current
+     ICE_CONFIG, which the fetch replaces as soon as it lands. */
   var ICE_CONFIG = {iceServers: [
     {urls: 'stun:stun.l.google.com:19302'},
     {urls: 'stun:stun1.l.google.com:19302'},
@@ -1413,6 +1417,25 @@ document.addEventListener('click', function(ev){
     {urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject'},
     {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'}
   ]};
+  var _iceConfigPromise = null;
+  function getIceConfig(){
+    if (_iceConfigPromise) return _iceConfigPromise;
+    var fetched = fetch('/ice.json', {credentials: 'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.iceServers && d.iceServers.length)
+          return {iceServers: d.iceServers};
+        return ICE_CONFIG;
+      })
+      .catch(function(){ return ICE_CONFIG; });
+    var timeout = new Promise(function(res){
+      setTimeout(function(){ res(ICE_CONFIG); }, 1500);
+    });
+    _iceConfigPromise = Promise.race([fetched, timeout])
+      .then(function(cfg){ ICE_CONFIG = cfg; return cfg; });
+    return _iceConfigPromise;
+  }
+  getIceConfig();
   var TERMINAL = {ended: 1, declined: 1, missed: 1, busy: 1};
 
   var S = null;        /* live call state, or null when idle */
