@@ -229,23 +229,24 @@ check("G1 page renders (ended/unavailable face, 200)", G1.get(f"/live/{LID}").st
 # admin appointment survives panel kick of W? W was not admin. Check A still admin:
 check("A still admin", here._live_is_admin(here.db(), LID, AID) is True)
 
-# panel cap: members now = {G2}. Fill to 16 via direct member rows for 14 filler users.
+# panel cap: members now = {G2}. Fill to host + 8 guests (panel size 9)
+# via direct member rows for 7 filler users.
 conn = sqlite3.connect(os.environ["HERE_DB"])
-for i in range(14):
+for i in range(7):
     conn.execute("INSERT INTO users(name,email,pw_hash,created_at) VALUES(?,?,?,?)",
                  (f"Fill {i}", f"fill{i}@x.io", "x", "2026-01-01T00:00:00+00:00"))
     fid = conn.execute("SELECT id FROM users WHERE email=?", (f"fill{i}@x.io",)).fetchone()[0]
     conn.execute("INSERT INTO live_members(live_id,user_id,muted,joined_at) VALUES(?,?,0,?)",
                  (LID, fid, "2026-01-01T00:00:00+00:00"))
 conn.commit(); conn.close()
-check("panel size is 16", here._live_panel_size(here.db(), LID) == 16)
+check("panel size is 9 (host + 8 guests)", here._live_panel_size(here.db(), LID) == 9)
 R.post(f"/live/{LID}/heartbeat")
 r = R.post(f"/live/{LID}/join-request"); reqR = r.json()["request"]["id"]
 r = H.post(f"/live/{LID}/join-decide", json={"request_id": reqR, "approve": True})
-check("approve at cap -> 409 Panel is full", r.status_code == 409 and r.json().get("error") == "Panel is full (16 max).", r.text[:200])
+check("approve at cap -> 409 Panel is full", r.status_code == 409 and r.json().get("error") == "Panel is full (8 guests max).", r.text[:200])
 r = IV.post(f"/live/{LID}/invite-decide", json={"request_id": inv_iv, "accept": True})
-check("invite-accept at cap -> 409 Panel is full", r.status_code == 409 and r.json().get("error") == "Panel is full (16 max).", r.text[:200])
-check("invite-accept at cap took no seat", here._live_panel_size(here.db(), LID) == 16)
+check("invite-accept at cap -> 409 Panel is full", r.status_code == 409 and r.json().get("error") == "Panel is full (8 guests max).", r.text[:200])
+check("invite-accept at cap took no seat", here._live_panel_size(here.db(), LID) == 9)
 
 # remove-admin + end-of-live settling
 r = H.post(f"/live/{LID}/remove-admin", json={"user_id": AID})
