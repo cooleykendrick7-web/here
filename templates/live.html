@@ -106,6 +106,34 @@
   text-shadow:0 2px 8px rgba(0,0,0,.4);will-change:transform,opacity}
 @keyframes heartfloat{0%{opacity:0;transform:translate(0,0) scale(.6)}
   12%{opacity:1}100%{opacity:0;transform:translate(var(--dx,0px),-44vh) scale(1.15)}}
+/* ===== Live Tickets: gift banner, shout pin, top gifters ===== */
+.live-topgifters{font-size:11.5px;color:#ffd97a;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;text-shadow:0 1px 4px rgba(0,0,0,.8)}
+.live-gift-banner{position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);
+  z-index:8;text-align:center;background:var(--lg-bg-strong);border:var(--lg-border);
+  border-radius:16px;padding:16px 22px;color:#fff;max-width:86%;pointer-events:none;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-gift-banner[hidden]{display:none}
+.live-gift-banner .gb-emoji{font-size:84px;line-height:1.05;
+  text-shadow:0 4px 18px rgba(0,0,0,.5)}
+.live-gift-banner .gb-text{font-size:16px;font-weight:800;margin-top:6px;
+  text-shadow:var(--lg-text-shadow)}
+.live-float{flex-direction:column;gap:6px}
+.live-shout{pointer-events:auto;background:rgba(212,31,46,.55);
+  border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:7px 11px;
+  color:#fff;font-size:13.5px;backdrop-filter:var(--lg-blur);
+  -webkit-backdrop-filter:var(--lg-blur);text-shadow:var(--lg-text-shadow)}
+.live-shout[hidden]{display:none}
+.live-shout .sh-who{font-weight:800}
+.live-shout .sh-timer{display:block;height:3px;background:rgba(255,255,255,.85);
+  border-radius:2px;margin-top:5px;transition:width 1s linear}
+.gift-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:4px}
+.gift-cell{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.18);
+  border-radius:12px;padding:10px 4px 8px;text-align:center;cursor:pointer;color:#fff}
+.gift-cell .g-emoji{font-size:34px;line-height:1.1}
+.gift-cell .g-name{font-size:11px;font-weight:700;margin-top:3px;line-height:1.15}
+.gift-cell .g-cost{font-size:11.5px;color:#ffd97a;font-weight:800;margin-top:2px}
+.gift-cell.armed{background:rgba(212,31,46,.75)}
 /* ===== controls / action bar ===== */
 .live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
 .live-ctl{background:var(--lg-bg);color:#fff;border:var(--lg-border);border-radius:999px;
@@ -274,15 +302,20 @@
     <div class="live-meta">
       <div class="live-host">{{ host.name|e }}</div>
       {% if live.title %}<div class="live-title">{{ live.title|e }}</div>{% endif %}
+      <div class="live-topgifters" id="live-top-gifters" hidden></div>
     </div>
     <div class="live-stats">
       <div>👁 <span id="live-viewers">0</span> · ❤️ <span id="live-likes">0</span></div>
-      <div>⏱ <span id="live-timer">0:00</span></div>
+      <div>⏱ <span id="live-timer">0:00</span> · 🎟️ <span id="live-tickets">0</span></div>
     </div>
   </div>
   <div class="live-statusline" id="live-status">Connecting…</div>
   <div class="live-hearts" id="live-hearts"></div>
-  <div class="live-float" id="live-float"><div class="live-comments" id="live-comments"></div></div>
+  <div class="live-gift-banner" id="live-gift-banner" hidden>
+    <div class="gb-emoji" id="live-gift-banner-emoji">🎁</div>
+    <div class="gb-text" id="live-gift-banner-text"></div>
+  </div>
+  <div class="live-float" id="live-float"><div class="live-shout" id="live-shout" hidden></div><div class="live-comments" id="live-comments"></div></div>
 </div>
 
  </div>
@@ -305,6 +338,7 @@
   <!-- host -->
   <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
   <!-- watcher -->
+  <button type="button" class="live-ctl" id="ctl-gift" hidden>🎁 Gift</button>
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
   <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
   <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
@@ -500,6 +534,13 @@ function liveRoomDiff(prev, next){
   var closedPoll = null;          /* state payload's last_closed_poll */
   var activeGame = null;          /* state payload's active_game */
   var lastGame = null;            /* state payload's last_game */
+  /* ---- Live Tickets state ---- */
+  var myTickets = B.tickets || 0; /* my spendable balance */
+  var lastGiftId = 0;             /* recent_gifts cursor (anim dedupe) */
+  var giftSheetOpen = false;
+  var armedGiftKey = null, armedGiftAt = 0;   /* ≥500 two-tap confirm */
+  var giftBannerTimer = null;
+  var activeShout = null;         /* state payload's active_shout */
 
   var peers = {};   /* uid -> {pc, iceQ, offered, helloSent, remoteKind, videoEl} */
   var tiles = {};   /* uid -> {el, video, ph, labelName, badges, menuBtn, member} */
@@ -1848,6 +1889,7 @@ function liveRoomDiff(prev, next){
   function closeSheet(){
     sheetEl.hidden = true; sheetBd.hidden = true; manageTarget = null;
     lcSheetOpen = false;
+    giftSheetOpen = false;
     $('live-sheet-cancel').textContent = 'Cancel';
   }
   sheetBd.addEventListener('click', closeSheet);
@@ -2490,6 +2532,198 @@ function liveRoomDiff(prev, next){
     });
   });
 
+  /* ---------------- live tickets: gifts + shouts ----------------
+     Prices live ONLY server-side (GIFT_CATALOG in app.py); this
+     sheet renders B.gifts (boot copy) and the endpoints re-price
+     every send. Animations are driven by the state poll's
+     recent_gifts — the sender's own gift id is returned by the
+     POST and marked seen, so nobody sees their own gift twice. */
+  function paintTickets(){
+    var chip = $('live-tickets');
+    if (chip) chip.textContent = myTickets;
+    var bal = $('gift-balance');
+    if (bal) bal.textContent = myTickets;
+  }
+  function spawnGiftFloat(emoji){
+    var h = document.createElement('span');
+    h.className = 'live-heart';
+    h.textContent = emoji;
+    var size = 30 + Math.floor(Math.random() * 16);
+    h.style.fontSize = size + 'px';
+    h.style.left = (58 + Math.random() * 34) + '%';
+    h.style.bottom = '14px';
+    h.style.setProperty('--dx', (Math.random() * 90 - 45) + 'px');
+    h.style.animationDuration = '3.6s';
+    heartsEl.appendChild(h);
+    setTimeout(function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    }, 3700);
+  }
+  function showGiftBanner(g){
+    var b = $('live-gift-banner');
+    $('live-gift-banner-emoji').textContent = g.emoji;
+    $('live-gift-banner-text').textContent =
+      g.sender_name + ' sent ' + g.name + '!';
+    b.hidden = false;
+    if (giftBannerTimer) clearTimeout(giftBannerTimer);
+    giftBannerTimer = setTimeout(function(){ b.hidden = true; }, 3000);
+  }
+  function handleGiftEvent(g){
+    if (!g || g.id <= lastGiftId) return;
+    lastGiftId = g.id;
+    if (g.tickets >= 100) showGiftBanner(g); else spawnGiftFloat(g.emoji);
+    addNotice('🎁 ' + g.sender_name + ' sent ' + g.emoji + ' ' + g.name);
+  }
+  function renderTopGifters(list){
+    var el = $('live-top-gifters');
+    if (!list || !list.length){ el.hidden = true; el.textContent = ''; return; }
+    el.textContent = '🏆 Top gifters: ' + list.map(function(t){
+      return t.name + ' (' + t.tickets + ')';
+    }).join(' · ');
+    el.hidden = false;
+  }
+  function renderShout(s){
+    activeShout = s || null;
+    var el = $('live-shout');
+    if (!activeShout){ el.hidden = true; el.innerHTML = ''; return; }
+    el.innerHTML = '';
+    var who = document.createElement('span');
+    who.className = 'sh-who';
+    who.textContent = '📌 ' + activeShout.name + ': ';
+    el.appendChild(who);
+    el.appendChild(document.createTextNode(activeShout.body));
+    var bar = document.createElement('span');
+    bar.className = 'sh-timer';
+    bar.id = 'live-shout-timer';
+    el.appendChild(bar);
+    el.hidden = false;
+    tickShout();
+  }
+  function tickShout(){
+    var bar = $('live-shout-timer');
+    if (!activeShout || !bar) return;
+    var left = (Date.parse(activeShout.expires_at) - Date.now()) / 1000;
+    if (left <= 0){
+      $('live-shout').hidden = true;
+      activeShout = null;
+      return;
+    }
+    bar.style.width = Math.max(0, Math.min(100, left / 60 * 100)) + '%';
+  }
+  function sendGift(g){
+    if (ended) return;
+    if (myTickets < g.tickets){
+      toast('Not enough tickets — grab a pack 🎟️');
+      window.open('/tickets', '_blank');
+      return;
+    }
+    if (g.tickets >= 500){
+      var now = Date.now();
+      if (armedGiftKey !== g.key || now - armedGiftAt > 3000){
+        armedGiftKey = g.key; armedGiftAt = now;
+        renderGiftSheet();
+        return;
+      }
+      armedGiftKey = null;
+    }
+    post('/gift', {gift_key: g.key}).then(function(d){
+      if (d && d.ok){
+        myTickets = d.balance;
+        paintTickets();
+        if (d.gift_id) lastGiftId = Math.max(lastGiftId, d.gift_id);
+        toast('Sent ' + g.emoji + ' ' + g.name + '!');
+        renderGiftSheet();
+      } else {
+        toast((d && d.error) || 'Could not send that gift.');
+      }
+    });
+  }
+  function renderGiftSheet(){
+    if (!giftSheetOpen) return;
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    var bal = document.createElement('div');
+    bal.style.cssText = 'padding:10px 8px;font-size:14px';
+    bal.innerHTML = '🎟️ Your tickets: <strong id="gift-balance">'
+      + myTickets + '</strong> · <a href="/tickets" target="_blank" '
+      + 'rel="noopener" style="color:#ffd97a;font-weight:700">'
+      + 'Get tickets 🎟️</a>';
+    sheetActions.appendChild(bal);
+    var grid = document.createElement('div');
+    grid.className = 'gift-grid';
+    (B.gifts || []).forEach(function(g){
+      var cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'gift-cell';
+      var armed = g.tickets >= 500 && armedGiftKey === g.key
+        && (Date.now() - armedGiftAt) <= 3000;
+      if (armed) cell.className += ' armed';
+      var em = document.createElement('div');
+      em.className = 'g-emoji'; em.textContent = g.emoji;
+      var nm = document.createElement('div');
+      nm.className = 'g-name'; nm.textContent = g.name;
+      var ct = document.createElement('div');
+      ct.className = 'g-cost';
+      ct.textContent = armed
+        ? ('Tap again to send ' + g.emoji + ' ' + g.tickets + '?')
+        : (g.tickets + ' 🎟️');
+      cell.appendChild(em); cell.appendChild(nm); cell.appendChild(ct);
+      cell.addEventListener('click', function(){ sendGift(g); });
+      grid.appendChild(cell);
+    });
+    sheetActions.appendChild(grid);
+    var sh = document.createElement('div');
+    sh.style.cssText = 'margin-top:12px;padding:6px 8px 2px;font-weight:800;font-size:13px';
+    sh.textContent = '📌 Pin a shout-out — ' + (B.shout_cost || 20)
+      + ' 🎟️ (60 seconds on top)';
+    sheetActions.appendChild(sh);
+    var rowEl = document.createElement('div');
+    rowEl.style.cssText = 'display:flex;gap:8px;padding:4px 8px 8px';
+    var inp = document.createElement('input');
+    inp.id = 'shout-input';
+    inp.maxLength = 300;
+    inp.placeholder = 'Your shout…';
+    inp.style.cssText = 'flex:1;min-width:0;border:1px solid rgba(255,255,255,.3);'
+      + 'border-radius:999px;padding:9px 13px;font-size:14px;'
+      + 'background:rgba(255,255,255,.12);color:#fff';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn';
+    btn.textContent = '📌 Pin it';
+    btn.addEventListener('click', function(){
+      var body = inp.value.trim();
+      if (!body) return;
+      post('/shout', {body: body}).then(function(d){
+        if (d && d.ok){
+          myTickets = d.balance;
+          paintTickets();
+          inp.value = '';
+          toast('📌 Shout pinned for 60 seconds!');
+          closeSheet();
+          pollState();
+        } else {
+          toast((d && d.error) || 'Could not pin that shout.');
+        }
+      });
+    });
+    rowEl.appendChild(inp);
+    rowEl.appendChild(btn);
+    sheetActions.appendChild(rowEl);
+  }
+  function openGiftSheet(){
+    giftSheetOpen = true;
+    armedGiftKey = null;
+    sheetTitle.textContent = '🎁 Send a gift';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    $('live-sheet-cancel').textContent = 'Done';
+    renderGiftSheet();
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('ctl-gift').addEventListener('click', openGiftSheet);
+  paintTickets();
+
   /* ---------------- controls ---------------- */
   function updateControls(){
     var member = amMember;
@@ -2507,6 +2741,9 @@ function liveRoomDiff(prev, next){
     $('ctl-invite-others').hidden = !canManage();
     $('ctl-poll').hidden = !canManage();
     $('ctl-games').hidden = !canManage();
+    /* Gifts are for everyone except the host (no gifting your
+       own live — the server refuses it too). */
+    $('ctl-gift').hidden = iAmHost();
     $('live-member-banner').hidden = !member;
   }
   function updateJoinButton(d){
@@ -2665,6 +2902,18 @@ function liveRoomDiff(prev, next){
         activeGame = d.active_game || null;
         lastGame = d.last_game || null;
         renderLiveGame();
+        /* Live Tickets: balance, gift animations, top gifters,
+           pinned shout — all ride the same poll. */
+        if (typeof d.my_tickets === 'number'){
+          myTickets = d.my_tickets;
+          paintTickets();
+        }
+        (d.recent_gifts || []).forEach(handleGiftEvent);
+        renderTopGifters(d.top_gifters || []);
+        var shoutChanged = JSON.stringify(d.active_shout || null)
+          !== JSON.stringify(activeShout);
+        if (shoutChanged) renderShout(d.active_shout || null);
+        else tickShout();
         watchersList = d.watchers || [];
         inviteCandidates = d.invite_candidates || [];
         if (d.viewer_list)
@@ -2715,7 +2964,7 @@ function liveRoomDiff(prev, next){
     setStatus('📺 This live has ended.');
     $('live-comment-input').disabled = true;
     ['ctl-mute','ctl-cam','ctl-flip','ctl-connect','ctl-end','ctl-panel-leave',
-     'ctl-join','ctl-like','ctl-poll','ctl-games','live-requests-panel','live-people-panel',
+     'ctl-join','ctl-like','ctl-poll','ctl-games','ctl-gift','live-requests-panel','live-people-panel',
      'live-invite-banner','live-member-banner','live-poll-card',
      'live-poll-closed','live-game-card','live-game-closed'].forEach(function(id){
       var el = $(id);
@@ -2735,6 +2984,7 @@ function liveRoomDiff(prev, next){
     var s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
     timerEl.textContent = Math.floor(s / 60) + ':'
       + ('0' + (s % 60)).slice(-2);
+    tickShout();
   }, 1000);
 
   /* ---------------- fullscreen chrome + minimize-to-tile -------

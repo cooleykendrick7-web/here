@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Live Tickets — HERE{% endblock %}
+{% block content %}
+
+{% if bought_msg %}
+<div class="card" style="border-color:var(--red)">
+  <div class="section-title">🎉 {{ bought_msg|e }}</div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="section-title">🎟️ My Live Tickets</div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+    <div>
+      <div style="font-size:30px;font-weight:900;color:var(--red)">{{ balance }} 🎟️</div>
+      <div style="color:var(--muted);font-size:13px">Tickets to spend on gifts</div>
+    </div>
+    <div>
+      <div style="font-size:30px;font-weight:900">{{ earned }} 🎟️ <span style="font-size:18px;color:var(--muted)">≈ {{ earned_dollars|e }}</span></div>
+      <div style="color:var(--muted);font-size:13px">Earned from your lives</div>
+    </div>
+  </div>
+  <p style="color:var(--muted);font-size:13.5px;margin-top:12px">
+    Send character gifts on any live — the host earns your tickets.
+    Earned tickets cash out at $0.005 each (half the buy price —
+    the same split the big apps take; HERE keeps the rest).
+  </p>
+</div>
+
+<div class="card">
+  <div class="section-title">🛒 Get tickets</div>
+  {% if stripe_on %}
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+    {% for p in packs %}
+    <form method="post" action="/tickets/buy" style="flex:1;min-width:130px">
+      <input type="hidden" name="pack_key" value="{{ p.key|e }}">
+      <button type="submit" class="btn-ghost" style="width:100%;padding:14px 10px;text-align:center">
+        <span style="font-size:22px;font-weight:900;display:block">{{ p.tickets }} 🎟️</span>
+        <span style="font-size:14px">{{ pack_prices[p.key]|e }}</span>
+      </button>
+    </form>
+    {% endfor %}
+  </div>
+  <p style="color:var(--muted);font-size:12.5px;margin-top:8px">Secure card checkout by Stripe. Tickets land in your wallet the moment the payment clears.</p>
+  {% else %}
+  <p style="font-size:15px;margin-top:8px">🎟️ <strong>Ticket sales open soon</strong> — the register isn't switched on yet. Your earned tickets below still count.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-title">💰 Cash out earnings</div>
+  {% if pending %}
+  <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and is waiting for the owner's approval. You'll see it marked paid right here.</p>
+  {% elif can_cashout %}
+  <p style="font-size:14.5px;margin-top:8px">You can cash out <strong>all {{ earned }} earned tickets = {{ earned_dollars|e }}</strong>. Tell us exactly where to send it — the owner sends payouts by hand and marks them paid.</p>
+  <form method="post" action="/tickets/cashout" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+    <input type="text" name="payout_note" required maxlength="300" placeholder="e.g. Cash App $YourHandle, or bank name"
+      style="flex:1;min-width:220px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:14px">
+    <button type="submit" class="btn">Cash out {{ earned_dollars|e }}</button>
+  </form>
+  {% else %}
+  <p style="font-size:14.5px;margin-top:8px">Cash-outs open at <strong>{{ cashout_min }} earned tickets ({{ cashout_min_dollars|e }})</strong>.
+  {% if earned > 0 %}You have {{ earned }} — {{ cashout_min - earned }} to go. Host lives and earn gifts to get there!{% else %}Host a live and earn gifts to get there!{% endif %}</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-title">🧾 Ticket history</div>
+  {% if history %}
+  {% for h in history %}
+  <div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
+    <span>{{ h.text|e }}</span>
+    <span style="color:var(--muted);font-size:12.5px;white-space:nowrap">{{ h.when|e }}</span>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p style="color:var(--muted);font-size:14px;margin-top:6px">Nothing yet — grab a pack or send your first gift on a live.</p>
+  {% endif %}
+</div>
+
+{% endblock %}
