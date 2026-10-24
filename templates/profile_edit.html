@@ -123,7 +123,7 @@
   </form>
 </div>
 
-<div class="card">
+<div class="card" id="status">
   <div class="section-title">⚡ Status</div>
   <p style="margin-top:8px;color:var(--muted)">Your lightning bolt tells people if you're around: <span style="color:#22c55e">⚡ green</span> = active, <span style="color:#eab308">⚡ yellow</span> = away, <span style="color:#ef4444">⚡ red</span> = offline.</p>
   <p style="margin-top:8px">Right now you show as: <strong>{{ profile.status_label|e }}</strong></p>
@@ -145,7 +145,7 @@
   </form>
 </div>
 
-<div class="card">
+<div class="card" id="privacy">
   <div class="section-title">🔒 Privacy</div>
   <p style="margin-top:8px;color:var(--muted)">When your profile is private, only your friends can see your profile and your posts. People can still find you in search (with a 🔒) and send you a friend request.</p>
   <form action="/settings/privacy" method="post" style="margin-top:12px">
