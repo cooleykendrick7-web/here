@@ -1016,6 +1016,19 @@ def init_db():
     if "gift_earned" not in _user_cols_lt:
         c.execute("ALTER TABLE users ADD COLUMN gift_earned "
                   "INTEGER DEFAULT 0")
+    _lifetime_backfill = False
+    if "gift_lifetime" not in _user_cols_lt:
+        # Build P-GIFTS: lifetime tickets EARNED (gifts + shout
+        # receives). Never spent down — cash-outs move gift_earned,
+        # not this — so it only ever grows; it drives the streamer
+        # Live Level (see STREAMER_LEVELS). Backfilled from the
+        # audit ledger (below, once ticket_txns exists) so today's
+        # earners keep their standing.
+        # Invariant: gift_lifetime == SUM(tickets) over the user's
+        # 'gift_receive' ticket_txns rows.
+        c.execute("ALTER TABLE users ADD COLUMN gift_lifetime "
+                  "INTEGER DEFAULT 0")
+        _lifetime_backfill = True
     c.execute("""CREATE TABLE IF NOT EXISTS ticket_txns (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL, kind TEXT NOT NULL,
@@ -1031,6 +1044,11 @@ def init_db():
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
               "idx_ticket_txns_session ON ticket_txns(stripe_session) "
               "WHERE stripe_session IS NOT NULL")
+    if _lifetime_backfill:
+        c.execute(
+            "UPDATE users SET gift_lifetime = COALESCE((SELECT "
+            "SUM(tickets) FROM ticket_txns WHERE "
+            "user_id=users.id AND kind='gift_receive'), 0)")
     c.execute("""CREATE TABLE IF NOT EXISTS live_gifts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         live_id INTEGER NOT NULL, sender_id INTEGER NOT NULL,
@@ -5918,6 +5936,7 @@ async def profile(request: Request, uid: int):
         "invite_count": invite_count(uid),
         "is_gold_inviter": is_gold_inviter(uid),
         "is_insider": is_insider(uid),
+        "live_level": _streamer_level(prof.get("gift_lifetime")),
         "streak": current_streak(uid),
         "contest_winner": contest_winner_user_id() == uid,
         "viewer_follows": bool(user["id"] != uid
@@ -7955,10 +7974,13 @@ def _live_access(request, lid, need_live=False):
     return user, live, None
 
 
-def _live_comment_json(row, viewer_id, host_id, viewer_is_admin=False):
+def _live_comment_json(row, viewer_id, host_id, viewer_is_admin=False,
+                       rank=None):
     # can_delete: the author always; the host always; and any admin
     # of THIS live (moderation mute/kick powers extend to chat).
-    return {
+    # rank: the author's gifter rank dict (Build P-GIFTS) when the
+    # caller computed it — rendered as a chip beside the name.
+    out = {
         "id": row["id"], "user_id": row["user_id"],
         "name": row["name"] or "Deleted user",
         "avatar": avatar_url(row["avatar"] or ""),
@@ -7968,6 +7990,9 @@ def _live_comment_json(row, viewer_id, host_id, viewer_is_admin=False):
         "can_delete": row["user_id"] == viewer_id
                       or viewer_id == host_id
                       or bool(viewer_is_admin)}
+    if rank is not None:
+        out["sender_rank"] = rank
+    return out
 
 
 def _live_person(uid):
@@ -7993,12 +8018,16 @@ def live_now_for(viewer_id, owner_on=False):
         if not _live_can_watch(viewer, live, owner_on=owner_on):
             continue
         host = _live_person(live["host_id"])
+        host_user = get_user(live["host_id"]) or {}
+        lvl = _streamer_level(host_user.get("gift_lifetime"))
         out.append({"id": live["id"], "host_id": live["host_id"],
                     "name": host["name"], "avatar": host["avatar"],
                     "title": live["title"],
                     "viewers": _live_viewer_count(conn, live["id"]),
                     "panel_count": 1 + len(_live_active_members(conn, live["id"])),
                     "created_at": live["created_at"],
+                    "host_level": lvl["level"],
+                    "host_level_label": lvl["label"],
                     "is_self": live["host_id"] == viewer_id})
     conn.close()
     return out
@@ -8068,13 +8097,32 @@ async def ice_json(request: Request):
     return JSONResponse({"iceServers": get_ice_servers()})
 
 
+def _lives_sections(rows):
+    """Group /lives rows by host streamer level (Build P-GIFTS):
+    👑 VIP Lives (L5), 🔥 Star Lives (L3–L4), 🌱 New & Rising
+    (L1–L2). Rows keep their _lives_page_list order inside each
+    section; every live lands in exactly one section; empty
+    sections are omitted."""
+    groups = [
+        ("vip", "👑 VIP Lives",
+         [r for r in rows if (r.get("host_level") or 1) >= 5]),
+        ("star", "🔥 Star Lives",
+         [r for r in rows if 3 <= (r.get("host_level") or 1) <= 4]),
+        ("new", "🌱 New & Rising",
+         [r for r in rows if (r.get("host_level") or 1) <= 2]),
+    ]
+    return [{"key": k, "title": t, "lives": rs}
+            for k, t, rs in groups if rs]
+
+
 @app.get("/lives", response_class=HTMLResponse)
 async def lives_page(request: Request):
     user, err = require_login(request)
     if err:
         return err
+    rows = _lives_page_list(user, is_owner(request))
     return render(request, "lives.html",
-                  {"lives": _lives_page_list(user, is_owner(request))})
+                  {"lives": rows, "sections": _lives_sections(rows)})
 
 
 @app.get("/lives.json")
@@ -8089,6 +8137,8 @@ async def lives_json(request: Request):
          "host_name": r["name"], "host_avatar": r["avatar"],
          "title": r["title"], "viewers": r["viewers"],
          "panel_count": r["panel_count"], "following": r["following"],
+         "host_level": r.get("host_level") or 1,
+         "host_level_label": r.get("host_level_label") or "",
          "is_self": r["is_self"]} for r in rows]})
 
 
@@ -8147,6 +8197,8 @@ async def live_page(request: Request, lid: int):
         conn.close()
         return redir("/home", "That live isn't available anymore.")
     host = _live_person(live["host_id"])
+    host["live_level"] = _streamer_level(
+        (get_user(live["host_id"]) or {}).get("gift_lifetime"))
     owner_on = is_owner(request)
     if live["status"] != "live":
         conn.close()
@@ -8353,8 +8405,19 @@ async def live_state(request: Request, lid: int):
         "SELECT lc.*, u.name, u.avatar FROM live_comments lc "
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.live_id=? AND "
         "lc.id>? ORDER BY lc.id ASC LIMIT 100", (lid, since)).fetchall()
+    # Gifter ranks for this poll's authors + gift senders (cached
+    # per user — one ledger SUM each, not one per row).
+    _rank_cache = {}
+
+    def _rank_of(uid):
+        if uid not in _rank_cache:
+            _rank_cache[uid] = _gifter_rank(
+                _gift_sent_total(conn, uid))
+        return _rank_cache[uid]
+
     comments = [_live_comment_json(dict(r), user["id"], live["host_id"],
-                                   viewer_is_admin=viewer_is_admin)
+                                   viewer_is_admin=viewer_is_admin,
+                                   rank=_rank_of(r["user_id"]))
                 for r in rows]
     panel_ids = _live_panel_ids(conn, live)
     panel = []
@@ -8532,7 +8595,9 @@ async def live_state(request: Request, lid: int):
     gift_cutoff = (datetime.now(timezone.utc)
                    - timedelta(seconds=15)).isoformat()
     out["recent_gifts"] = [
-        {"id": r["id"], "sender_name": r["sender_name"] or "Deleted user",
+        {"id": r["id"], "sender_id": r["sender_id"],
+         "sender_name": r["sender_name"] or "Deleted user",
+         "sender_rank": _rank_of(r["sender_id"]),
          "gift_key": r["gift_key"],
          **_gift_public(r["gift_key"], r["tickets"])}
         for r in conn.execute(
@@ -9051,11 +9116,12 @@ async def live_comment(request: Request, lid: int):
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.id=?",
         (cid,)).fetchone()
     viewer_admin = _live_is_admin(conn, lid, user["id"])
+    my_rank = _gifter_rank(_gift_sent_total(conn, user["id"]))
     conn.close()
     flag_item("live_comment", cid, user["id"], user["name"], body)
     return JSONResponse({"ok": True, "comment": _live_comment_json(
         dict(row), user["id"], live["host_id"],
-        viewer_is_admin=viewer_admin)})
+        viewer_is_admin=viewer_admin, rank=my_rank)})
 
 
 @app.post("/live/{lid}/comment/{cid}/delete")
@@ -9142,6 +9208,24 @@ async def live_gift(request: Request, lid: int):
             {"ok": False,
              "error": "Join the live before sending gifts."},
             status_code=403)
+    if cost == 0:
+        # FREE gift anti-spam: free gifts move no ledger, so the
+        # balance guard can't slow a spam tap — cap them at one
+        # per sender per live per 2 seconds instead (checked
+        # against the live_gifts row the last one wrote).
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(seconds=2)).isoformat()
+        recent = conn.execute(
+            "SELECT COUNT(*) c FROM live_gifts WHERE live_id=? "
+            "AND sender_id=? AND tickets=0 AND created_at>?",
+            (lid, user["id"], cutoff)).fetchone()["c"]
+        if recent:
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "Easy — one free gift every couple of "
+                          "seconds 💜"},
+                status_code=429)
     cur = conn.execute(
         "UPDATE users SET tickets_balance = "
         "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
@@ -9154,8 +9238,9 @@ async def live_gift(request: Request, lid: int):
              "error": "Not enough tickets — grab a pack first 🎟️"},
             status_code=400)
     conn.execute(
-        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ? "
-        "WHERE id=?", (cost, host_id))
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ?, "
+        "gift_lifetime = COALESCE(gift_lifetime,0) + ? WHERE id=?",
+        (cost, cost, host_id))
     stamp = now_iso()
     cur = conn.execute(
         "INSERT INTO live_gifts(live_id, sender_id, host_id, "
@@ -9229,8 +9314,9 @@ async def live_shout(request: Request, lid: int):
                       f"{cost} 🎟️"},
             status_code=400)
     conn.execute(
-        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ? "
-        "WHERE id=?", (cost, host_id))
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ?, "
+        "gift_lifetime = COALESCE(gift_lifetime,0) + ? WHERE id=?",
+        (cost, cost, host_id))
     stamp = now_iso()
     expires = (datetime.now(timezone.utc)
                + timedelta(seconds=SHOUT_SECONDS)).isoformat()
@@ -10328,26 +10414,106 @@ async def page_edit(request: Request, pid: int):
 #   gift_earned == SUM(tickets) WHERE kind IN
 #       ('gift_receive','cashout_hold','cashout_return')
 
-GIFT_CATALOG = {
-    "ant": {"key": "ant", "name": "Lil' Red Ant", "emoji": "🐜",
-            "tickets": 1},
-    "bolt": {"key": "bolt", "name": "Bolt Buddy", "emoji": "⚡",
-             "tickets": 5},
-    "moon": {"key": "moon", "name": "Moonie", "emoji": "🌙",
-             "tickets": 10},
-    "rocket": {"key": "rocket", "name": "Red Rocket", "emoji": "🚀",
-               "tickets": 25},
-    "diamond": {"key": "diamond", "name": "Diamond Hands", "emoji": "💎",
-                "tickets": 50},
-    "crown": {"key": "crown", "name": "King's Crown", "emoji": "👑",
-              "tickets": 100},
-    "cutlass": {"key": "cutlass", "name": "The Cutlass", "emoji": "🚗",
-                "tickets": 500},
-    "globe": {"key": "globe", "name": "Planet HERE", "emoji": "🌍",
-              "tickets": 1000},
+def _gift(key, name, tickets, category):
+    return {"key": key, "name": name, "tickets": tickets,
+            "category": category, "img": f"/static/gifts/{key}.webp"}
+
+
+# Build P-GIFTS: the emoji cast is retired. The catalog is Ken's own
+# artwork now — 67 gifts cut from his three sheets into
+# static/gifts/<key>.webp (💰 Money ×32, ❤️ Love ×24, 👑 Luxury
+# ×11; the Luxury sheet contributes only its no-brand-logo designs,
+# Ken's call). Prices are server-side ONLY, as ever. neon_heart is
+# the one FREE gift (0 tickets): it records a txn but moves no
+# ledger and earns the host nothing.
+_GIFT_ROWS = [
+    # --- 💰 Money (sheet 1) ---
+    ("neon_heart", "Neon Heart", 0, "money"),
+    ("money_bag", "Money Bag", 1, "money"),
+    ("flying_cash", "Flying Cash", 5, "money"),
+    ("gift_stack", "Gift Stack", 10, "money"),
+    ("here_shades", "HERE Shades", 15, "money"),
+    ("here_rocket", "HERE Rocket", 25, "money"),
+    ("money_duck", "Money Duck", 35, "money"),
+    ("money_bear", "Money Bear", 50, "money"),
+    ("money_buddy", "Money Buddy", 65, "money"),
+    ("cash_gremlin", "Cash Gremlin", 75, "money"),
+    ("money_heart", "Money Heart", 100, "money"),
+    ("money_tree", "Money Tree", 125, "money"),
+    ("golden_mic", "Golden Mic", 150, "money"),
+    ("megaphone", "HERE Megaphone", 200, "money"),
+    ("boss_face", "Boss Face", 250, "money"),
+    ("heart_hustler", "Heart Hustler", 300, "money"),
+    ("gold_kicks", "Gold Kicks", 400, "money"),
+    ("money_panda", "Money Panda", 500, "money"),
+    ("angel_bag", "Angel Bag", 600, "money"),
+    ("champagne_bucket", "Champagne Bucket", 750, "money"),
+    ("dab_king", "Dab King", 900, "money"),
+    ("here_diamond", "HERE Diamond", 1000, "money"),
+    ("diamond_dollar", "Diamond Dollar", 1200, "money"),
+    ("here_crown", "HERE Crown", 1500, "money"),
+    ("burning_cash", "Burning Cash", 1800, "money"),
+    ("the_vault", "The Vault", 2000, "money"),
+    ("crown_jewel_bag", "Crown Jewel Bag", 2500, "money"),
+    ("here_juice", "HERE Juice", 3000, "money"),
+    ("g_wagon", "G-Wagon", 4000, "money"),
+    ("midnight_rider", "Midnight Rider", 5000, "money"),
+    ("the_cutlass", "The Cutlass", 7500, "money"),
+    ("royal_fortune", "Royal Fortune", 10000, "money"),
+    # --- ❤️ Love (sheet 3) ---
+    ("single_rose", "Single Rose", 1, "love"),
+    ("candle_glow", "Candle Glow", 5, "love"),
+    ("heart_balloons", "Heart Balloons", 10, "love"),
+    ("love_letter", "Love Letter", 15, "love"),
+    ("hug_heart", "Hug Heart", 20, "love"),
+    ("i_love_you", "I Love You", 25, "love"),
+    ("infinity_hearts", "Infinity Hearts", 35, "love"),
+    ("gift_boxes", "Gift Boxes", 50, "love"),
+    ("hoodie_teddy", "Hoodie Teddy", 65, "love"),
+    ("white_teddy", "White Teddy", 75, "love"),
+    ("mystery_gift", "Mystery Gift", 90, "love"),
+    ("rose_dome", "Rose Dome", 100, "love"),
+    ("panda_love", "Panda Love", 125, "love"),
+    ("crowned_bears", "Crowned Bears", 150, "love"),
+    ("rose_box", "Rose Box", 180, "love"),
+    ("forever_roses_bucket", "Forever Roses", 200, "love"),
+    ("heart_bouquet_box", "Heart Bouquet Box", 250, "love"),
+    ("love_script", "Love Script", 300, "love"),
+    ("dripping_heart", "Dripping Crown Heart", 400, "love"),
+    ("couple_goals", "Couple Goals", 500, "love"),
+    ("crowned_heart", "Crowned Heart", 750, "love"),
+    ("rose_heart_wreath", "Rose Heart Wreath", 1000, "love"),
+    ("teddy_king", "Teddy King", 1250, "love"),
+    ("heart_of_roses", "Heart of Roses", 1500, "love"),
+    # --- 👑 Luxury (sheet 2, no-logo keepers only) ---
+    ("forever_roses", "Forever Roses Box", 1000, "luxury"),
+    ("cigar_box", "Cigar Box", 1500, "luxury"),
+    ("diamond_rings", "Diamond Rings", 2500, "luxury"),
+    ("gift_card", "Gift Card", 3000, "luxury"),
+    ("ceo_chain", "CEO Chain", 3500, "luxury"),
+    ("grillz_case", "Grillz Case", 4000, "luxury"),
+    ("bulldog_boss", "Bulldog Boss", 5000, "luxury"),
+    ("luxury_lounge", "Luxury Lounge", 6000, "luxury"),
+    ("private_jet", "Private Jet", 12000, "luxury"),
+    ("yacht_night", "Yacht Night", 15000, "luxury"),
+    ("mansion_sunset", "Mansion Sunset", 20000, "luxury"),
+]
+GIFT_CATALOG = {k: _gift(k, n, t, c) for k, n, t, c in _GIFT_ROWS}
+GIFT_ORDER = [k for k, _n, _t, _c in _GIFT_ROWS]
+GIFT_CATEGORIES = [("money", "💰 Money"), ("love", "❤️ Love"),
+                   ("luxury", "👑 Luxury")]
+
+# Retired emoji gifts (pre-P-GIFTS catalog): no longer sendable —
+# POSTing one returns the same friendly "Unknown gift." error as
+# any bad key — but historical ticket_txns rows still render with
+# their old face via _gift_public's fallback. Never crash on them.
+LEGACY_GIFT_LABELS = {
+    "ant": ("🐜", "Lil' Red Ant"), "bolt": ("⚡", "Bolt Buddy"),
+    "moon": ("🌙", "Moonie"), "rocket": ("🚀", "Red Rocket"),
+    "diamond": ("💎", "Diamond Hands"),
+    "crown": ("👑", "King's Crown"), "cutlass": ("🚗", "The Cutlass"),
+    "globe": ("🌍", "Planet HERE"),
 }
-GIFT_ORDER = ["ant", "bolt", "moon", "rocket", "diamond", "crown",
-              "cutlass", "globe"]
 TICKET_PACKS = {
     "pack100": {"key": "pack100", "tickets": 100, "price_cents": 99},
     "pack500": {"key": "pack500", "tickets": 500, "price_cents": 499},
@@ -10390,13 +10556,86 @@ SHOUT_SECONDS = 60
 CASHOUT_MIN_TICKETS = 2000  # = $10.00 at 0.5¢ per earned ticket
 
 
+def _gift_anim_tier(tickets):
+    """Send-animation tier from price: 1 = float up the stage
+    (<50), 2 = pop + glow (50–499), 3 = center-stage banner
+    (500–4,999), 4 = full-stage takeover (~5,000+)."""
+    t = tickets or 0
+    if t >= 5000:
+        return 4
+    if t >= 500:
+        return 3
+    if t >= 50:
+        return 2
+    return 1
+
+
 def _gift_public(gift_key, tickets=None):
-    """Catalog entry for state payloads / gift displays. Unknown keys
-    render as a plain ticket gift — never crash a poll on bad data."""
-    g = GIFT_CATALOG.get(gift_key) or {}
-    return {"emoji": g.get("emoji", "🎁"), "name": g.get("name", "Gift"),
-            "tickets": tickets if tickets is not None
-                       else g.get("tickets", 0)}
+    """Catalog entry for state payloads / gift displays. Current
+    art gifts carry key/name/tickets/category/img/anim (emoji is
+    empty — the art replaces it); retired legacy keys fall back to
+    their old emoji label; unknown keys render as a plain gift —
+    never crash a poll on bad data."""
+    g = GIFT_CATALOG.get(gift_key)
+    if g:
+        t = tickets if tickets is not None else g["tickets"]
+        return {"key": gift_key, "emoji": "", "name": g["name"],
+                "tickets": t, "category": g["category"],
+                "img": g["img"], "anim": _gift_anim_tier(t)}
+    emoji, name = LEGACY_GIFT_LABELS.get(gift_key, ("🎁", "Gift"))
+    t = tickets if tickets is not None else 0
+    return {"key": gift_key, "emoji": emoji, "name": name,
+            "tickets": t, "category": "", "img": "",
+            "anim": _gift_anim_tier(t)}
+
+
+# ---------------- gifter ranks + streamer levels (Build P-GIFTS) ----
+# GIFTER RANK rides on lifetime tickets SENT (the gift_send side of
+# the ledger, whose rows store negative deltas). STREAMER LEVEL
+# rides on users.gift_lifetime (lifetime earned; see the init_db
+# note). Both are pure functions of a total — thresholds live here
+# and nowhere else.
+GIFTER_RANKS = [
+    (0, "", "Newcomer"), (100, "💧", "Supporter"),
+    (500, "🔥", "Backer"), (2000, "💎", "Patron"),
+    (10000, "🐋", "Whale"), (50000, "👑", "Legend"),
+]
+
+
+def _gifter_rank(lifetime_sent):
+    rank = 0
+    for i, (floor, _b, _n) in enumerate(GIFTER_RANKS):
+        if (lifetime_sent or 0) >= floor:
+            rank = i
+    _floor, badge, name = GIFTER_RANKS[rank]
+    return {"rank": rank, "badge": badge, "name": name,
+            "label": (badge + " " + name).strip(),
+            "lifetime_sent": lifetime_sent or 0}
+
+
+def _gift_sent_total(conn, uid):
+    r = conn.execute(
+        "SELECT COALESCE(SUM(-tickets), 0) s FROM ticket_txns "
+        "WHERE user_id=? AND kind='gift_send'", (uid,)).fetchone()
+    return (r["s"] or 0) if r else 0
+
+
+STREAMER_LEVELS = [
+    (0, "🌱", "New Voice"), (1000, "⭐", "Rising"),
+    (10000, "🔥", "Star"), (50000, "💎", "Pro"),
+    (200000, "👑", "VIP Live"),
+]
+
+
+def _streamer_level(lifetime_earned):
+    lvl = 1
+    for i, (floor, _e, _n) in enumerate(STREAMER_LEVELS):
+        if (lifetime_earned or 0) >= floor:
+            lvl = i + 1
+    _floor, emoji, name = STREAMER_LEVELS[lvl - 1]
+    return {"level": lvl, "emoji": emoji, "name": name,
+            "label": f"{emoji} {name}",
+            "lifetime": lifetime_earned or 0}
 
 
 def _earned_dollars(tickets):
@@ -10471,13 +10710,15 @@ def _txn_line(t):
         return f"Bought {t['tickets']} 🎟️"
     if k == "gift_send":
         g = _gift_public(t["gift_key"])
-        return f"Sent {g['emoji']} {g['name']}"
+        face = (g["emoji"] + " ") if g["emoji"] else ""
+        return f"Sent {face}{g['name']}"
     if k == "gift_receive":
         note = t["note"] or ""
         if note == "shout":
             return f"Received a shout-out pin (+{t['tickets']} 🎟️)"
         g = _gift_public(t["gift_key"])
-        return f"Received {g['emoji']} {g['name']} (+{t['tickets']} 🎟️)"
+        face = (g["emoji"] + " ") if g["emoji"] else ""
+        return f"Received {face}{g['name']} (+{t['tickets']} 🎟️)"
     if k == "shout":
         return f"Pinned a shout-out (−{abs(t['tickets'])} 🎟️)"
     if k == "cashout_hold":
