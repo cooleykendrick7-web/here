@@ -53,7 +53,46 @@ table.admin tr:last-child td{border-bottom:none}
   <div class="stat-card"><div class="num">{{ stats.taps_today }}</div><div class="lbl">Taps today</div></div>
   <div class="stat-card"><div class="num">{{ stats.flags_pending }}</div><div class="lbl">Pending flags</div></div>
   <div class="stat-card"><div class="num">{{ stats.verify_pending }}</div><div class="lbl">Verify requests</div></div>
+  <div class="stat-card"><div class="num">{{ money_stats.tickets_sold }} 🎟️</div><div class="lbl">Tickets sold (all time)</div></div>
+  <div class="stat-card"><div class="num">{{ money_stats.liability }}</div><div class="lbl">Owed to streamers if all cashed out</div></div>
+  <div class="stat-card"><div class="num">{{ money_stats.payouts_pending }}</div><div class="lbl">Payouts waiting</div></div>
 </div>
+
+<section>
+  <h2>💰 Payouts (Live Tickets cash-outs)</h2>
+  <p style="color:#9a9a9a;font-size:13px;margin-bottom:10px">Streamers cash out earned tickets at $0.005 each. Tickets are held the moment they ask. <strong>Send the money yourself</strong> (Cash App / bank — their note says where), then tap <strong>Mark paid</strong>. Declining returns their tickets instantly. Stripe holds the card money — HERE only tracks tickets.</p>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>ID</th><th>Streamer</th><th>Email</th><th>Tickets</th><th>Amount</th><th>Send to</th><th>Requested</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for p in payouts %}
+        <tr>
+          <td>{{ p.id }}</td>
+          <td><a href="/user/{{ p.user_id }}">{{ p.user_name|e }}</a></td>
+          <td>{{ p.user_email|e }}</td>
+          <td>{{ p.tickets }} 🎟️</td>
+          <td><strong>{{ p.dollars|e }}</strong></td>
+          <td>{{ p.payout_note|e }}</td>
+          <td>{{ p.created_at|e }}</td>
+          <td><span class="status-pill {{ p.status|e }}">{{ p.status|e }}</span></td>
+          <td style="white-space:nowrap">
+            {% if p.status == 'pending' %}
+            <form class="inline-form" action="/owner/payouts/{{ p.id }}/paid" method="post" onsubmit="return confirm('Mark {{ p.dollars|e }} paid to {{ p.user_name|e }}? Only tap this AFTER you sent the money.');">
+              <button type="submit" class="btn">Mark paid</button>
+            </form>
+            <form class="inline-form" action="/owner/payouts/{{ p.id }}/declined" method="post" onsubmit="return confirm('Decline this cash-out? The tickets go back to {{ p.user_name|e }}\'s earnings.');">
+              <button type="submit" class="btn-ghost">Decline</button>
+            </form>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="empty">No cash-out requests yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 
 <section>
   <h2>🔴 Live Now</h2>
