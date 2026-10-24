@@ -21,7 +21,8 @@
 {% else %}
 <style>
 :root{--lg-bg: rgba(14,16,20,0.16);--lg-bg-strong: rgba(14,16,20,0.28);
-  --lg-blur: blur(14px) saturate(1.5);--lg-border: 1px solid rgba(255,255,255,0.22);
+  --lg-blur: blur(14px) saturate(1.5);
+  --lg-blur-sm: blur(6px) saturate(1.3);--lg-border: 1px solid rgba(255,255,255,0.22);
   --lg-text: #fff;--lg-text-shadow: 0 1px 8px rgba(0,0,0,0.55), 0 0 2px rgba(0,0,0,0.35)}
 /* ===== FULLSCREEN stage (TikTok-style): the live fills the whole
    viewport (100dvh). #live-fs is a fixed full-viewport layer; the
@@ -72,20 +73,21 @@
   align-items:center;gap:5px;padding:2px 6px;color:#fff;font-size:11px;
   font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,.9);
   background:var(--lg-bg);border-top:var(--lg-border);
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 .live-tile .tile-label .tname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .live-conn-dot{width:9px;height:9px;border-radius:50%;background:#8a8d91;flex:none;
   cursor:pointer;border:1px solid rgba(255,255,255,.75);padding:0}
 .live-conn-dot.ok{background:#31a24c}
 .live-conn-dot.bad{background:#e02b20}
+.live-conn-dot.stall{background:#f5a623}
 .live-tile .tile-menu{position:absolute;top:6px;right:6px;z-index:3;width:30px;height:30px;
   border-radius:50%;border:var(--lg-border);background:var(--lg-bg);color:#fff;font-size:16px;
   font-weight:800;cursor:pointer;line-height:1;
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 .live-tile .tile-menu:hover{background:rgba(255,255,255,.22)}
 .live-topbar{position:absolute;top:0;left:0;right:0;z-index:4;display:flex;gap:8px;
   align-items:flex-start;padding:6px 10px;background:var(--lg-bg);
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm);
   border-bottom:var(--lg-border)}
 .live-pill{background:var(--red);color:#fff;font-weight:800;font-size:12px;
   border-radius:6px;padding:3px 8px;letter-spacing:.4px;white-space:nowrap}
@@ -100,7 +102,7 @@
 .live-statusline{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
   z-index:5;background:var(--lg-bg-strong);border:var(--lg-border);color:#fff;border-radius:10px;
   padding:10px 16px;font-size:14px;font-weight:600;text-align:center;max-width:86%;
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 .live-hearts{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:6}
 .live-heart{position:absolute;opacity:0;animation:heartfloat 2.4s ease-out forwards;
   text-shadow:0 2px 8px rgba(0,0,0,.4);will-change:transform,opacity}
@@ -121,8 +123,8 @@
 .live-float{flex-direction:column;gap:6px}
 .live-shout{pointer-events:auto;background:rgba(212,31,46,.55);
   border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:7px 11px;
-  color:#fff;font-size:13.5px;backdrop-filter:var(--lg-blur);
-  -webkit-backdrop-filter:var(--lg-blur);text-shadow:var(--lg-text-shadow)}
+  color:#fff;font-size:13.5px;backdrop-filter:var(--lg-blur-sm);
+  -webkit-backdrop-filter:var(--lg-blur-sm);text-shadow:var(--lg-text-shadow)}
 .live-shout[hidden]{display:none}
 .live-shout .sh-who{font-weight:800}
 .live-shout .sh-timer{display:block;height:3px;background:rgba(255,255,255,.85);
@@ -139,7 +141,7 @@
 .live-ctl{background:var(--lg-bg);color:#fff;border:var(--lg-border);border-radius:999px;
   height:38px;padding:0 10px;font-size:12.5px;font-weight:700;cursor:pointer;
   display:inline-flex;align-items:center;gap:6px;
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 .live-ctl[hidden],.live-rail button[hidden]{display:none}
 .live-ctl.off{background:var(--red);border-color:var(--red-dark)}
 .live-ctl.danger{background:var(--red);border-color:var(--red-dark)}
@@ -165,11 +167,11 @@
 /* ===== floating comments over the stage ===== */
 .live-float{position:absolute;left:10px;bottom:25%;z-index:7;width:min(72%,420px);max-height:40%;display:flex;pointer-events:none}
 .live-float .live-comments{pointer-events:auto;width:100%;max-height:100%;overflow-y:auto;display:flex;flex-direction:column;gap:6px;background:transparent;padding-right:2px;scrollbar-width:thin}
-.live-float .live-comment{background:var(--lg-bg);border:var(--lg-border);border-radius:14px;padding:5px 10px 5px 6px;color:var(--lg-text);text-shadow:var(--lg-text-shadow);align-items:center;align-self:flex-start;max-width:100%;backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-float .live-comment{background:var(--lg-bg);border:var(--lg-border);border-radius:14px;padding:5px 10px 5px 6px;color:var(--lg-text);text-shadow:var(--lg-text-shadow);align-items:center;align-self:flex-start;max-width:100%;backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 .live-float .live-comment .av-32, .live-float .live-comment .ph-32{width:24px;height:24px;font-size:12px}
 .live-float .live-comment .who{color:#ffb3ba}
 .live-float .live-comment .del{color:#fff}
-.live-notice{align-self:center;background:var(--lg-bg);border:var(--lg-border);color:#fff;text-shadow:var(--lg-text-shadow);border-radius:999px;padding:3px 12px;font-size:12.5px;font-weight:600;text-align:center;backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+.live-notice{align-self:center;background:var(--lg-bg);border:var(--lg-border);color:#fff;text-shadow:var(--lg-text-shadow);border-radius:999px;padding:3px 12px;font-size:12.5px;font-weight:600;text-align:center;backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 .live-comment-form{display:flex;gap:8px;margin-top:10px}
 .live-comment-form input{flex:1;height:36px;border:var(--lg-border);border-radius:999px;
   padding:0 14px;font-size:14px;min-width:0;background:rgba(255,255,255,.14);color:#fff}
@@ -207,7 +209,7 @@
   width:min(88vw,380px);background:var(--lg-bg-strong);color:#fff;border:1px solid rgba(212,31,46,.55);
   border-radius:10px;padding:10px 14px;font-size:14px;text-align:center;
   box-shadow:0 8px 24px rgba(0,0,0,.4);
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 #live-toast[hidden]{display:none}
 /* ===== chrome: auto-fading overlay UI (Build G translucency) =====
    #live-chrome wraps the top bar, the right action rail and the
@@ -224,7 +226,7 @@
 #live-exit{position:absolute;top:10px;left:10px;z-index:11;width:44px;height:44px;
   border-radius:50%;border:var(--lg-border);background:var(--lg-bg);color:#fff;
   font-size:17px;font-weight:800;cursor:pointer;line-height:1;
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm);
   transition:opacity .4s ease}
 #live-fs.chrome-dim #live-exit{opacity:.35}
 .live-topbar{padding-left:60px;transition:opacity .4s ease}
@@ -235,14 +237,14 @@
 .live-rail .live-like-btn{box-shadow:0 4px 14px rgba(0,0,0,.35)}
 .live-rail button{width:40px;height:40px;border-radius:50%;padding:0;display:flex;
   align-items:center;justify-content:center;font-size:19px;background:var(--lg-bg);
-  border:var(--lg-border);backdrop-filter:var(--lg-blur);
-  -webkit-backdrop-filter:var(--lg-blur);color:#fff;box-shadow:none;
+  border:var(--lg-border);backdrop-filter:var(--lg-blur-sm);
+  -webkit-backdrop-filter:var(--lg-blur-sm);color:#fff;box-shadow:none;
   flex-direction:column;line-height:1}
 #live-like-count{font-size:10px;font-weight:800;margin-top:1px}
 .live-rail .live-like-btn{box-shadow:none}
 .live-controls{position:absolute;left:0;right:0;bottom:0;margin:0;z-index:9;
   padding:6px 10px;background:var(--lg-bg);
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm);
   border-top:var(--lg-border)}
 @media (prefers-reduced-motion: reduce){
   .live-chrome,#live-exit{transition:none}
@@ -272,10 +274,10 @@
 #live-mini-close{position:absolute;top:4px;right:4px;z-index:3;width:26px;height:26px;
   border-radius:50%;border:var(--lg-border);background:var(--lg-bg);color:#fff;
   font-size:13px;font-weight:800;cursor:pointer;line-height:1;
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur)}
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 #live-mini-host{position:absolute;left:0;right:0;bottom:0;z-index:3;display:flex;
   gap:6px;align-items:center;padding:5px 6px;background:var(--lg-bg);
-  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm);
   font-size:11.5px;font-weight:800}
 #live-mini-host[hidden]{display:none}
 #live-mini-end{background:var(--red);border:none;color:#fff;border-radius:999px;
@@ -670,6 +672,16 @@ function liveRoomDiff(prev, next){
     /* EVERY tile starts muted: the local one forever (feedback),
        remote ones until the 🔊 toggle (iOS autoplay policy). */
     video.muted = true;
+    /* Play-guard (Build N): a remote video must never sit paused.
+       loadedmetadata re-arms playback (a stream can land before
+       the element is ready to play it), and play/pause transitions
+       feed the sound prompt's picture of reality. */
+    video.addEventListener('loadedmetadata', function(){
+      if (uid !== B.me) guardPlayVideo(video);
+      updateSoundButton();
+    });
+    video.addEventListener('playing', updateSoundButton);
+    video.addEventListener('pause', updateSoundButton);
     if (uid === B.me){
       video.className = 'localvid';
     }
@@ -685,7 +697,8 @@ function liveRoomDiff(prev, next){
       (function(targetId){
         dot.addEventListener('click', function(ev){
           ev.stopPropagation();
-          if (dot.dataset.state === 'bad') manualRestart(targetId);
+          if (dot.dataset.state === 'bad'
+              || dot.dataset.state === 'stall') manualRestart(targetId);
         });
       })(uid);
       label.appendChild(dot);
@@ -728,21 +741,22 @@ function liveRoomDiff(prev, next){
     var T = tiles[member.user_id];
     if (!T) return;
     T.member = member;
-    T.labelName.textContent =
-      (member.user_id === B.me ? 'You' : (member.name || ''));
+    var nm = (member.user_id === B.me ? 'You' : (member.name || ''));
+    if (T.labelName.textContent !== nm) T.labelName.textContent = nm;
     var b = '';
     if (member.role === 'host') b += '👑 ';
     if (member.admin) b += '🛡 ';
     if (member.muted) b += '🔇';
-    T.badges.textContent = b;
+    if (T.badges.textContent !== b) T.badges.textContent = b;
     /* Source tag renders from LOCAL state on my OWN tile only —
        remote tiles always stay blank (no signaling fields). */
     if (T.srcTag){
-      T.srcTag.textContent = member.user_id === B.me
+      var tag = member.user_id === B.me
         ? (lcVideoKind === 'screen' ? ' · 🖥 Screen'
            : (lcVideoKind === 'camera' && !lcIsDefaultVideo()
               ? ' · 🎮 Live Connect' : ''))
         : '';
+      if (T.srcTag.textContent !== tag) T.srcTag.textContent = tag;
     }
     T.el.classList.toggle('stage-bg', member.role === 'host');
     T.menuBtn.hidden = !(canManage() && canActOn(member));
@@ -754,20 +768,27 @@ function liveRoomDiff(prev, next){
     try { T.video.srcObject = null; } catch (e) {}
     if (T.el.parentNode) T.el.parentNode.removeChild(T.el);
   }
-  /* Re-render = move the EXISTING tile nodes into panel order
-     (appendChild on a node already in the grid just moves it — the
-     <video> elements and their streams are never recreated). */
+  /* Re-render = line the EXISTING tile nodes up in panel order.
+     Tiles (and their <video> elements/streams) are never
+     recreated. Build N: a tile is MOVED only when it is out of
+     place — re-inserting an in-position playing <video> makes
+     mobile browsers repaint it (a blink on every state poll);
+     in steady state this loop now touches no DOM structure. */
   function renderTiles(){
+    var idx = 0;
     panel.forEach(function(m){
       var T = ensureTile(m);
-      gridEl.appendChild(T.el);
+      if (gridEl.children[idx] !== T.el)
+        gridEl.insertBefore(T.el, gridEl.children[idx] || null);
+      idx++;
       updateTile(m);
     });
     Object.keys(tiles).forEach(function(uid){
       if (!panelById[uid]) removeTile(+uid);
     });
-    gridEl.className = 'live-grid cols-' + gridCols(panel.length)
+    var cls = 'live-grid cols-' + gridCols(panel.length)
       + (panel.length > 1 ? ' has-panel' : '');
+    if (gridEl.className !== cls) gridEl.className = cls;
   }
 
   /* ---------------- local media (panel members) ---------------- */
@@ -1427,7 +1448,10 @@ function liveRoomDiff(prev, next){
         signalingState: P.pc.signalingState,
         hasRemoteTrack: peerHasRemoteTrack(P),
         hasLocalSenders: peerHasLocalSenders(P),
-        restarts: restartCounts[uid] || 0
+        restarts: restartCounts[uid] || 0,
+        framesDecoded: (P.lastFrames == null ? null : P.lastFrames),
+        stalls: P.stallCount || 0,
+        stalled: !!P.stalled
       };
       updateDot(+uid);
     });
@@ -1438,11 +1462,92 @@ function liveRoomDiff(prev, next){
     if (!T || !T.dot) return;
     var st = P ? P.pc.connectionState : 'closed';
     var cls = 'live-conn-dot', ds = 'new';
-    if (st === 'connected'){ cls += ' ok'; ds = 'ok'; }
+    /* Amber wins over red while a stall is flagged: the stall
+       detector only fires on a peer whose frames WERE flowing
+       and froze, and it fires an automatic restart at the same
+       moment — "reconnecting" is the truthful signal, and the
+       dot stays tappable for a manual retry in both colors. A
+       peer that fails without ever flowing (no stall) is red. */
+    if (P && P.stalled){ cls += ' stall'; ds = 'stall'; }
     else if (st === 'failed' || (P && P.discBad)){ cls += ' bad'; ds = 'bad'; }
+    else if (st === 'connected'){ cls += ' ok'; ds = 'ok'; }
     T.dot.className = cls;
     T.dot.dataset.state = ds;
   }
+  /* ---------------- stall detection (Build N) ----------------
+     A peer can sit at connectionState 'connected' while its media
+     is silently frozen (dead relay path, sender-side stall). The
+     state poll samples getStats per peer: a panelist peer with a
+     live remote video track whose inbound framesDecoded has not
+     advanced for ~6s is STALLED — its dot goes amber and ONE
+     automatic restart fires through the same shared discipline
+     as 'failed'/'disconnected' (per-peer cap + cooldown, see
+     tryAutoRestart). Frames advancing again clears the stall.
+     stallRestarted latches per freeze episode so a peer whose
+     frames stay frozen (e.g. their camera is off) is not
+     restarted in a loop; it re-arms only when frames move. */
+  var STALL_MS = 6000;
+  function peerShouldHaveVideo(P){
+    if (!P || P.remoteKind !== 'panelist') return false;
+    try {
+      return P.pc.getReceivers().some(function(r){
+        return r.track && r.track.kind === 'video'
+          && r.track.readyState === 'live';
+      });
+    } catch (e) { return false; }
+  }
+  function samplePeerStats(){
+    if (ended) return;
+    Object.keys(peers).forEach(function(uidStr){
+      var uid = +uidStr, P = peers[uidStr];
+      if (!P || !P.pc.getStats || !peerShouldHaveVideo(P)) return;
+      P.pc.getStats().then(function(report){
+        if (peers[uid] !== P) return;
+        var frames = null;
+        report.forEach(function(st){
+          if (st.type === 'inbound-rtp'
+              && (st.kind === 'video' || st.mediaType === 'video')
+              && typeof st.framesDecoded === 'number')
+            frames = st.framesDecoded;
+        });
+        if (frames === null) return;
+        var now = Date.now();
+        if (P.lastFrames === null || frames > P.lastFrames){
+          /* Frames moved (or first sample): healthy. Re-arm the
+             one-shot stall restart and clear any stall flag. */
+          P.lastFrames = frames;
+          P.lastAdvanceAt = now;
+          P.stallRestarted = false;
+          if (P.stalled){ P.stalled = false; refreshDiag(); }
+        } else {
+          if (!P.lastAdvanceAt) P.lastAdvanceAt = now;
+          if (now - P.lastAdvanceAt >= STALL_MS && !P.stalled){
+            P.stalled = true;
+            P.stallCount = (P.stallCount || 0) + 1;
+            if (!P.stallRestarted){
+              P.stallRestarted = true;
+              tryAutoRestart(uid);
+            }
+            refreshDiag();
+          }
+        }
+      }).catch(function(){});
+    });
+  }
+  /* Diagnostics / test surface for the media layer (same
+     precedent as __liveDiag / __liveConnect). */
+  window.__liveMedia = {
+    peers: peers,
+    restartCounts: restartCounts,
+    sampleStats: samplePeerStats,
+    guardPlay: guardPlayVideo,
+    unlockAudio: function(){ unlockAudio(); },
+    soundNeeded: function(){
+      var need = false;
+      eachRemoteVideo(function(v){ if (videoNeedsSound(v)) need = true; });
+      return need;
+    }
+  };
   /* Per-peer promise chain serializing ALL SDP work (S2): offers,
      answers and renegotiations for one peer never run concurrently,
      so setRemoteDescription calls can't interleave into a swallowed
@@ -1461,18 +1566,24 @@ function liveRoomDiff(prev, next){
     }
     if (P.pendingReoffer) makeOffer(uid);
   }
-  function handleFailed(uid){
+  /* The ONE automatic-restart discipline (Build N): 'failed',
+     'disconnected' past its grace window, and media stalls all
+     come through here. Cap: one automatic restart per peer per
+     failure episode (the counter resets when the peer reaches
+     'connected'); a per-peer cooldown keeps the triggers from
+     stacking restarts back to back. Returns true when a restart
+     actually fired. Manual retries (red/amber dot) reset the
+     counter themselves and are not capped here. */
+  var AUTO_RESTART_COOLDOWN_MS = 8000;
+  function tryAutoRestart(uid){
     var P = peers[uid];
-    if (!P) return;
-    setStatus('Connection problem — reconnecting…');
-    if ((restartCounts[uid] || 0) >= 1){
-      /* S4: ONE automatic restart per failure episode; after that
-         the red tile dot is the (manual) retry path. The counter
-         resets when the peer reaches 'connected'. */
-      refreshDiag();
-      return;
-    }
+    if (!P || ended) return false;
+    if ((restartCounts[uid] || 0) >= 1) return false;
+    var now = Date.now();
+    if (P.lastRestartAt && now - P.lastRestartAt < AUTO_RESTART_COOLDOWN_MS)
+      return false;
     restartCounts[uid] = (restartCounts[uid] || 0) + 1;
+    P.lastRestartAt = now;
     if (P.offered){ /* I drive this pair: restart ICE + re-offer */
       try { P.pc.restartIce(); } catch (e) {}
       makeOffer(uid);
@@ -1481,10 +1592,26 @@ function liveRoomDiff(prev, next){
       reconcilePeers();
     }
     refreshDiag();
+    return true;
+  }
+  function handleFailed(uid){
+    var P = peers[uid];
+    if (!P) return;
+    setStatus('Connection problem — reconnecting…');
+    /* S4 discipline, now shared: ONE automatic restart per
+       failure episode; after that the tile dot (red) is the
+       manual retry path. */
+    if (!tryAutoRestart(uid)) refreshDiag();
   }
   function manualRestart(uid){
     restartCounts[uid] = 0;
     var P = peers[uid];
+    if (P){
+      P.stalled = false;
+      P.stallRestarted = false;
+      P.lastRestartAt = 0;
+      P.lastAdvanceAt = Date.now(); /* grace for the stall sampler */
+    }
     if (P && P.offered){
       try { P.pc.restartIce(); } catch (e) {}
       makeOffer(uid);
@@ -1498,12 +1625,21 @@ function liveRoomDiff(prev, next){
   }
   function ensurePeer(uid, offerer){
     if (peers[uid]) return peers[uid];
-    var pc = new RTCPeerConnection(ICE_CONFIG);
+    /* iceCandidatePoolSize 10: pre-gather a small pool so the
+       first candidates exist the moment negotiation starts — the
+       mesh creates many peers per client. (The 1:1 calls client
+       in base.html keeps the browser default: a single peer has
+       no pool pressure.) */
+    var pc = new RTCPeerConnection(Object.assign({}, ICE_CONFIG,
+      {iceCandidatePoolSize: 10}));
     var T = tiles[uid];
     var P = {pc: pc, iceQ: [], offered: false, helloSent: false,
              helloWithMedia: false, pendingHello: false,
              pendingReoffer: false, makingOffer: false,
              chain: Promise.resolve(), discBad: false, discTimer: null,
+             remoteStream: null,
+             lastFrames: null, lastAdvanceAt: 0, lastRestartAt: 0,
+             stalled: false, stallCount: 0, stallRestarted: false,
              remoteKind: isPanelist(uid) ? 'panelist' : 'watcher',
              videoEl: T ? T.video : null};
     peers[uid] = P;
@@ -1511,7 +1647,28 @@ function liveRoomDiff(prev, next){
       if (ev.candidate) signal(uid, 'ice', ev.candidate.toJSON());
     };
     pc.ontrack = function(ev){
-      if (ev.streams && ev.streams[0]) attachRemote(uid, ev.streams[0]);
+      if (ev.track){
+        /* A track starting to flow is a playback trigger too:
+           re-arm the play-guard + sound picture for its tile. */
+        try {
+          ev.track.addEventListener('unmute', function(){
+            var T2 = tiles[uid];
+            if (T2) guardPlayVideo(T2.video);
+            updateSoundButton();
+          });
+        } catch (e) {}
+      }
+      if (ev.streams && ev.streams[0]){
+        /* Remember the stream on the peer BEFORE attaching:
+           attachRemote drops the attach when the member is not
+           in the panel snapshot yet — and that race is REAL
+           (signaling polls every 2s, panel state every 3s, so a
+           fresh panelist's first track can beat the host's next
+           panel poll). The state poll's attach sweep below heals
+           any dropped attach from this record. */
+        P.remoteStream = ev.streams[0];
+        attachRemote(uid, ev.streams[0]);
+      }
       refreshDiag();
     };
     pc.onsignalingstatechange = function(){
@@ -1526,6 +1683,7 @@ function liveRoomDiff(prev, next){
       if (st === 'connected'){
         restartCounts[uid] = 0;
         P.discBad = false;
+        P.stalled = false;
         if (P.discTimer){ clearTimeout(P.discTimer); P.discTimer = null; }
         setStatus(null);
       } else if (st === 'disconnected'){
@@ -1535,6 +1693,10 @@ function liveRoomDiff(prev, next){
             P.discTimer = null;
             if (peers[uid] === P && pc.connectionState === 'disconnected'){
               P.discBad = true;
+              /* A peer still down after the grace window joins
+                 the shared restart discipline instead of just
+                 sitting red (Build N). */
+              tryAutoRestart(uid);
               refreshDiag();
             }
           }, 5000);
@@ -1594,6 +1756,65 @@ function liveRoomDiff(prev, next){
     try { P.pc.close(); } catch (e) {}
     refreshDiag();
   }
+  /* ---------------- remote playback + sound (Build N) --------
+     Three guarantees, enforced continuously rather than once:
+     (1) play-guard — a remote <video> with a stream is never
+     left paused: play() is attempted at track attach, on
+     loadedmetadata, on track unmute, and on EVERY state poll.
+     (2) The 🔊 prompt tells the truth — it is visible exactly
+     while some remote video that carries audio is muted or
+     paused, and hidden when everything is playing with sound.
+     (3) unlockAudio — any pointerdown on the stage, or a tap on
+     the prompt itself, unmutes every remote video (volume 1)
+     and re-plays it: the user gesture mobile browsers require,
+     applied to all tiles at once, panel members included. */
+  function guardPlayVideo(v){
+    if (!v || !v.srcObject) return;
+    if (v.paused){
+      try {
+        var p = v.play();
+        if (p && p.catch) p.catch(function(){});
+      } catch (e) {}
+    }
+  }
+  function eachRemoteVideo(fn){
+    Object.keys(tiles).forEach(function(uid){
+      if (+uid === B.me) return;
+      var T = tiles[uid];
+      if (T && T.video) fn(T.video, +uid);
+    });
+  }
+  function videoNeedsSound(v){
+    if (!v || !v.srcObject) return false;
+    var hasAudio = false, hasVideo = false;
+    try {
+      hasAudio = v.srcObject.getAudioTracks().length > 0;
+      hasVideo = v.srcObject.getVideoTracks().length > 0;
+    } catch (e) {}
+    if (hasAudio && (v.muted || v.paused)) return true;
+    if (hasVideo && v.paused) return true;
+    return false;
+  }
+  function updateSoundButton(){
+    var btn = $('ctl-sound');
+    if (!btn) return;
+    var need = false;
+    eachRemoteVideo(function(v){ if (videoNeedsSound(v)) need = true; });
+    btn.hidden = !need;
+    if (need) btn.textContent = '🔊 Tap for sound';
+  }
+  function unlockAudio(){
+    soundOff = false;
+    eachRemoteVideo(function(v){
+      if (!v.srcObject) return;
+      v.muted = false;
+      try { v.volume = 1; } catch (e) {}
+      guardPlayVideo(v);
+    });
+    updateSoundButton();
+  }
+  stageEl.addEventListener('pointerdown', function(){ unlockAudio(); });
+
   function attachRemote(uid, stream){
     if (!isPanelist(uid)) return; /* watchers have no tile to fill */
     var m = panelById[uid];
@@ -1604,14 +1825,16 @@ function liveRoomDiff(prev, next){
     if (T.video.srcObject !== stream) T.video.srcObject = stream;
     T.el.classList.add('has-video');
     T.video.muted = soundOff;
-    T.video.play().catch(function(){
+    var pr = null;
+    try { pr = T.video.play(); } catch (e) {}
+    if (pr && pr.catch) pr.catch(function(){
       /* Autoplay with sound blocked: start muted, offer the sound
-         button — one tap fixes every tile. */
+         prompt — one tap fixes every tile. */
       T.video.muted = true;
-      soundOff = true;
-      $('ctl-sound').textContent = '🔊 Tap for sound';
-      T.video.play().catch(function(){});
+      guardPlayVideo(T.video);
+      updateSoundButton();
     });
+    updateSoundButton();
     setStatus(null);
   }
   /* Who should I have a peer with right now? Panelists always (they
@@ -1808,6 +2031,12 @@ function liveRoomDiff(prev, next){
     h.style.bottom = (fromBottomPx != null ? fromBottomPx : 14) + 'px';
     h.style.setProperty('--dx', (Math.random() * 90 - 45) + 'px');
     heartsEl.appendChild(h);
+    /* Remove on animationend (Build N) — the timeout below is
+       only a backstop, so hearts can't pile up as orphaned
+       layers if an animation is interrupted. */
+    h.addEventListener('animationend', function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    });
     setTimeout(function(){
       if (h.parentNode) h.parentNode.removeChild(h);
     }, 2500);
@@ -2442,6 +2671,17 @@ function liveRoomDiff(prev, next){
 
   /* ---------------- comments (unchanged behavior; the server's
      can_delete flag now also covers admins) ---------------- */
+  /* The floating stream is a window, not an archive: cap it at
+     the newest 30 nodes so a long, busy live cannot grow an
+     unbounded DOM over the stage (Build N). Rows leave from the
+     front; renderedComments still dedupes arrivals by id.
+     Rendering itself is append-only (audit: commentsEl is never
+     innerHTML-rebuilt) — notices and comments only ever append. */
+  var COMMENTS_CAP = 30;
+  function trimComments(){
+    while (commentsEl.children.length > COMMENTS_CAP)
+      commentsEl.removeChild(commentsEl.firstChild);
+  }
   function addNotice(text){
     var nearBottom = commentsEl.scrollTop + commentsEl.clientHeight
       >= commentsEl.scrollHeight - 60;
@@ -2449,6 +2689,7 @@ function liveRoomDiff(prev, next){
     row.className = 'live-notice';
     row.textContent = text;
     commentsEl.appendChild(row);
+    trimComments();
     if (nearBottom) commentsEl.scrollTop = commentsEl.scrollHeight;
   }
   function noteRoomArrivals(d){
@@ -2515,6 +2756,7 @@ function liveRoomDiff(prev, next){
       row.appendChild(del);
     }
     commentsEl.appendChild(row);
+    trimComments();
     if (nearBottom) commentsEl.scrollTop = commentsEl.scrollHeight;
   }
   $('live-comment-form').addEventListener('submit', function(ev){
@@ -2555,6 +2797,9 @@ function liveRoomDiff(prev, next){
     h.style.setProperty('--dx', (Math.random() * 90 - 45) + 'px');
     h.style.animationDuration = '3.6s';
     heartsEl.appendChild(h);
+    h.addEventListener('animationend', function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    });
     setTimeout(function(){
       if (h.parentNode) h.parentNode.removeChild(h);
     }, 3700);
@@ -2733,9 +2978,11 @@ function liveRoomDiff(prev, next){
     $('ctl-connect').hidden = !member;
     $('ctl-panel-leave').hidden = !(member && !iAmHost());
     $('ctl-end').hidden = !iAmHost();
-    /* Sound toggle is for EVERYONE: remote tiles start muted (S3),
-       so panel members need it to hear each other too. */
-    $('ctl-sound').hidden = false;
+    /* The 🔊 prompt is state-driven now (Build N): visible
+       exactly while some remote video with audio is muted or
+       paused — see updateSoundButton. Panel members need it as
+       much as watchers (remote tiles start muted, S3). */
+    updateSoundButton();
     $('ctl-leave').hidden = member;
     $('ctl-join').hidden = member;
     $('ctl-invite-others').hidden = !canManage();
@@ -2804,16 +3051,7 @@ function liveRoomDiff(prev, next){
     });
   });
   $('ctl-sound').addEventListener('click', function(){
-    soundOff = !soundOff;
-    Object.keys(tiles).forEach(function(uid){
-      if (+uid !== B.me) tiles[uid].video.muted = soundOff;
-    });
-    this.textContent = soundOff ? '🔊 Tap for sound' : '🔇 Sound off';
-    if (!soundOff){
-      Object.keys(tiles).forEach(function(uid){
-        tiles[uid].video.play().catch(function(){});
-      });
-    }
+    unlockAudio();
   });
   $('ctl-join').addEventListener('click', function(){
     var msg = $('live-join-msg');
@@ -2849,6 +3087,11 @@ function liveRoomDiff(prev, next){
   }
   function pollState(){
     if (ended) return;
+    /* Poll discipline (Build N): a hidden tab stops polling
+       state — the 10s heartbeat still keeps the room alive —
+       and the visibilitychange hook below polls the moment the
+       tab comes back, so nothing arrives late. */
+    if (document.hidden) return;
     jget('/live/' + B.id + '/state?since_comment=' + lastComment
          + '&since_like=' + lastLikeCursor)
       .then(function(d){
@@ -2920,6 +3163,28 @@ function liveRoomDiff(prev, next){
           audienceIds = d.viewer_list.map(function(v){ return v.id; });
         syncMembership();
         renderTiles();
+        /* Attach sweep (Build N): if a panelist's peer holds a
+           remote stream the tile is not showing (the ontrack /
+           panel-poll race in ensurePeer, or any other dropped
+           attach), attach it now. attachRemote re-checks panel
+           membership and stream identity itself. */
+        panel.forEach(function(m){
+          var P2 = peers[m.user_id];
+          if (P2 && P2.remoteStream){
+            var T2 = tiles[m.user_id];
+            if (T2 && T2.video.srcObject !== P2.remoteStream)
+              attachRemote(m.user_id, P2.remoteStream);
+          }
+        });
+        /* Play-guard + stall sampling (Build N): every poll
+           re-plays any remote video left paused, refreshes the
+           sound prompt's truth, and samples per-peer frame
+           counters for freeze detection. */
+        Object.keys(tiles).forEach(function(uid){
+          if (+uid !== B.me) guardPlayVideo(tiles[uid].video);
+        });
+        updateSoundButton();
+        samplePeerStats();
         if (amMember) bindLocalTile();
         reconcilePeers();
         renderRequests(d.pending_requests || []);
@@ -2930,6 +3195,10 @@ function liveRoomDiff(prev, next){
       })
       .catch(function(){});
   }
+
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden && !ended) pollState();
+  });
 
   /* ---------------- lifecycle ---------------- */
   function teardownEnded(){
