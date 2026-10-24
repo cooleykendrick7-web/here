@@ -59,6 +59,8 @@
 .live-tile video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
   background:#181818}
 .live-tile video.localvid{transform:scaleX(-1)}
+.live-tile video.localvid-nomirror{transform:none}
+.live-tile .lc-src-tag{white-space:nowrap}
 .live-tile .tile-ph{position:absolute;inset:0;display:flex;flex-direction:column;gap:8px;
   align-items:center;justify-content:center;color:#fff;background:#242526}
 .live-tile .tile-ph img{width:64px;height:64px;border-radius:50%;object-fit:cover}
@@ -298,6 +300,7 @@
   <button type="button" class="live-ctl" id="ctl-mute" hidden>🎤 Mute</button>
   <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
   <button type="button" class="live-ctl" id="ctl-flip" hidden>🔄 Flip</button>
+  <button type="button" class="live-ctl" id="ctl-connect" hidden>🎮 Live Connect</button>
   <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>🚪 Leave panel</button>
   <!-- host -->
   <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
@@ -502,6 +505,17 @@ function liveRoomDiff(prev, next){
   var tiles = {};   /* uid -> {el, video, ph, labelName, badges, menuBtn, member} */
   var myStream = null, mediaReady = false, facing = 'user';
   var myMicOn = true, myCamOn = true, forcedMuted = false;
+  /* ---- Live Connect (Build L) source state ---- */
+  var lcVideoId = null, lcVideoLabel = '', lcVideoKind = 'camera';
+  var lcAudioId = null, lcAudioLabel = '';
+  var lcScreenAudio = false;
+  var lcMirrorPref = null;          /* null = auto */
+  var lcPrevVideoId = null, lcPrevAudioId = null;
+  var lcScreenTrack = null;
+  var lcDevices = {video: [], audio: []};
+  var lcFallbackToastShown = false;
+  var lcChain = Promise.resolve();
+  var lcSheetOpen = false;
   /* Remote videos START MUTED (iOS autoplay requires it; unmuted
      autoplay is what silently failed on phones). Sound is one tap
      on the 🔊 button — shown to panel members too, not just
@@ -641,6 +655,9 @@ function liveRoomDiff(prev, next){
     badges.className = 'tile-badges';
     label.appendChild(tname);
     label.appendChild(badges);
+    var srcTag = document.createElement('span');
+    srcTag.className = 'lc-src-tag';
+    label.appendChild(srcTag);
     var menuBtn = document.createElement('button');
     menuBtn.type = 'button';
     menuBtn.className = 'tile-menu';
@@ -659,8 +676,8 @@ function liveRoomDiff(prev, next){
     el.appendChild(menuBtn);
     gridEl.appendChild(el);
     tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
-                  badges: badges, menuBtn: menuBtn, member: member,
-                  dot: dot};
+                  badges: badges, srcTag: srcTag, menuBtn: menuBtn,
+                  member: member, dot: dot};
     updateTile(member);
     var P = peers[uid];
     if (P) P.videoEl = video;
@@ -677,6 +694,15 @@ function liveRoomDiff(prev, next){
     if (member.admin) b += '🛡 ';
     if (member.muted) b += '🔇';
     T.badges.textContent = b;
+    /* Source tag renders from LOCAL state on my OWN tile only —
+       remote tiles always stay blank (no signaling fields). */
+    if (T.srcTag){
+      T.srcTag.textContent = member.user_id === B.me
+        ? (lcVideoKind === 'screen' ? ' · 🖥 Screen'
+           : (lcVideoKind === 'camera' && !lcIsDefaultVideo()
+              ? ' · 🎮 Live Connect' : ''))
+        : '';
+    }
     T.el.classList.toggle('stage-bg', member.role === 'host');
     T.menuBtn.hidden = !(canManage() && canActOn(member));
   }
@@ -708,8 +734,29 @@ function liveRoomDiff(prev, next){
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       return Promise.reject(new Error('nomedia'));
     }
-    return navigator.mediaDevices.getUserMedia({
-      audio: true, video: {facingMode: facing}});
+    var savedV = null, savedA = null;
+    try {
+      savedV = localStorage.getItem('here_lc_video');
+      savedA = localStorage.getItem('here_lc_audio');
+    } catch (e) {}
+    var cons = {
+      audio: savedA ? {deviceId: {exact: savedA}} : true,
+      video: savedV ? {deviceId: {exact: savedV}} : {facingMode: facing}
+    };
+    return navigator.mediaDevices.getUserMedia(cons)
+      .catch(function(err){
+        if ((savedV || savedA) && err
+            && (err.name === 'OverconstrainedError'
+                || err.name === 'NotFoundError')){
+          if (!lcFallbackToastShown){
+            lcFallbackToastShown = true;
+            toast("A saved camera/mic wasn't found — using your default.");
+          }
+          return navigator.mediaDevices.getUserMedia({
+            audio: true, video: {facingMode: facing}});
+        }
+        throw err;
+      });
   }
   function showMediaError(){
     errText.textContent = 'Camera/mic blocked — allow access in the '
@@ -742,6 +789,7 @@ function liveRoomDiff(prev, next){
       T.video.srcObject = myStream;
       T.video.muted = true;
     }
+    lcApplyMirror();
     T.el.classList.add('has-video');
     T.video.play().catch(function(){});
   }
@@ -765,6 +813,28 @@ function liveRoomDiff(prev, next){
       } else {
         myStream = stream;
       }
+      /* Live Connect: a fresh (re)acquire is always a camera join.
+         The video track's settings carry the real deviceId (an
+         exact-constrained join reports the saved id this way). */
+      lcVideoKind = 'camera';
+      var _lvt = myStream.getVideoTracks()[0];
+      if (_lvt){
+        try {
+          var _lvs = _lvt.getSettings && _lvt.getSettings().deviceId;
+          if (_lvs) lcVideoId = _lvs;
+        } catch (e) {}
+        if (_lvt.label) lcVideoLabel = _lvt.label;
+      }
+      var _lat = myStream.getAudioTracks()[0];
+      if (_lat){
+        try {
+          var _las = _lat.getSettings && _lat.getSettings().deviceId;
+          if (_las) lcAudioId = _las;
+        } catch (e) {}
+        if (_lat.label) lcAudioLabel = _lat.label;
+      }
+      lcEnumerate();
+      lcAfterSourceChange();
       mediaReady = true;
       applyLocalTrackStates();
       bindLocalTile();
@@ -792,6 +862,464 @@ function liveRoomDiff(prev, next){
     errBox.hidden = true;
     setupLocalMedia();
   });
+
+  /* ---------------- Live Connect (Build L) ----------------
+     Source picker for panel members: enumerateDevices lists every
+     camera/mic (a USB capture card shows up by its device name),
+     getDisplayMedia offers the screen. Switching NEVER
+     renegotiates: the new track replaces the old one on every
+     peer's sender (same kind) via replaceTrack, serialized per
+     peer (enqueuePeerOp) and across switches (lcQueue). Muted /
+     camera-off state carries onto the new track because every
+     swap re-runs applyLocalTrackStates. Choices persist in
+     localStorage (here_lc_video / here_lc_audio); the screen is
+     never a join default. */
+  function lcLsSet(k, v){
+    try { localStorage.setItem(k, v); } catch (e) {}
+  }
+  function lcEnumerate(){
+    if (!navigator.mediaDevices
+        || !navigator.mediaDevices.enumerateDevices)
+      return Promise.resolve(lcDevices);
+    return navigator.mediaDevices.enumerateDevices()
+      .then(function(list){
+        var v = [], a = [];
+        (list || []).forEach(function(d){
+          if (d.kind === 'videoinput') v.push(d);
+          else if (d.kind === 'audioinput') a.push(d);
+        });
+        lcDevices = {video: v, audio: a};
+        return lcDevices;
+      })
+      .catch(function(){ return lcDevices; });
+  }
+  function lcIsDefaultVideo(){
+    if (lcVideoId == null) return true;
+    if (!lcDevices.video || !lcDevices.video.length) return true;
+    return lcDevices.video[0].deviceId === lcVideoId;
+  }
+  function lcMirrorEffective(){
+    return lcMirrorPref !== null ? lcMirrorPref
+      : (lcVideoKind === 'camera' && lcIsDefaultVideo());
+  }
+  function lcApplyMirror(){
+    var T = tiles[B.me];
+    if (!T || !T.video) return;
+    var eff = lcMirrorEffective();
+    /* Mirroring is preview-only CSS — the shipped track is
+       never flipped. */
+    T.video.classList.toggle('localvid', eff);
+    T.video.classList.toggle('localvid-nomirror', !eff);
+  }
+  function lcAfterSourceChange(){
+    applyLocalTrackStates();
+    lcApplyMirror();
+    var me = panelById[B.me];
+    if (me && tiles[B.me]) updateTile(me);
+    if (lcSheetOpen && !sheetEl.hidden
+        && sheetTitle.textContent === '🎮 Live Connect')
+      renderConnectSheet();
+  }
+  function lcQueue(fn){
+    var r = lcChain.then(fn, fn);
+    lcChain = r.catch(function(){});
+    return r;
+  }
+  function lcReplaceSenderTrack(kind, track){
+    var jobs = [];
+    Object.keys(peers).forEach(function(uid){
+      var P = peers[uid];
+      jobs.push(enqueuePeerOp(P, function(){
+        var sender = null;
+        try {
+          P.pc.getSenders().forEach(function(s){
+            if (s.track && s.track.kind === kind) sender = s;
+          });
+        } catch (e) {}
+        if (sender) return sender.replaceTrack(track).catch(function(){});
+        return null;
+      }));
+    });
+    return Promise.all(jobs);
+  }
+  function lcSwapTrack(kind, newTrack){
+    if (!myStream){
+      if (newTrack){ try { newTrack.stop(); } catch (e) {} }
+      return Promise.resolve();
+    }
+    return lcReplaceSenderTrack(kind, newTrack).then(function(){
+      if (!myStream){
+        if (newTrack){ try { newTrack.stop(); } catch (e) {} }
+        return;
+      }
+      var olds = [];
+      myStream.getTracks().forEach(function(tr){
+        if (tr.kind === kind) olds.push(tr);
+      });
+      olds.forEach(function(tr){
+        try { myStream.removeTrack(tr); } catch (e) {}
+        try { tr.stop(); } catch (e) {}
+      });
+      if (newTrack) myStream.addTrack(newTrack);
+      applyLocalTrackStates();
+      bindLocalTile();
+    });
+  }
+  function lcDeviceError(err){
+    var n = err && err.name;
+    if (n === 'NotReadableError')
+      toast('That device is busy — close the other app using it, then pick it again.');
+    else if (n === 'NotAllowedError')
+      toast('Permission was blocked for that device.');
+    else
+      toast('Could not switch to that device.');
+  }
+  function lcRestoreAudio(prevA){
+    return navigator.mediaDevices.getUserMedia({
+      audio: prevA ? {deviceId: {exact: prevA}} : true})
+      .then(function(stream){
+        var atr = stream.getAudioTracks()[0];
+        lcScreenAudio = false;
+        if (!atr) return null;
+        /* An exact-constrained restore IS prevA by construction;
+           a default restore reports its real id via settings. */
+        if (prevA) lcAudioId = prevA;
+        else {
+          try {
+            var sid = atr.getSettings && atr.getSettings().deviceId;
+            if (sid) lcAudioId = sid;
+          } catch (e) {}
+        }
+        if (atr.label) lcAudioLabel = atr.label;
+        return lcSwapTrack('audio', atr);
+      })
+      .catch(function(){ lcScreenAudio = false; });
+  }
+  function lcDetachScreenState(){
+    /* Mark the screen inactive FIRST so the screen track's
+       'ended' (fired when the swap stops it) cannot trigger a
+       restore. The screen video track itself is stopped by the
+       caller's normal lcSwapTrack; lcScreenAudio is left for the
+       caller, which restores the previous mic when it was set. */
+    lcScreenTrack = null;
+    lcVideoKind = 'camera';
+  }
+  function switchVideoDevice(id, label){
+    return lcQueue(function(){
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+        return null;
+      return navigator.mediaDevices.getUserMedia({
+        video: {deviceId: {exact: id}}, audio: false})
+        .then(function(stream){
+          var track = stream.getVideoTracks()[0];
+          if (!track){
+            stream.getTracks().forEach(function(t){
+              try { t.stop(); } catch (e) {}
+            });
+            return null;
+          }
+          var wasScreen = lcVideoKind === 'screen';
+          var hadScreenAudio = lcScreenAudio;
+          var prevA = lcPrevAudioId;
+          if (wasScreen) lcDetachScreenState();
+          lcVideoKind = 'camera';
+          lcVideoId = id;
+          lcVideoLabel = label;
+          lcLsSet('here_lc_video', id);
+          var p = lcSwapTrack('video', track);
+          if (wasScreen && hadScreenAudio)
+            p = p.then(function(){ return lcRestoreAudio(prevA); });
+          return p.then(function(){ lcAfterSourceChange(); });
+        })
+        .catch(function(err){ lcDeviceError(err); });
+    });
+  }
+  function switchAudioDevice(id, label){
+    return lcQueue(function(){
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+        return null;
+      return navigator.mediaDevices.getUserMedia({
+        audio: {deviceId: {exact: id}}, video: false})
+        .then(function(stream){
+          var track = stream.getAudioTracks()[0];
+          if (!track){
+            stream.getTracks().forEach(function(t){
+              try { t.stop(); } catch (e) {}
+            });
+            return null;
+          }
+          lcScreenAudio = false;
+          lcAudioId = id;
+          lcAudioLabel = label;
+          lcLsSet('here_lc_audio', id);
+          return lcSwapTrack('audio', track)
+            .then(function(){ lcAfterSourceChange(); });
+        })
+        .catch(function(err){ lcDeviceError(err); });
+    });
+  }
+  function startScreenShare(){
+    if (!navigator.mediaDevices
+        || !navigator.mediaDevices.getDisplayMedia){
+      toast('Screen sharing is not available in this browser.');
+      return Promise.resolve();
+    }
+    /* getDisplayMedia is called DIRECTLY in the click handler —
+       the picker needs the user gesture. Only applying the
+       resulting stream is queued. */
+    var dispP;
+    try {
+      dispP = navigator.mediaDevices.getDisplayMedia({
+        video: true, audio: true});
+    } catch (e) {
+      toast('Could not start screen sharing.');
+      return Promise.resolve();
+    }
+    return dispP.then(function(stream){
+      return lcQueue(function(){
+        var vtr = stream.getVideoTracks()[0];
+        var atr = stream.getAudioTracks()[0];
+        if (!vtr){
+          stream.getTracks().forEach(function(t){
+            try { t.stop(); } catch (e) {}
+          });
+          return null;
+        }
+        if (lcVideoKind !== 'screen'){
+          lcPrevVideoId = lcVideoId;
+          lcPrevAudioId = lcAudioId;
+        }
+        lcVideoKind = 'screen';
+        lcVideoId = null;
+        lcVideoLabel = 'Screen';
+        lcScreenTrack = vtr;
+        try { vtr.addEventListener('ended', lcOnScreenEnded); }
+        catch (e) { vtr.onended = lcOnScreenEnded; }
+        var p = lcSwapTrack('video', vtr);
+        if (atr){
+          lcScreenAudio = true;
+          p = p.then(function(){ return lcSwapTrack('audio', atr); });
+        } else {
+          lcScreenAudio = false;
+        }
+        return p.then(function(){ lcAfterSourceChange(); });
+      });
+    }).catch(function(err){
+      if (err && err.name === 'NotAllowedError') return; /* picker cancel: silent */
+      toast('Could not start screen sharing.');
+    });
+  }
+  function lcOnScreenEnded(){
+    if (lcVideoKind !== 'screen') return;
+    lcQueue(function(){
+      if (lcVideoKind !== 'screen') return null;
+      var prevV = lcPrevVideoId, prevA = lcPrevAudioId;
+      var hadScreenAudio = lcScreenAudio;
+      lcScreenTrack = null;
+      /* Claim the restore up front: the swap below stops the
+         (already ended) screen track, and a re-entrant 'ended'
+         must not queue a second restore. */
+      lcVideoKind = 'camera';
+      return navigator.mediaDevices.getUserMedia({
+        video: prevV ? {deviceId: {exact: prevV}} : {facingMode: facing},
+        audio: false})
+        .then(function(stream){
+          var tr = stream.getVideoTracks()[0];
+          if (prevV) lcVideoId = prevV;
+          else if (tr){
+            try {
+              var sid = tr.getSettings && tr.getSettings().deviceId;
+              lcVideoId = sid || null;
+            } catch (e) { lcVideoId = null; }
+          }
+          if (tr && tr.label) lcVideoLabel = tr.label;
+          var p = tr ? lcSwapTrack('video', tr) : Promise.resolve();
+          if (hadScreenAudio)
+            p = p.then(function(){ return lcRestoreAudio(prevA); });
+          return p.then(function(){
+            lcAfterSourceChange();
+            toast("Screen share ended — you're back on your camera.");
+          });
+        })
+        .catch(function(){
+          lcAfterSourceChange();
+          toast('Screen share ended, but your camera could not be restarted.');
+        });
+    });
+  }
+  function lcFallbackToDefaultCamera(msg){
+    return lcQueue(function(){
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+        return null;
+      return navigator.mediaDevices.getUserMedia({
+        audio: false, video: {facingMode: facing}})
+        .then(function(stream){
+          var tr = stream.getVideoTracks()[0];
+          lcVideoKind = 'camera';
+          if (tr){
+            try {
+              var sid = tr.getSettings && tr.getSettings().deviceId;
+              lcVideoId = sid || null;
+            } catch (e) { lcVideoId = null; }
+            if (tr.label) lcVideoLabel = tr.label;
+          }
+          var p = tr ? lcSwapTrack('video', tr) : Promise.resolve();
+          return p.then(function(){
+            lcAfterSourceChange();
+            toast(msg);
+          });
+        })
+        .catch(function(){ toast(msg); });
+    });
+  }
+  /* ---- Live Connect sheet (rides the shared manage sheet) ---- */
+  function renderConnectSheet(){
+    if (!lcSheetOpen) return;
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    var help = document.createElement('div');
+    help.style.cssText = 'padding:10px 8px;color:rgba(255,255,255,.78);font-size:13px';
+    help.textContent = 'Have a capture card? Plug it in, then pick it from this list — it shows up by name.';
+    sheetActions.appendChild(help);
+    function lcSection(txt){
+      var h = document.createElement('div');
+      h.style.cssText = 'font-weight:800;font-size:13px;margin-top:10px;padding:6px 8px 2px';
+      h.textContent = txt;
+      sheetActions.appendChild(h);
+    }
+    function lcRow(text, fn){
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cmenu-item';
+      b.textContent = text;
+      b.addEventListener('click', fn);
+      sheetActions.appendChild(b);
+      return b;
+    }
+    lcSection('📷 Video source');
+    lcDevices.video.forEach(function(d, i){
+      var active = lcVideoKind === 'camera' && d.deviceId === lcVideoId;
+      (function(dev, idx){
+        lcRow((active ? '● ' : '○ ') + '🎥 '
+              + (dev.label || ('Camera ' + (idx + 1))), function(){
+          switchVideoDevice(dev.deviceId,
+                              dev.label || ('Camera ' + (idx + 1)));
+        });
+      })(d, i);
+    });
+    lcRow((lcVideoKind === 'screen' ? '● ' : '○ ')
+          + '🖥 Share my screen', function(){ startScreenShare(); });
+    lcSection('🎤 Sound source');
+    if (lcScreenAudio){
+      var st = document.createElement('div');
+      st.style.cssText = 'padding:10px 8px;color:rgba(255,255,255,.78);font-size:13px';
+      st.textContent = 'Sound: screen';
+      sheetActions.appendChild(st);
+    }
+    lcDevices.audio.forEach(function(d, i){
+      var active = !lcScreenAudio && d.deviceId === lcAudioId;
+      (function(dev, idx){
+        lcRow((active ? '● ' : '○ ') + '🎤 '
+              + (dev.label || ('Microphone ' + (idx + 1))), function(){
+          switchAudioDevice(dev.deviceId,
+                              dev.label || ('Microphone ' + (idx + 1)));
+        });
+      })(d, i);
+    });
+    var mrow = document.createElement('div');
+    mrow.className = 'cmenu-item';
+    var mcb = document.createElement('input');
+    mcb.type = 'checkbox';
+    mcb.checked = lcMirrorEffective();
+    mcb.addEventListener('change', function(){
+      lcMirrorPref = mcb.checked;
+      lcApplyMirror();
+    });
+    mrow.appendChild(mcb);
+    var mtxt = document.createElement('span');
+    mtxt.textContent = ' 🪞 Mirror preview';
+    mrow.appendChild(mtxt);
+    sheetActions.appendChild(mrow);
+  }
+  function openConnectSheet(){
+    lcSheetOpen = true;
+    sheetTitle.textContent = '🎮 Live Connect';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    $('live-sheet-cancel').textContent = 'Done';
+    renderConnectSheet();
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+    lcEnumerate().then(function(){
+      renderConnectSheet();
+      var anyBlank = lcDevices.video.concat(lcDevices.audio)
+        .some(function(d){ return !d.label; });
+      if (anyBlank)
+        return lcEnumerate().then(function(){ renderConnectSheet(); });
+      return null;
+    });
+  }
+  $('ctl-connect').addEventListener('click', openConnectSheet);
+  /* Unplugging the camera in use mid-live: fall back to the
+     default camera instead of freezing on a dead track. */
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener){
+    navigator.mediaDevices.addEventListener('devicechange', function(){
+      lcEnumerate().then(function(){
+        if (lcSheetOpen && !sheetEl.hidden) renderConnectSheet();
+        if (amMember && myStream && lcVideoKind === 'camera' && lcVideoId
+            && !lcDevices.video.some(function(d){
+                 return d.deviceId === lcVideoId; }))
+          lcFallbackToDefaultCamera("That camera went away — switched you back.");
+      });
+    });
+  }
+  /* Diagnostics / test surface (same precedent as __liveDiag). */
+  window.__liveConnect = {
+    state: function(){
+      return {videoKind: lcVideoKind, videoId: lcVideoId,
+              videoLabel: lcVideoLabel,
+              isDefaultVideo: lcIsDefaultVideo(),
+              audioId: lcAudioId, audioLabel: lcAudioLabel,
+              screenAudio: lcScreenAudio,
+              mirror: lcMirrorEffective()};
+    },
+    devices: function(){
+      function slim(list){
+        return (list || []).map(function(d){
+          return {deviceId: d.deviceId, label: d.label};
+        });
+      }
+      return {video: slim(lcDevices.video), audio: slim(lcDevices.audio)};
+    },
+    senders: function(){
+      var out = {};
+      Object.keys(peers).forEach(function(uid){
+        var v = null, a = null;
+        try {
+          peers[uid].pc.getSenders().forEach(function(s){
+            if (s.track){
+              if (s.track.kind === 'video') v = s.track.id;
+              else if (s.track.kind === 'audio') a = s.track.id;
+            }
+          });
+        } catch (e) {}
+        out[uid] = {video: v, audio: a};
+      });
+      return out;
+    },
+    localTracks: function(){
+      if (!myStream) return [];
+      return myStream.getTracks().map(function(tr){
+        return {kind: tr.kind, id: tr.id, enabled: tr.enabled,
+                readyState: tr.readyState};
+      });
+    },
+    switchVideo: switchVideoDevice,
+    switchAudio: switchAudioDevice,
+    startScreen: startScreenShare,
+    openPanel: openConnectSheet,
+    enumerate: lcEnumerate
+  };
 
   /* ---------------- peers (keyed by user_id) ----------------
      remoteKind: 'panelist' (they publish; tile + video) or 'watcher'
@@ -1317,7 +1845,11 @@ function liveRoomDiff(prev, next){
   document.body.appendChild(sheetEl);
   document.body.appendChild(toastEl);
   var manageTarget = null;
-  function closeSheet(){ sheetEl.hidden = true; sheetBd.hidden = true; manageTarget = null; }
+  function closeSheet(){
+    sheetEl.hidden = true; sheetBd.hidden = true; manageTarget = null;
+    lcSheetOpen = false;
+    $('live-sheet-cancel').textContent = 'Cancel';
+  }
   sheetBd.addEventListener('click', closeSheet);
   $('live-sheet-cancel').addEventListener('click', closeSheet);
   function sheetBtn(label, danger, fn){
@@ -1964,6 +2496,7 @@ function liveRoomDiff(prev, next){
     $('ctl-mute').hidden = !member;
     $('ctl-cam').hidden = !member;
     $('ctl-flip').hidden = !member;
+    $('ctl-connect').hidden = !member;
     $('ctl-panel-leave').hidden = !(member && !iAmHost());
     $('ctl-end').hidden = !iAmHost();
     /* Sound toggle is for EVERYONE: remote tiles start muted (S3),
@@ -2181,7 +2714,7 @@ function liveRoomDiff(prev, next){
     closeSheet();
     setStatus('📺 This live has ended.');
     $('live-comment-input').disabled = true;
-    ['ctl-mute','ctl-cam','ctl-flip','ctl-end','ctl-panel-leave',
+    ['ctl-mute','ctl-cam','ctl-flip','ctl-connect','ctl-end','ctl-panel-leave',
      'ctl-join','ctl-like','ctl-poll','ctl-games','live-requests-panel','live-people-panel',
      'live-invite-banner','live-member-banner','live-poll-card',
      'live-poll-closed','live-game-card','live-game-closed'].forEach(function(id){
