@@ -62,6 +62,15 @@ KINDS = ("text", "photo", "feeling", "clothes", "link", "video", "audio")
 PRIVACIES = ("public", "friends", "onlyme")
 PRIVACY_LABELS = {"public": "Public", "friends": "Friends only", "onlyme": "Only me"}
 PTYPES = ("community", "market", "fan_club", "seller")
+# HERE Market: fixed listing categories + conditions (the sell form's
+# selects and server-side validation share these lists).
+MARKET_CATEGORIES = ("Vehicles", "Electronics", "Home & Garden",
+                     "Furniture", "Clothing", "Shoes", "Games & Toys",
+                     "Tools", "Free Stuff", "Other")
+MARKET_CONDITIONS = ("New", "Like new", "Good", "Fair")
+MARKET_MAX_PRICE_CENTS = 999999 * 100  # $999,999 cap
+MARKET_SAFETY_NOTE = ("Meet in a public place. HERE doesn't handle "
+                      "payments \u2014 pay the seller directly.")
 IMG_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
 AUD_EXTS = {"mp3", "wav", "ogg", "m4a"}
 VID_EXTS = {"mp4", "mov", "webm"}
@@ -942,6 +951,49 @@ def init_db():
               "ON game_matches(a_id, status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_gamematches_b "
               "ON game_matches(b_id, status)")
+    # --- HERE Market: local buy/sell (safe on existing DBs) ---
+    # A listing is a PUBLIC OFFER (see the Market section of
+    # ROUTE_CONTRACT.md): it stays visible in browse, on its detail
+    # page, and on the public /m/{id} page even when the seller's
+    # profile is private -- posting it is the seller's own public act.
+    # Blocks are still enforced both ways in-app. status:
+    # 'active' | 'sold' | 'deleted' (soft delete: thread snapshot
+    # cards and feed posts keep pointing at the listing, whose
+    # detail page turns into the friendly "gone" page). photos is a
+    # JSON array of uploads-relative paths (0-4, uploads/market/).
+    c.execute("""CREATE TABLE IF NOT EXISTS market_listings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seller_id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+        price_cents INTEGER NOT NULL DEFAULT 0,
+        category TEXT NOT NULL DEFAULT 'Other',
+        condition TEXT NOT NULL DEFAULT 'Good',
+        description TEXT NOT NULL DEFAULT '',
+        location TEXT NOT NULL DEFAULT '',
+        photos TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'active',
+        share_to_feed INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL, sold_at TEXT)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_market_seller "
+              "ON market_listings(seller_id, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_market_status "
+              "ON market_listings(status, created_at)")
+    c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
+        user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
+    # messages.listing_*: a Market "Message seller" inquiry carries a
+    # SNAPSHOT of the listing (id + title + price at send time) so the
+    # thread card survives later edits and even the listing's
+    # deletion -- the same trick as story_id/story_media above.
+    # Plain messages leave all three NULL.
+    _msg_cols_m = [r["name"] for r in
+                   c.execute("PRAGMA table_info(messages)").fetchall()]
+    if "listing_id" not in _msg_cols_m:
+        c.execute("ALTER TABLE messages ADD COLUMN listing_id INTEGER")
+    if "listing_title" not in _msg_cols_m:
+        c.execute("ALTER TABLE messages ADD COLUMN listing_title TEXT")
+    if "listing_price_cents" not in _msg_cols_m:
+        c.execute("ALTER TABLE messages ADD COLUMN "
+                  "listing_price_cents INTEGER")
     conn.commit()
     conn.close()
 
@@ -5849,10 +5901,30 @@ async def profile(request: Request, uid: int):
     # viewer's own (render() only defaults page_bg when unset). Same for
     # the viewer's spot colors: blanked here, the owner's .spot-scope
     # vars rule the whole page.
+    # 🛒 Selling strip: the profile owner's non-deleted listings
+    # (actives first, solds badged). Hidden with everything else on a
+    # locked profile; a blocked pair never reaches this route.
+    if locked:
+        selling = []
+        selling_count = 0
+    else:
+        _mconn = db()
+        _mrows = _mconn.execute(
+            "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+            "FROM market_listings l JOIN users u ON u.id=l.seller_id "
+            "WHERE l.seller_id=? AND l.status!='deleted' "
+            "ORDER BY (l.status='sold'), l.created_at DESC LIMIT 6",
+            (uid,)).fetchall()
+        selling_count = _mconn.execute(
+            "SELECT COUNT(*) c FROM market_listings WHERE seller_id=? "
+            "AND status!='deleted'", (uid,)).fetchone()["c"]
+        _mconn.close()
+        selling = [_listing_card(r) for r in _mrows]
     return render(request, "profile.html",
                   {"profile": profile_ctx, "posts": posts,
                    "album_photos": album_photos,
                    "album_count": album_count,
+                   "selling": selling, "selling_count": selling_count,
                    "page_bg": profile_ctx["background"],
                    "viewer_spot_style": "", "viewer_spot_classes": ""})
 
@@ -6481,7 +6553,8 @@ async def unblock_user(request: Request, uid: int):
 
 # ---------------- messages ----------------
 def _deliver_message(sender, receiver_id, body, story_id=None,
-                     story_media="", ama=0):
+                     story_media="", ama=0, listing_id=None,
+                     listing_title=None, listing_price_cents=None):
     """THE message insert path. POST /messages/{fid} and the story
     reply/react endpoints all land here, so every message gets the
     identical treatment: the row insert, the moderation scan, the bell
@@ -6490,13 +6563,17 @@ def _deliver_message(sender, receiver_id, body, story_id=None,
     story_id + the shared clip copy path (see _story_clip_for_replies);
     plain messages leave both empty. ama=1 marks a message that came
     in through a story's "Ask me a question" box (still a story-linked
-    message in every other way). Returns the new message id."""
+    message in every other way). Market inquiries (POST
+    /market/{id}/message) pass listing_id + a title/price SNAPSHOT so
+    the thread can render a listing card that survives the listing
+    being edited or deleted. Returns the new message id."""
     conn = db()
     cur = conn.execute(
         "INSERT INTO messages(sender_id, receiver_id, body, created_at, "
-        "story_id, story_media, ama) VALUES(?,?,?,?,?,?,?)",
+        "story_id, story_media, ama, listing_id, listing_title, "
+        "listing_price_cents) VALUES(?,?,?,?,?,?,?,?,?,?)",
         (sender["id"], receiver_id, body, now_iso(), story_id, story_media,
-         1 if ama else 0))
+         1 if ama else 0, listing_id, listing_title, listing_price_cents))
     mid = cur.lastrowid
     conn.commit()
     conn.close()
@@ -6510,7 +6587,7 @@ def _deliver_message(sender, receiver_id, body, story_id=None,
     return mid
 
 
-def _msg_preview(body, story_id, ama=0):
+def _msg_preview(body, story_id, ama=0, listing_id=None):
     """Inbox/Sent preview text for one message row. Story-linked
     messages announce themselves: a reply reads "📖 Story reply: …"
     and a reaction (body is exactly one reaction emoji) reads
@@ -6521,6 +6598,8 @@ def _msg_preview(body, story_id, ama=0):
     b = (body or "").strip()
     if ama:
         return f"❓ Question about your story: {b}"
+    if listing_id:
+        return f"🛒 Listing: {b}"
     if story_id:
         if b in REACTION_EMOJI.values():
             return f"📖 {b} reacted to a story"
@@ -6578,7 +6657,8 @@ async def inbox(request: Request):
                       "inbox_status": r["rinbox"]}, inbox=True),
                  "body": _msg_preview(
                      r["body"], r["story_id"],
-                     r["ama"] if "ama" in r.keys() else 0),
+                     r["ama"] if "ama" in r.keys() else 0,
+                     r["listing_id"] if "listing_id" in r.keys() else None),
                  "created_at": fancy_time(r["created_at"])}
                 for r in rows if r["receiver_id"] not in blocked]
         return render(request, "inbox.html",
@@ -6600,7 +6680,7 @@ async def inbox(request: Request):
             "SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
             "FROM users WHERE id=?", (fid,)).fetchone()
         last = conn.execute(
-            "SELECT m.body, m.created_at, m.story_id, m.ama FROM messages m WHERE "
+            "SELECT m.body, m.created_at, m.story_id, m.ama, m.listing_id FROM messages m WHERE "
             "((m.sender_id=? AND m.receiver_id=?) OR "
             "(m.sender_id=? AND m.receiver_id=?))" + _vis_frag("m") +
             " ORDER BY m.created_at DESC LIMIT 1",
@@ -6618,7 +6698,8 @@ async def inbox(request: Request):
             "presence": presence_of(f, inbox=True) if f else None,
             "last_body": _msg_preview(
                 last["body"], last["story_id"],
-                last["ama"] if "ama" in last.keys() else 0)
+                last["ama"] if "ama" in last.keys() else 0,
+                last["listing_id"] if "listing_id" in last.keys() else None)
             if last else "",
             "last_at": fancy_time(last["created_at"]) if last else "",
             "unread": unread,
@@ -6654,6 +6735,23 @@ async def thread(request: Request, fid: int):
     # anyone else goes through a call request (pending one shown inline).
     _sweep_call_requests(conn)
     pending_req = _pending_request_between(conn, user["id"], fid)
+    # Market inquiry thumbnails: the card shows the listing's CURRENT
+    # first photo (fetched live); a deleted listing gets no thumb, so
+    # the template renders the 🛒 placeholder instead. The title/price
+    # on the card are the message's send-time snapshot.
+    _lthumbs = {}
+    for r in rows:
+        _lid = r["listing_id"] if "listing_id" in r.keys() else None
+        if _lid and _lid not in _lthumbs:
+            _lr = conn.execute(
+                "SELECT photos, status FROM market_listings WHERE id=?",
+                (_lid,)).fetchone()
+            _t = ""
+            if _lr and _lr["status"] != "deleted":
+                _ph = _market_photos(_lr)
+                if _ph:
+                    _t = "/uploads/" + _ph[0]
+            _lthumbs[_lid] = _t
     conn.close()
     call_req = None
     if pending_req:
@@ -6664,7 +6762,14 @@ async def thread(request: Request, fid: int):
     for r in rows:
         d = {"id": r["id"], "sender_id": r["sender_id"], "body": r["body"],
              "created_at": fancy_time(r["created_at"]),
-             "mine": r["sender_id"] == user["id"], "story": None}
+             "mine": r["sender_id"] == user["id"], "story": None,
+             "listing": None}
+        if "listing_id" in r.keys() and r["listing_id"]:
+            d["listing"] = {
+                "id": r["listing_id"],
+                "title": r["listing_title"] or "",
+                "price": _money(r["listing_price_cents"] or 0),
+                "thumb": _lthumbs.get(r["listing_id"], "")}
         if r["story_id"]:
             # Story reply/reaction: the bubble carries the story clip
             # (the shared story_replies copy, so it outlives the story)
@@ -9927,6 +10032,573 @@ async def page_edit(request: Request, pid: int):
     return redir(f"/page/{pid}")
 
 
+# ---------------- HERE Market: local buy/sell ----------------
+# In-app local buy/sell. A listing is a PUBLIC OFFER: it shows in
+# browse, on its detail page, and on the logged-out /m/{id} share page
+# even when the seller's profile is private -- posting the listing is
+# the seller's own public act (like a public post). Blocks still apply
+# both ways in-app: a blocked pair can't see, save, or message about
+# each other's listings. HERE never handles money: no payments, no
+# checkout -- buyers and sellers meet and pay directly (the safety
+# note on the detail + public pages says exactly that).
+
+
+def _money(cents):
+    """cents -> '$25' when whole dollars, '$25.50' otherwise, 0 -> 'FREE'."""
+    cents = int(cents or 0)
+    if cents <= 0:
+        return "FREE"
+    if cents % 100 == 0:
+        return f"${cents // 100:,}"
+    return f"${cents // 100:,}.{cents % 100:02d}"
+
+
+def _parse_price(raw):
+    """Strict dollars string -> cents int. Accepts '25', '25.5',
+    '25.50', '0' (= FREE). Raises ValueError on anything else:
+    negatives, garbage, >2 decimal places, over the $999,999 cap."""
+    s = (raw or "").strip()
+    if not s:
+        raise ValueError("Enter a price -- 0 means FREE.")
+    if s[0] in "-+":
+        raise ValueError("Price can't be negative.")
+    if s.count(".") > 1:
+        raise ValueError("Enter a price like 25 or 25.50.")
+    if "." in s:
+        d, c = s.split(".")
+        if not c.isdigit() or len(c) > 2:
+            raise ValueError("Enter a price like 25 or 25.50.")
+        c = (c + "0")[:2]
+    else:
+        d, c = s, "00"
+    if not d.isdigit():
+        raise ValueError("Enter a price like 25 or 25.50.")
+    cents = int(d) * 100 + int(c)
+    if cents > MARKET_MAX_PRICE_CENTS:
+        raise ValueError("Price is too high (max $999,999).")
+    return cents
+
+
+def _market_photos(row):
+    """A listing row's photos JSON -> list of uploads-relative paths."""
+    try:
+        ph = json.loads(row["photos"] or "[]")
+    except Exception:
+        ph = []
+    return [p for p in ph if isinstance(p, str) and p]
+
+
+def _listing_card(row, saved=False):
+    """Template-ready listing dict. `row` must carry the seller join
+    aliases sname/savatar (every market query joins users)."""
+    raw = _market_photos(row)
+    keys = row.keys()
+    return {
+        "id": row["id"], "seller_id": row["seller_id"],
+        "title": row["title"] or "",
+        "price": _money(row["price_cents"]),
+        "price_cents": row["price_cents"],
+        "price_input": (f"{row['price_cents'] // 100}"
+                        if row["price_cents"] % 100 == 0
+                        else f"{row['price_cents'] / 100:.2f}"),
+        "category": row["category"] or "",
+        "condition": row["condition"] or "",
+        "description": row["description"] or "",
+        "location": row["location"] or "",
+        "photos": ["/uploads/" + p for p in raw],
+        "photo_paths": raw,
+        "first_photo": ("/uploads/" + raw[0]) if raw else "",
+        "status": row["status"], "sold": row["status"] == "sold",
+        "created": fancy_time(row["created_at"]),
+        "seller_name": row["sname"] if "sname" in keys else "",
+        "seller_avatar": (avatar_url(row["savatar"])
+                          if "savatar" in keys and row["savatar"] else ""),
+        "saved": bool(saved),
+    }
+
+
+def _get_listing(conn, lid):
+    return conn.execute(
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "FROM market_listings l JOIN users u ON u.id=l.seller_id "
+        "WHERE l.id=?", (lid,)).fetchone()
+
+
+def _market_form_fields(form):
+    """Validate a sell/edit form's TEXT fields -> (fields, error).
+    Photos are the caller's problem (create and edit treat them
+    differently). A bad price/category/condition refuses the whole
+    save, like a bad poll refuses the whole post."""
+    title = (form.get("title") or "").strip()
+    if not title:
+        return None, "Give your listing a title."
+    try:
+        price_cents = _parse_price(form.get("price"))
+    except ValueError as e:
+        return None, str(e)
+    category = (form.get("category") or "").strip()
+    if category not in MARKET_CATEGORIES:
+        return None, "Pick a category."
+    condition = (form.get("condition") or "").strip()
+    if condition not in MARKET_CONDITIONS:
+        return None, "Pick a condition."
+    return {"title": title[:120], "price_cents": price_cents,
+            "category": category, "condition": condition,
+            "description": (form.get("description") or "").strip()[:2000],
+            "location": (form.get("location") or "").strip()[:80]}, None
+
+
+def _market_save_photos(form, existing=()):
+    """Save the form's NEW photo uploads (image-only through
+    save_upload with IMG_EXTS + the app's standard image cap).
+    Returns (paths, error); the 4-photo cap counts existing + new."""
+    ups = [u for u in form.getlist("photos")
+           if getattr(u, "filename", "")]
+    if len(existing) + len(ups) > 4:
+        return None, "Listings can have at most 4 photos."
+    paths = list(existing)
+    for up in ups:
+        try:
+            p = save_upload(up, "market", IMG_EXTS)
+        except ValueError as e:
+            return None, str(e)
+        if p:
+            paths.append(p)
+    return paths, None
+
+
+def _market_feed_post(user, listing_id, fields, photos):
+    """The optional share-to-feed cross-post for a new listing: a
+    completely normal post (photo kind with the first photo, else
+    text) whose body carries the price line + the /market link.
+    Deleting the listing later leaves the post standing; its link
+    lands on the listing's friendly 'gone' page."""
+    body = (f"🛒 For sale: {fields['title']} — "
+            f"{_money(fields['price_cents'])}")
+    desc = fields["description"]
+    if desc:
+        body += "\n" + (desc[:140] + ("..." if len(desc) > 140 else ""))
+    body += f"\n👉 See it in the Market: /market/{listing_id}"
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO posts(user_id, page_id, kind, body, feeling, "
+        "link_url, video_url, media, privacy, created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (user["id"], None, "photo" if photos else "text", body, "",
+         "", "", photos[0] if photos else "", "public", now_iso()))
+    pid = cur.lastrowid
+    for t in parse_hashtags(body):
+        conn.execute(
+            "INSERT OR IGNORE INTO post_hashtags(post_id, tag) "
+            "VALUES(?,?)", (pid, t))
+    conn.commit()
+    conn.close()
+    record_activity(user["id"])
+    return pid
+
+
+def _market_forbidden():
+    return JSONResponse({"ok": False, "error": "forbidden"},
+                        status_code=403)
+
+
+@app.get("/market", response_class=HTMLResponse)
+async def market_browse(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    qp = request.query_params
+    q = (qp.get("q") or "").strip()
+    category = (qp.get("category") or "").strip()
+    if category not in MARKET_CATEGORIES:
+        category = ""
+    sort = (qp.get("sort") or "new").strip()
+    if sort not in ("new", "price_asc", "price_desc"):
+        sort = "new"
+    include_sold = (qp.get("sold") or "") in ("1", "true", "on")
+    seller_raw = (qp.get("seller") or "").strip()
+    seller_id = int(seller_raw) if seller_raw.isdigit() else None
+    where = ["l.status IN ('active','sold')" if include_sold
+             else "l.status='active'"]
+    args = []
+    if q:
+        where.append("(l.title LIKE ? OR l.description LIKE ?)")
+        args += [f"%{q}%", f"%{q}%"]
+    if category:
+        where.append("l.category=?")
+        args.append(category)
+    if seller_id:
+        where.append("l.seller_id=?")
+        args.append(seller_id)
+    blocked = blocked_id_set(user["id"])
+    if blocked:
+        where.append("l.seller_id NOT IN (%s)"
+                     % ",".join("?" * len(blocked)))
+        args += sorted(blocked)
+    order = {"new": "l.created_at DESC",
+             "price_asc": "l.price_cents ASC, l.created_at DESC",
+             "price_desc": "l.price_cents DESC, l.created_at DESC"}[sort]
+    conn = db()
+    rows = conn.execute(
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "FROM market_listings l JOIN users u ON u.id=l.seller_id WHERE "
+        + " AND ".join(where) + f" ORDER BY {order} LIMIT 200",
+        args).fetchall()
+    saved_ids = {r["listing_id"] for r in conn.execute(
+        "SELECT listing_id FROM market_saves WHERE user_id=?",
+        (user["id"],)).fetchall()}
+    conn.close()
+    seller = get_user(seller_id) if seller_id else None
+    return render(request, "market.html", {
+        "listings": [_listing_card(r, saved=r["id"] in saved_ids)
+                     for r in rows],
+        "q": q, "category": category, "sort": sort,
+        "include_sold": include_sold, "categories": MARKET_CATEGORIES,
+        "seller": ({"id": seller["id"], "name": seller["name"]}
+                   if seller else None),
+        "saved_page": False, "mine_page": False})
+
+
+@app.get("/market/mine", response_class=HTMLResponse)
+async def market_mine(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    rows = conn.execute(
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "FROM market_listings l JOIN users u ON u.id=l.seller_id "
+        "WHERE l.seller_id=? AND l.status!='deleted' "
+        "ORDER BY (l.status='sold'), l.created_at DESC",
+        (user["id"],)).fetchall()
+    conn.close()
+    return render(request, "market.html", {
+        "listings": [_listing_card(r) for r in rows],
+        "q": "", "category": "", "sort": "new", "include_sold": True,
+        "categories": MARKET_CATEGORIES, "seller": None,
+        "saved_page": False, "mine_page": True})
+
+
+@app.get("/market/new", response_class=HTMLResponse)
+async def market_new_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    return render(request, "market_form.html", {
+        "editing": False, "listing": None, "action": "/market",
+        "categories": MARKET_CATEGORIES, "conditions": MARKET_CONDITIONS})
+
+
+@app.get("/market/saved", response_class=HTMLResponse)
+async def market_saved(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    rows = conn.execute(
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "FROM market_saves s JOIN market_listings l ON l.id=s.listing_id "
+        "JOIN users u ON u.id=l.seller_id "
+        "WHERE s.user_id=? AND l.status!='deleted' "
+        "ORDER BY (l.status='sold'), s.created_at DESC",
+        (user["id"],)).fetchall()
+    # Lazy cleanup: saves pointing at deleted listings are dropped on
+    # read, so a deleted listing never lingers here as a dead row.
+    conn.execute(
+        "DELETE FROM market_saves WHERE user_id=? AND listing_id IN "
+        "(SELECT id FROM market_listings WHERE status='deleted')",
+        (user["id"],))
+    conn.commit()
+    conn.close()
+    return render(request, "market.html", {
+        "listings": [_listing_card(r, saved=True) for r in rows],
+        "q": "", "category": "", "sort": "new", "include_sold": True,
+        "categories": MARKET_CATEGORIES, "seller": None,
+        "saved_page": True, "mine_page": False})
+
+
+@app.post("/market")
+async def market_create(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    fields, ferr = _market_form_fields(form)
+    if ferr:
+        return redir("/market/new", ferr)
+    photos, perr = _market_save_photos(form)
+    if perr:
+        return redir("/market/new", perr)
+    share = (form.get("share_to_feed") or "") in ("1", "on", "true")
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO market_listings(seller_id, title, price_cents, "
+        "category, condition, description, location, photos, status, "
+        "share_to_feed, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (user["id"], fields["title"], fields["price_cents"],
+         fields["category"], fields["condition"], fields["description"],
+         fields["location"], json.dumps(photos), "active",
+         1 if share else 0, now_iso()))
+    lid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    # Moderation: title + description are scanned; a hit flags the
+    # listing into the owner queue -- it NEVER blocks the listing.
+    flag_item("listing", lid, user["id"], user["name"],
+              f"{fields['title']}\n{fields['description']}")
+    if share:
+        _market_feed_post(user, lid, fields, photos)
+    return redir(f"/market/{lid}")
+
+
+@app.get("/market/{lid}", response_class=HTMLResponse)
+async def market_detail(request: Request, lid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    owner_on = is_owner(request)
+    conn = db()
+    row = _get_listing(conn, lid)
+    if not row:
+        conn.close()
+        return redir("/market", "Listing not found.")
+    if row["status"] == "deleted":
+        conn.close()
+        return render(request, "market_detail.html", {
+            "gone": True, "listing": None, "seller": None,
+            "is_seller": False, "saved": False, "more_count": 0,
+            "safety_note": MARKET_SAFETY_NOTE})
+    if row["seller_id"] != user["id"] and not owner_on \
+            and blocked_either_way(user["id"], row["seller_id"]):
+        conn.close()
+        return render(request, "profile_unavailable.html", {})
+    saved = bool(conn.execute(
+        "SELECT 1 FROM market_saves WHERE user_id=? AND listing_id=?",
+        (user["id"], lid)).fetchone())
+    more_count = conn.execute(
+        "SELECT COUNT(*) c FROM market_listings WHERE seller_id=? "
+        "AND id!=? AND status!='deleted'",
+        (row["seller_id"], lid)).fetchone()["c"]
+    conn.close()
+    seller = get_user(row["seller_id"])
+    return render(request, "market_detail.html", {
+        "gone": False, "listing": _listing_card(row, saved=saved),
+        "seller": ({"id": seller["id"], "name": seller["name"],
+                    "avatar": avatar_url(seller.get("avatar", "")),
+                    "joined": fancy_time(seller["created_at"])}
+                   if seller else None),
+        "is_seller": row["seller_id"] == user["id"],
+        "saved": saved, "more_count": more_count,
+        "safety_note": MARKET_SAFETY_NOTE})
+
+
+@app.get("/market/{lid}/edit", response_class=HTMLResponse)
+async def market_edit_page(request: Request, lid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _get_listing(conn, lid)
+    conn.close()
+    if not row or row["status"] == "deleted":
+        return redir("/market", "Listing not found.")
+    if row["seller_id"] != user["id"]:
+        return _market_forbidden()
+    return render(request, "market_form.html", {
+        "editing": True, "listing": _listing_card(row),
+        "action": f"/market/{lid}/edit",
+        "categories": MARKET_CATEGORIES, "conditions": MARKET_CONDITIONS})
+
+
+@app.post("/market/{lid}/edit")
+async def market_edit(request: Request, lid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _get_listing(conn, lid)
+    conn.close()
+    if not row or row["status"] == "deleted":
+        return redir("/market", "Listing not found.")
+    if row["seller_id"] != user["id"]:
+        return _market_forbidden()
+    form = await request.form()
+    fields, ferr = _market_form_fields(form)
+    if ferr:
+        return redir(f"/market/{lid}/edit", ferr)
+    remove = set(form.getlist("remove_photo"))
+    kept = [p for p in _market_photos(row) if p not in remove]
+    photos, perr = _market_save_photos(form, existing=kept)
+    if perr:
+        return redir(f"/market/{lid}/edit", perr)
+    conn = db()
+    conn.execute(
+        "UPDATE market_listings SET title=?, price_cents=?, category=?, "
+        "condition=?, description=?, location=?, photos=? WHERE id=?",
+        (fields["title"], fields["price_cents"], fields["category"],
+         fields["condition"], fields["description"], fields["location"],
+         json.dumps(photos), lid))
+    conn.commit()
+    conn.close()
+    # Edited text is re-scanned like new text (flags only, never blocks).
+    flag_item("listing", lid, user["id"], user["name"],
+              f"{fields['title']}\n{fields['description']}")
+    return redir(f"/market/{lid}", "Listing updated.")
+
+
+@app.post("/market/{lid}/sold")
+async def market_sold(request: Request, lid: int):
+    """Toggle active <-> sold. Marking SOLD notifies everyone who
+    saved the listing; re-listing is silent. Seller only."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _get_listing(conn, lid)
+    if not row or row["status"] == "deleted":
+        conn.close()
+        return redir("/market", "Listing not found.")
+    if row["seller_id"] != user["id"]:
+        conn.close()
+        return _market_forbidden()
+    if row["status"] == "active":
+        savers = [r["user_id"] for r in conn.execute(
+            "SELECT user_id FROM market_saves WHERE listing_id=?",
+            (lid,)).fetchall()]
+        conn.execute(
+            "UPDATE market_listings SET status='sold', sold_at=? "
+            "WHERE id=?", (now_iso(), lid))
+        conn.commit()
+        conn.close()
+        for sid in savers:
+            if sid != user["id"]:
+                notify(sid, "market_sold",
+                       f"An item you saved was marked SOLD: {row['title']}",
+                       f"/market/{lid}", actor_id=user["id"])
+        return redir(f"/market/{lid}", "Marked as SOLD.")
+    conn.execute(
+        "UPDATE market_listings SET status='active', sold_at=NULL "
+        "WHERE id=?", (lid,))
+    conn.commit()
+    conn.close()
+    return redir(f"/market/{lid}", "Listing is available again.")
+
+
+@app.post("/market/{lid}/delete")
+async def market_delete(request: Request, lid: int):
+    """Soft delete: the row stays (status='deleted') so thread
+    snapshot cards and feed posts keep a target -- their links land
+    on the friendly 'gone' page. Seller only."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _get_listing(conn, lid)
+    if not row or row["status"] == "deleted":
+        conn.close()
+        return redir("/market", "Listing not found.")
+    if row["seller_id"] != user["id"]:
+        conn.close()
+        return _market_forbidden()
+    conn.execute("UPDATE market_listings SET status='deleted' WHERE id=?",
+                 (lid,))
+    conn.commit()
+    conn.close()
+    return redir("/market/mine", "Listing deleted.")
+
+
+@app.post("/market/{lid}/save")
+async def market_save(request: Request, lid: int):
+    """Toggle a save (bookmark). Idempotent per tap, like follow;
+    a seller can never save their own listing."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _get_listing(conn, lid)
+    if not row or row["status"] == "deleted":
+        conn.close()
+        return redir("/market", "Listing not found.")
+    if row["seller_id"] == user["id"]:
+        conn.close()
+        return _market_forbidden()
+    if blocked_either_way(user["id"], row["seller_id"]):
+        conn.close()
+        return redir("/market", "You can't save this listing.")
+    has = conn.execute(
+        "SELECT 1 FROM market_saves WHERE user_id=? AND listing_id=?",
+        (user["id"], lid)).fetchone()
+    if has:
+        conn.execute(
+            "DELETE FROM market_saves WHERE user_id=? AND listing_id=?",
+            (user["id"], lid))
+    else:
+        conn.execute(
+            "INSERT OR IGNORE INTO market_saves(user_id, listing_id, "
+            "created_at) VALUES(?,?,?)", (user["id"], lid, now_iso()))
+    conn.commit()
+    conn.close()
+    return back(request, f"/market/{lid}")
+
+
+@app.post("/market/{lid}/message")
+async def market_message(request: Request, lid: int):
+    """Message the seller about this listing: delivers ONE message
+    into the pair's existing 1:1 thread (or starts it) through
+    _deliver_message, carrying the listing snapshot so the thread
+    renders a listing card above the bubble. Same gates as normal
+    messaging: a block in either direction refuses."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _get_listing(conn, lid)
+    conn.close()
+    if not row or row["status"] == "deleted":
+        return redir("/market", "Listing not found.")
+    if row["seller_id"] == user["id"]:
+        return _market_forbidden()
+    if blocked_either_way(user["id"], row["seller_id"]):
+        return redir("/messages", "You can't message this person.")
+    form = await request.form()
+    body = (form.get("body") or "").strip() \
+        or "Hi! Is this still available?"
+    _deliver_message(user, row["seller_id"], body[:2000],
+                     listing_id=lid, listing_title=row["title"],
+                     listing_price_cents=row["price_cents"])
+    return redir(f"/messages/{row['seller_id']}")
+
+
+@app.get("/m/{lid}", response_class=HTMLResponse)
+async def public_listing(request: Request, lid: int):
+    """Public share page for a listing (growth door): logged-out OK.
+    Listings are public offers, so an active/sold listing shows in
+    full -- even when the seller's profile is private -- but the page
+    exposes only the seller's display name + avatar, and links nowhere
+    into the private profile. A deleted (or missing) listing gets the
+    generic teaser with zero listing/seller data."""
+    viewer = current_user(request)
+    conn = db()
+    row = _get_listing(conn, lid)
+    conn.close()
+    if not row or row["status"] == "deleted":
+        return _public_teaser(request, viewer)
+    card = _listing_card(row)
+    og_image = ""
+    if card["first_photo"]:
+        og_image = _abs_url(request, card["first_photo"])
+    elif card["seller_avatar"]:
+        og_image = _abs_url(request, card["seller_avatar"])
+    return render(request, "public_listing.html", {
+        "listing": card,
+        "seller": {"name": row["sname"],
+                   "avatar": avatar_url(row["savatar"] or "")},
+        "og_image": og_image,
+        "excerpt": (row["description"] or row["title"] or "")[:160],
+        "safety_note": MARKET_SAFETY_NOTE,
+        "logged_in": bool(viewer)})
+
+
 # ---------------- owner ----------------
 @app.get("/owner/login", response_class=HTMLResponse)
 async def owner_login_page(request: Request):
@@ -10135,6 +10807,12 @@ async def owner_flag_remove(request: Request, fid: int):
         elif f["item_type"] == "message":
             conn = db()
             conn.execute("DELETE FROM messages WHERE id=?", (f["item_id"],))
+            conn.commit()
+            conn.close()
+        elif f["item_type"] == "listing":
+            conn = db()
+            conn.execute("UPDATE market_listings SET status='deleted' "
+                         "WHERE id=?", (f["item_id"],))
             conn.commit()
             conn.close()
         elif f["item_type"] == "story":
