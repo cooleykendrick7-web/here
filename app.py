@@ -12,6 +12,8 @@ owner_sessions; the owner password hash is baked in as OWNER_PW_HASH.
 Implements the binding contract in ROUTE_CONTRACT.md exactly.
 """
 import base64
+import hashlib
+import hmac
 import html
 import json
 import os
@@ -20,11 +22,12 @@ import secrets
 import shutil
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 import urllib.error
 import urllib.request
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import bcrypt
 from fastapi import FastAPI, HTTPException, Request, UploadFile
@@ -994,6 +997,63 @@ def init_db():
     if "listing_price_cents" not in _msg_cols_m:
         c.execute("ALTER TABLE messages ADD COLUMN "
                   "listing_price_cents INTEGER")
+    # --- Live Tickets: the live gift economy (safe on existing DBs) ---
+    # TWO ledgers per user (see the Live Tickets section of
+    # ROUTE_CONTRACT.md): tickets_balance = SPENDABLE tickets (bought,
+    # minus gifts/shouts sent); gift_earned = tickets EARNED by
+    # hosting (received gifts/shouts) that have not been cashed out
+    # or put on hold by a payout request. ticket_txns is the audit
+    # ledger: its `tickets` column is the signed delta against the
+    # ledger named by `kind` ('buy'/'gift_send'/'shout' move the
+    # spendable side; 'gift_receive'/'cashout_hold'/'cashout_return'
+    # move the earned side; 'cashout_paid' is a 0-delta audit marker
+    # — the tickets left the earned ledger at hold time).
+    _user_cols_lt = [r["name"] for r in
+                     c.execute("PRAGMA table_info(users)").fetchall()]
+    if "tickets_balance" not in _user_cols_lt:
+        c.execute("ALTER TABLE users ADD COLUMN tickets_balance "
+                  "INTEGER DEFAULT 0")
+    if "gift_earned" not in _user_cols_lt:
+        c.execute("ALTER TABLE users ADD COLUMN gift_earned "
+                  "INTEGER DEFAULT 0")
+    c.execute("""CREATE TABLE IF NOT EXISTS ticket_txns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, kind TEXT NOT NULL,
+        tickets INTEGER NOT NULL DEFAULT 0,
+        live_id INTEGER, gift_key TEXT,
+        stripe_session TEXT, note TEXT DEFAULT '',
+        created_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ticket_txns_user "
+              "ON ticket_txns(user_id, id)")
+    # Idempotent purchase crediting: one buy txn per Stripe checkout
+    # session, enforced by a partial unique index (NULL sessions —
+    # every non-buy row — never collide).
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
+              "idx_ticket_txns_session ON ticket_txns(stripe_session) "
+              "WHERE stripe_session IS NOT NULL")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_gifts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, sender_id INTEGER NOT NULL,
+        host_id INTEGER NOT NULL, gift_key TEXT NOT NULL,
+        tickets INTEGER NOT NULL, created_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_gifts_room "
+              "ON live_gifts(live_id, id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_shouts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        body TEXT NOT NULL, tickets INTEGER NOT NULL,
+        expires_at TEXT NOT NULL, created_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_shouts_room "
+              "ON live_shouts(live_id, id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS payout_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, tickets INTEGER NOT NULL,
+        dollars_cents INTEGER NOT NULL,
+        payout_note TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL, decided_at TEXT)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_payouts_status "
+              "ON payout_requests(status, id)")
     conn.commit()
     conn.close()
 
@@ -8112,7 +8172,13 @@ async def live_page(request: Request, lid: int):
         role = "watcher"
     boot = {"id": lid, "me": user["id"], "role": role,
             "host": host, "guest": guest, "title": live["title"],
-            "created_at": live["created_at"]}
+            "created_at": live["created_at"],
+            # Live Tickets: my spendable balance for the chip/gift
+            # sheet, and the gift catalog for the tray (prices are
+            # still enforced server-side from GIFT_CATALOG).
+            "tickets": (dict(user).get("tickets_balance") or 0),
+            "gifts": [GIFT_CATALOG[k] for k in GIFT_ORDER],
+            "shout_cost": SHOUT_COST_TICKETS}
     # Browse mode (fullscreen-live rework): the watch page renders a
     # browse section server-side at load — other current lives this
     # viewer may watch (live_now_for, excluding THIS live) and the
@@ -8459,6 +8525,44 @@ async def live_state(request: Request, lid: int):
         out["last_game"] = (
             _live_game_result_json(conn, dict(_ended_game))
             if _ended_game else None)
+    # Live Tickets: gifts sent in the last ~15s (clients animate the
+    # ones past their gift cursor), this live's top gifters, the
+    # pinned shout-out if one is still on the clock, and the
+    # viewer's own spendable balance for the gift sheet + chip.
+    gift_cutoff = (datetime.now(timezone.utc)
+                   - timedelta(seconds=15)).isoformat()
+    out["recent_gifts"] = [
+        {"id": r["id"], "sender_name": r["sender_name"] or "Deleted user",
+         "gift_key": r["gift_key"],
+         **_gift_public(r["gift_key"], r["tickets"])}
+        for r in conn.execute(
+            "SELECT g.*, u.name AS sender_name FROM live_gifts g "
+            "LEFT JOIN users u ON u.id=g.sender_id WHERE g.live_id=? "
+            "AND g.created_at>=? ORDER BY g.id ASC",
+            (lid, gift_cutoff)).fetchall()]
+    out["top_gifters"] = [
+        {"name": r["sender_name"] or "Deleted user",
+         "tickets": r["total"]}
+        for r in conn.execute(
+            "SELECT g.sender_id, SUM(g.tickets) AS total, "
+            "u.name AS sender_name FROM live_gifts g "
+            "LEFT JOIN users u ON u.id=g.sender_id WHERE g.live_id=? "
+            "GROUP BY g.sender_id ORDER BY total DESC LIMIT 5",
+            (lid,)).fetchall()]
+    shout_row = conn.execute(
+        "SELECT s.*, u.name AS user_name FROM live_shouts s "
+        "LEFT JOIN users u ON u.id=s.user_id WHERE s.live_id=? AND "
+        "s.expires_at>? ORDER BY s.id DESC LIMIT 1",
+        (lid, now_iso())).fetchone()
+    out["active_shout"] = (
+        {"id": shout_row["id"], "name": shout_row["user_name"]
+         or "Deleted user", "body": shout_row["body"],
+         "expires_at": shout_row["expires_at"]}
+        if shout_row else None)
+    _me = conn.execute(
+        "SELECT tickets_balance FROM users WHERE id=?",
+        (user["id"],)).fetchone()
+    out["my_tickets"] = (_me["tickets_balance"] or 0) if _me else 0
     conn.close()
     return JSONResponse(out)
 
@@ -8981,6 +9085,177 @@ async def live_comment_delete(request: Request, lid: int, cid: int):
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
+
+
+# ---------------- live tickets: gifts + shout-out pins ----------------
+# The money-moving pair of the gift economy. Both endpoints are
+# single-transaction and guarded: the spendable balance is debited
+# with a WHERE balance>=cost UPDATE whose rowcount is checked, so a
+# balance can never go negative and a double-tap can't double-spend.
+# The host's side lands in gift_earned (the earned ledger); every
+# move writes its ticket_txns rows in the same transaction.
+
+
+def _live_present(conn, lid, uid, host_id):
+    """Presence for gifting/shouting: an on-camera member row, or a
+    watcher row that hasn't left (heartbeats keep it fresh). The
+    host is 'present' by definition but is handled by the caller
+    (hosts can't gift/shout on their own live)."""
+    if conn.execute(
+            "SELECT 1 FROM live_members WHERE live_id=? AND "
+            "user_id=? AND left_at IS NULL",
+            (lid, uid)).fetchone():
+        return True
+    return bool(conn.execute(
+        "SELECT 1 FROM live_viewers WHERE live_id=? AND user_id=? "
+        "AND left_at IS NULL", (lid, uid)).fetchone())
+
+
+@app.post("/live/{lid}/gift")
+async def live_gift(request: Request, lid: int):
+    """Send a character gift to the host of a live. Body: {gift_key}.
+    Prices come ONLY from GIFT_CATALOG (server-side). Atomic: sender
+    spendable -= cost (guarded), host earned += cost, one live_gifts
+    row + two ledger rows, all in one commit."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    gift_key = str((data or {}).get("gift_key") or "")
+    gift = GIFT_CATALOG.get(gift_key)
+    if not gift:
+        return JSONResponse({"ok": False, "error": "Unknown gift."},
+                            status_code=400)
+    host_id = live["host_id"]
+    if user["id"] == host_id:
+        return JSONResponse(
+            {"ok": False, "error": "You can't gift your own live."},
+            status_code=400)
+    cost = gift["tickets"]
+    conn = db()
+    if not _live_present(conn, lid, user["id"], host_id):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Join the live before sending gifts."},
+            status_code=403)
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
+        "COALESCE(tickets_balance,0) >= ?", (cost, user["id"], cost))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Not enough tickets — grab a pack first 🎟️"},
+            status_code=400)
+    conn.execute(
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ? "
+        "WHERE id=?", (cost, host_id))
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO live_gifts(live_id, sender_id, host_id, "
+        "gift_key, tickets, created_at) VALUES(?,?,?,?,?,?)",
+        (lid, user["id"], host_id, gift_key, cost, stamp))
+    gift_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, created_at) VALUES(?,?,?,?,?,?)",
+        (user["id"], "gift_send", -cost, lid, gift_key, stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, created_at) VALUES(?,?,?,?,?,?)",
+        (host_id, "gift_receive", cost, lid, gift_key, stamp))
+    conn.commit()
+    bal = conn.execute(
+        "SELECT tickets_balance FROM users WHERE id=?",
+        (user["id"],)).fetchone()["tickets_balance"]
+    conn.close()
+    return JSONResponse({"ok": True, "balance": bal or 0,
+                         "gift_id": gift_id})
+
+
+@app.post("/live/{lid}/shout")
+async def live_shout(request: Request, lid: int):
+    """Buy a 60-second pinned shout-out: the sender's text pins to
+    the top of the live's comments zone. Costs SHOUT_COST_TICKETS;
+    the host earns them like a gift. The text gets the same length
+    cap + moderation flag scan as a live comment (flag only)."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict) or not data:
+        try:
+            form = await request.form()
+            data = {"body": form.get("body")}
+        except Exception:
+            data = {}
+    body = str(data.get("body") or "").strip()[:LIVE_COMMENT_MAX]
+    if not body:
+        return JSONResponse({"ok": False, "error": "Empty shout."},
+                            status_code=400)
+    host_id = live["host_id"]
+    if user["id"] == host_id:
+        return JSONResponse(
+            {"ok": False,
+             "error": "Hosts can't pin a shout on their own live."},
+            status_code=400)
+    cost = SHOUT_COST_TICKETS
+    conn = db()
+    if not _live_present(conn, lid, user["id"], host_id):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Join the live before pinning a shout."},
+            status_code=403)
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
+        "COALESCE(tickets_balance,0) >= ?", (cost, user["id"], cost))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Not enough tickets — a shout costs "
+                      f"{cost} 🎟️"},
+            status_code=400)
+    conn.execute(
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ? "
+        "WHERE id=?", (cost, host_id))
+    stamp = now_iso()
+    expires = (datetime.now(timezone.utc)
+               + timedelta(seconds=SHOUT_SECONDS)).isoformat()
+    cur = conn.execute(
+        "INSERT INTO live_shouts(live_id, user_id, body, tickets, "
+        "expires_at, created_at) VALUES(?,?,?,?,?,?)",
+        (lid, user["id"], body, cost, expires, stamp))
+    shout_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "created_at) VALUES(?,?,?,?,?)",
+        (user["id"], "shout", -cost, lid, stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "note, created_at) VALUES(?,?,?,?,?,?)",
+        (host_id, "gift_receive", cost, lid, "shout", stamp))
+    conn.commit()
+    bal = conn.execute(
+        "SELECT tickets_balance FROM users WHERE id=?",
+        (user["id"],)).fetchone()["tickets_balance"]
+    conn.close()
+    flag_item("live_shout", shout_id, user["id"], user["name"], body)
+    return JSONResponse({"ok": True, "balance": bal or 0,
+                         "shout_id": shout_id,
+                         "expires_at": expires})
 
 
 @app.post("/live/{lid}/signal")
@@ -10032,6 +10307,395 @@ async def page_edit(request: Request, pid: int):
     return redir(f"/page/{pid}")
 
 
+# ---------------- Live Tickets: the live gift economy ----------------
+# Viewers buy 🎟️ Live Tickets (packs via Stripe Checkout) and spend
+# them on character gifts during lives; the host earns tickets on a
+# SECOND ledger (gift_earned) and cashes them out at 0.5¢ each
+# (2000-ticket / $10 minimum) through an owner-approved payout.
+# HERE's cut is the spread between the ~1¢ buy price and the 0.5¢
+# cash-out value — the same shape as TikTok's gift cut, but the
+# cash-out path is deliberately hand-approved by the owner (like
+# Drop's early manual payouts), never automatic.
+#
+# TWO ledgers, one audit table (see the init_db comment): spendable
+# tickets_balance is debited by 'buy' (+) and 'gift_send'/'shout'
+# (−); gift_earned is credited by 'gift_receive' (+) and moved by
+# 'cashout_hold' (−)/'cashout_return' (+). 'cashout_paid' rows are
+# 0-delta audit markers — the tickets left at hold time.
+# Invariant (asserted by tests/test_gifts.py):
+#   tickets_balance == SUM(tickets) WHERE kind IN
+#       ('buy','gift_send','shout')
+#   gift_earned == SUM(tickets) WHERE kind IN
+#       ('gift_receive','cashout_hold','cashout_return')
+
+GIFT_CATALOG = {
+    "ant": {"key": "ant", "name": "Lil' Red Ant", "emoji": "🐜",
+            "tickets": 1},
+    "bolt": {"key": "bolt", "name": "Bolt Buddy", "emoji": "⚡",
+             "tickets": 5},
+    "moon": {"key": "moon", "name": "Moonie", "emoji": "🌙",
+             "tickets": 10},
+    "rocket": {"key": "rocket", "name": "Red Rocket", "emoji": "🚀",
+               "tickets": 25},
+    "diamond": {"key": "diamond", "name": "Diamond Hands", "emoji": "💎",
+                "tickets": 50},
+    "crown": {"key": "crown", "name": "King's Crown", "emoji": "👑",
+              "tickets": 100},
+    "cutlass": {"key": "cutlass", "name": "The Cutlass", "emoji": "🚗",
+                "tickets": 500},
+    "globe": {"key": "globe", "name": "Planet HERE", "emoji": "🌍",
+              "tickets": 1000},
+}
+GIFT_ORDER = ["ant", "bolt", "moon", "rocket", "diamond", "crown",
+              "cutlass", "globe"]
+TICKET_PACKS = {
+    "pack100": {"key": "pack100", "tickets": 100, "price_cents": 99},
+    "pack500": {"key": "pack500", "tickets": 500, "price_cents": 499},
+    "pack1500": {"key": "pack1500", "tickets": 1500, "price_cents": 1399},
+}
+SHOUT_COST_TICKETS = 20
+SHOUT_SECONDS = 60
+CASHOUT_MIN_TICKETS = 2000  # = $10.00 at 0.5¢ per earned ticket
+
+
+def _gift_public(gift_key, tickets=None):
+    """Catalog entry for state payloads / gift displays. Unknown keys
+    render as a plain ticket gift — never crash a poll on bad data."""
+    g = GIFT_CATALOG.get(gift_key) or {}
+    return {"emoji": g.get("emoji", "🎁"), "name": g.get("name", "Gift"),
+            "tickets": tickets if tickets is not None
+                       else g.get("tickets", 0)}
+
+
+def _earned_dollars(tickets):
+    """Earned tickets -> whole cents at 0.5¢ each (floor: a stray
+    half-cent stays with the house)."""
+    return int(tickets or 0) // 2
+
+
+def stripe_enabled():
+    return bool(os.environ.get("STRIPE_SECRET_KEY", "").strip())
+
+
+def _stripe_api(method, path, params=None):
+    """ONE raw-HTTPS call to api.stripe.com (form-encoded, no
+    dependency). Tests monkeypatch this instead of touching Stripe.
+    Raises on HTTP errors so callers can degrade honestly."""
+    key = os.environ.get("STRIPE_SECRET_KEY", "")
+    body = None
+    url = "https://api.stripe.com" + path
+    if method == "GET" and params:
+        url += "?" + urlencode(params)
+    elif params:
+        body = urlencode(params).encode()
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Authorization", "Bearer " + key)
+    if body:
+        req.add_header("Content-Type",
+                       "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read().decode())
+        except Exception:
+            detail = {}
+        raise RuntimeError(
+            detail.get("error", {}).get("message") or
+            f"Stripe error {e.code}")
+
+
+def credit_purchase(user_id, tickets, session_id):
+    """Idempotent purchase crediting — the ONLY buy path. Inserts
+    the buy txn first (partial unique index on stripe_session), and
+    on conflict reports 'already credited' without double-adding.
+    Called from the webhook AND the return-verify path."""
+    if not session_id:
+        return False
+    conn = db()
+    try:
+        conn.execute(
+            "INSERT INTO ticket_txns(user_id, kind, tickets, "
+            "stripe_session, created_at) VALUES(?,?,?,?,?)",
+            (user_id, "buy", tickets, session_id, now_iso()))
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return False
+    conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) + ? WHERE id=?",
+        (tickets, user_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def _txn_line(t):
+    """One ticket history row -> plain-English text."""
+    k = t["kind"]
+    if k == "buy":
+        return f"Bought {t['tickets']} 🎟️"
+    if k == "gift_send":
+        g = _gift_public(t["gift_key"])
+        return f"Sent {g['emoji']} {g['name']}"
+    if k == "gift_receive":
+        note = t["note"] or ""
+        if note == "shout":
+            return f"Received a shout-out pin (+{t['tickets']} 🎟️)"
+        g = _gift_public(t["gift_key"])
+        return f"Received {g['emoji']} {g['name']} (+{t['tickets']} 🎟️)"
+    if k == "shout":
+        return f"Pinned a shout-out (−{abs(t['tickets'])} 🎟️)"
+    if k == "cashout_hold":
+        return (f"Cash-out requested — {abs(t['tickets'])} 🎟️ held "
+                "for approval")
+    if k == "cashout_paid":
+        return f"Cash-out paid 💰 {t['note'] or ''}".strip()
+    if k == "cashout_return":
+        return (f"Cash-out declined — {t['tickets']} 🎟️ returned "
+                "to your earnings")
+    return f"{k} {t['tickets']} 🎟️"
+
+
+@app.get("/tickets", response_class=HTMLResponse)
+async def tickets_page(request: Request):
+    """Wallet page: spendable balance, earnings + $ value, pack
+    cards, the cash-out card, and the last 30 ledger lines. When a
+    Stripe checkout returns with ?session_id=, this page ALSO
+    verifies the session against Stripe and credits the buyer —
+    the path that works even before the webhook is registered."""
+    user, err = require_login(request)
+    if err:
+        return err
+    session_id = (request.query_params.get("session_id") or "").strip()
+    bought_msg = ""
+    if session_id and stripe_enabled():
+        try:
+            sess = _stripe_api(
+                "GET", f"/v1/checkout/sessions/{session_id}")
+            meta = sess.get("metadata") or {}
+            if (sess.get("payment_status") == "paid"
+                    and str(meta.get("user_id")) == str(user["id"])
+                    and meta.get("tickets")
+                    and meta.get("pack_key") in TICKET_PACKS):
+                if credit_purchase(user["id"], int(meta["tickets"]),
+                                   session_id):
+                    bought_msg = (f"🎟️ {meta['tickets']} tickets "
+                                  "added to your wallet!")
+        except Exception:
+            # Never let a verification failure break the wallet page;
+            # the webhook path still credits the purchase when it
+            # lands (and the buyer can refresh this page to retry).
+            pass
+    me = get_user(user["id"]) or {}
+    balance = me.get("tickets_balance") or 0
+    earned = me.get("gift_earned") or 0
+    conn = db()
+    pending = conn.execute(
+        "SELECT * FROM payout_requests WHERE user_id=? AND "
+        "status='pending' ORDER BY id DESC LIMIT 1",
+        (user["id"],)).fetchone()
+    txns = conn.execute(
+        "SELECT * FROM ticket_txns WHERE user_id=? ORDER BY id DESC "
+        "LIMIT 30", (user["id"],)).fetchall()
+    conn.close()
+    history = [{"text": _txn_line(dict(t)),
+                "when": fancy_time(t["created_at"])} for t in txns]
+    return render(request, "tickets.html", {
+        "balance": balance, "earned": earned,
+        "earned_dollars": _money(_earned_dollars(earned)),
+        "cashout_min": CASHOUT_MIN_TICKETS,
+        "cashout_min_dollars": _money(
+            _earned_dollars(CASHOUT_MIN_TICKETS)),
+        "can_cashout": earned >= CASHOUT_MIN_TICKETS and not pending,
+        "pending": ({"tickets": pending["tickets"],
+                     "dollars": _money(pending["dollars_cents"]),
+                     "when": fancy_time(pending["created_at"])}
+                    if pending else None),
+        "packs": [TICKET_PACKS[k] for k in
+                  ("pack100", "pack500", "pack1500")],
+        "pack_prices": {k: _money(v["price_cents"])
+                        for k, v in TICKET_PACKS.items()},
+        "stripe_on": stripe_enabled(),
+        "history": history,
+        "bought_msg": bought_msg})
+
+
+@app.post("/tickets/buy")
+async def tickets_buy(request: Request):
+    """Create a Stripe Checkout session for one pack. Amounts come
+    ONLY from TICKET_PACKS — the client sends just the pack key.
+    Disabled (no STRIPE_SECRET_KEY) = honest 503, nothing half-sold."""
+    user, err = require_login(request)
+    if err:
+        return err
+    if not stripe_enabled():
+        return JSONResponse(
+            {"ok": False, "error": "Ticket sales open soon 🎟️"},
+            status_code=503)
+    try:
+        form = await request.form()
+        pack_key = (form.get("pack_key") or "").strip()
+    except Exception:
+        pack_key = ""
+    pack = TICKET_PACKS.get(pack_key)
+    if not pack:
+        return JSONResponse({"ok": False, "error": "Unknown pack."},
+                            status_code=400)
+    base = str(request.base_url).rstrip("/")
+    params = {
+        "mode": "payment",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]":
+            str(pack["price_cents"]),
+        "line_items[0][price_data][product_data][name]":
+            f"HERE Live Tickets — {pack['tickets']} 🎟️",
+        "line_items[0][quantity]": "1",
+        "metadata[user_id]": str(user["id"]),
+        "metadata[pack_key]": pack_key,
+        "metadata[tickets]": str(pack["tickets"]),
+        "success_url": base + "/tickets?session_id="
+                        "{CHECKOUT_SESSION_ID}&bought=1",
+        "cancel_url": base + "/tickets",
+    }
+    try:
+        sess = _stripe_api("POST", "/v1/checkout/sessions", params)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)},
+                            status_code=502)
+    url = sess.get("url")
+    if not url:
+        return JSONResponse(
+            {"ok": False, "error": "Stripe didn't return a checkout "
+                                   "link."},
+            status_code=502)
+    return RedirectResponse(url, status_code=303)
+
+
+@app.post("/tickets/cashout")
+async def tickets_cashout(request: Request):
+    """Cash out ALL earned tickets (min 2000). Tickets move to a
+    hold immediately (gift_earned -= n, cashout_hold txn) and the
+    owner decides in the owner panel — paying changes nothing more;
+    declining returns them (gift_earned += n, cashout_return)."""
+    user, err = require_login(request)
+    if err:
+        return err
+    try:
+        form = await request.form()
+        note = (form.get("payout_note") or "").strip()[:300]
+    except Exception:
+        note = ""
+    if not note:
+        return redir("/tickets",
+                     "Tell us where to send it (Cash App, bank, etc.).")
+    conn = db()
+    me = conn.execute(
+        "SELECT gift_earned FROM users WHERE id=?",
+        (user["id"],)).fetchone()
+    earned = (me["gift_earned"] or 0) if me else 0
+    if earned < CASHOUT_MIN_TICKETS:
+        conn.close()
+        return redir("/tickets",
+                     f"You need {CASHOUT_MIN_TICKETS} earned tickets "
+                     "to cash out ($10 minimum).")
+    if conn.execute(
+            "SELECT 1 FROM payout_requests WHERE user_id=? AND "
+            "status='pending'", (user["id"],)).fetchone():
+        conn.close()
+        return redir("/tickets",
+                     "You already have a cash-out waiting for "
+                     "approval.")
+    n = earned
+    cur = conn.execute(
+        "UPDATE users SET gift_earned = gift_earned - ? WHERE id=? "
+        "AND gift_earned=?", (n, user["id"], n))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return redir("/tickets",
+                     "Your earnings changed — try again.")
+    stamp = now_iso()
+    conn.execute(
+        "INSERT INTO payout_requests(user_id, tickets, "
+        "dollars_cents, payout_note, created_at) VALUES(?,?,?,?,?)",
+        (user["id"], n, _earned_dollars(n), note, stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, created_at) "
+        "VALUES(?,?,?,?)", (user["id"], "cashout_hold", -n, stamp))
+    conn.commit()
+    conn.close()
+    return redir("/tickets",
+                 "Cash-out sent for approval 💰 — the owner sends it "
+                 "and marks it paid.")
+
+
+def _stripe_sig_ok(raw_body, sig_header, secret):
+    """Verify a Stripe-Signature header (t + v1 HMAC-SHA256, 5-min
+    tolerance, constant-time compare). Multiple v1 values are all
+    tried (key rotation)."""
+    if not sig_header or not secret:
+        return False
+    ts = None
+    v1s = []
+    for part in sig_header.split(","):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        if k == "t":
+            ts = v
+        elif k == "v1":
+            v1s.append(v)
+    if not ts or not v1s:
+        return False
+    try:
+        if abs(time.time() - int(ts)) > 300:
+            return False
+    except (TypeError, ValueError):
+        return False
+    signed = f"{ts}.".encode() + raw_body
+    expect = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return any(hmac.compare_digest(expect, v) for v in v1s)
+
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Stripe webhook for ticket purchases: verify the signature,
+    and on checkout.session.completed credit the buyer via the
+    idempotent credit_purchase path. Unconfigured (no webhook
+    secret) = 400 so Stripe shows it as unregistered, honestly."""
+    secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    if not secret:
+        return JSONResponse({"ok": False,
+                             "error": "Webhook not configured."},
+                            status_code=400)
+    raw = await request.body()
+    if not _stripe_sig_ok(raw, request.headers.get("Stripe-Signature",
+                                                  ""), secret):
+        return JSONResponse({"ok": False, "error": "Bad signature."},
+                            status_code=400)
+    try:
+        event = json.loads(raw.decode())
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Bad JSON."},
+                            status_code=400)
+    if event.get("type") != "checkout.session.completed":
+        return JSONResponse({"ok": True, "ignored": True})
+    obj = (event.get("data") or {}).get("object") or {}
+    meta = obj.get("metadata") or {}
+    session_id = obj.get("id") or ""
+    try:
+        uid = int(meta.get("user_id") or 0)
+        tickets = int(meta.get("tickets") or 0)
+    except (TypeError, ValueError):
+        uid, tickets = 0, 0
+    if uid and tickets and meta.get("pack_key") in TICKET_PACKS:
+        credit_purchase(uid, tickets, session_id)
+    return JSONResponse({"ok": True})
+
+
 # ---------------- HERE Market: local buy/sell ----------------
 # In-app local buy/sell. A listing is a PUBLIC OFFER: it shows in
 # browse, on its detail page, and on the logged-out /m/{id} share page
@@ -10768,12 +11432,43 @@ async def owner_dashboard(request: Request):
             "SELECT COUNT(*) c FROM verification_requests WHERE status='pending'"
         ).fetchone()["c"],
     }
+    # --- live tickets: payout queue (pending first) + money row ---
+    prow_orders = conn.execute(
+        "SELECT pr.*, u.name AS user_name, u.email AS user_email "
+        "FROM payout_requests pr LEFT JOIN users u ON u.id=pr.user_id "
+        "ORDER BY CASE pr.status WHEN 'pending' THEN 0 ELSE 1 END, "
+        "pr.created_at DESC LIMIT 50").fetchall()
+    payouts = [{
+        "id": r["id"], "user_id": r["user_id"],
+        "user_name": r["user_name"] or "Deleted user",
+        "user_email": r["user_email"] or "",
+        "tickets": r["tickets"],
+        "dollars": _money(r["dollars_cents"]),
+        "payout_note": r["payout_note"], "status": r["status"],
+        "created_at": fancy_time(r["created_at"])}
+        for r in prow_orders]
+    tickets_sold = conn.execute(
+        "SELECT COALESCE(SUM(tickets),0) s FROM ticket_txns "
+        "WHERE kind='buy'").fetchone()["s"]
+    earned_out = conn.execute(
+        "SELECT COALESCE(SUM(gift_earned),0) s FROM users"
+    ).fetchone()["s"]
+    held = conn.execute(
+        "SELECT COALESCE(SUM(tickets),0) s FROM payout_requests "
+        "WHERE status='pending'").fetchone()["s"]
+    money_stats = {
+        "tickets_sold": tickets_sold,
+        "liability": _money(_earned_dollars(earned_out + held)),
+        "payouts_pending": sum(1 for p in payouts
+                               if p["status"] == "pending")}
+
     conn.close()
     return render(request, "owner/dashboard.html", {
         "users": users, "friend_activity": friend_activity,
         "flags": flags, "pages": pages, "stats": stats,
         "verifications": verifications,
-        "live_now": live_now, "live_recent": live_recent})
+        "live_now": live_now, "live_recent": live_recent,
+        "payouts": payouts, "money_stats": money_stats})
 
 
 @app.post("/owner/flag/{fid}/dismiss")
@@ -10941,6 +11636,60 @@ async def owner_verify_decline(request: Request, rid: int):
                      (vr["target_id"],))
         conn.execute("UPDATE verification_requests SET status='declined', reviewed_at=? WHERE id=?",
                      (now_iso(), rid))
+        conn.commit()
+    conn.close()
+    return redir("/owner")
+
+
+@app.post("/owner/payouts/{pid}/paid")
+async def owner_payout_paid(request: Request, pid: int):
+    """Owner marks a cash-out paid (he sent the money by hand). The
+    tickets were already held at request time, so balances don't
+    move here — only the audit marker is written."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    pr = conn.execute(
+        "SELECT * FROM payout_requests WHERE id=?", (pid,)).fetchone()
+    if pr and pr["status"] == "pending":
+        stamp = now_iso()
+        conn.execute(
+            "UPDATE payout_requests SET status='paid', "
+            "decided_at=? WHERE id=?", (stamp, pid))
+        conn.execute(
+            "INSERT INTO ticket_txns(user_id, kind, tickets, note, "
+            "created_at) VALUES(?,?,?,?,?)",
+            (pr["user_id"], "cashout_paid", 0,
+             _money(pr["dollars_cents"]), stamp))
+        conn.commit()
+    conn.close()
+    return redir("/owner")
+
+
+@app.post("/owner/payouts/{pid}/declined")
+async def owner_payout_declined(request: Request, pid: int):
+    """Owner declines a cash-out: the held tickets go straight back
+    to the user's gift_earned (cashout_return), ready to re-request."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    pr = conn.execute(
+        "SELECT * FROM payout_requests WHERE id=?", (pid,)).fetchone()
+    if pr and pr["status"] == "pending":
+        stamp = now_iso()
+        conn.execute(
+            "UPDATE payout_requests SET status='declined', "
+            "decided_at=? WHERE id=?", (stamp, pid))
+        conn.execute(
+            "UPDATE users SET gift_earned = "
+            "COALESCE(gift_earned,0) + ? WHERE id=?",
+            (pr["tickets"], pr["user_id"]))
+        conn.execute(
+            "INSERT INTO ticket_txns(user_id, kind, tickets, "
+            "created_at) VALUES(?,?,?,?)",
+            (pr["user_id"], "cashout_return", pr["tickets"], stamp))
         conn.commit()
     conn.close()
     return redir("/owner")
