@@ -7440,7 +7440,7 @@ LIVE_COMMENT_MAX = 300
 LIVE_JOIN_COOLDOWN = 60       # seconds after a decline before re-asking
 LIVE_SIGNAL_TYPES = ("hello", "offer", "answer", "ice", "bye")
 LIVE_MAX_PAYLOAD = 65536      # same SDP headroom as calls
-LIVE_PANEL_MAX = 16           # host + up to 15 guests on camera
+LIVE_PANEL_MAX = 9            # panel size INCL. host: host + up to 8 guests
 
 
 def _sweep_lives(conn):
@@ -7856,6 +7856,53 @@ def _lives_page_list(viewer, owner_on=False):
     return rows
 
 
+# ---------------- WebRTC ICE config (single source) ----------------
+# Both WebRTC clients (1:1 calls in base.html, the live mesh in
+# live.html) fetch GET /ice.json and use what it returns for new
+# RTCPeerConnections, falling back to their hardcoded copy of these
+# same defaults when the fetch fails. HERE_ICE_SERVERS (a JSON array
+# of RTCIceServer dicts) overrides the defaults with NO code change —
+# the Open Relay entries below are a free community relay with a
+# data cap, fine for launch but not a guaranteed relay; swap in
+# private TURN credentials via the env var when reliability matters.
+DEFAULT_ICE_SERVERS = [
+    {"urls": "stun:stun.l.google.com:19302"},
+    {"urls": "stun:stun1.l.google.com:19302"},
+    {"urls": "turn:openrelay.metered.ca:80",
+     "username": "openrelayproject", "credential": "openrelayproject"},
+    {"urls": "turn:openrelay.metered.ca:443",
+     "username": "openrelayproject", "credential": "openrelayproject"},
+    {"urls": "turn:openrelay.metered.ca:443?transport=tcp",
+     "username": "openrelayproject", "credential": "openrelayproject"},
+]
+
+
+def get_ice_servers():
+    """ICE servers for /ice.json: the HERE_ICE_SERVERS env override
+    (JSON) when set AND valid (a non-empty list of dicts each with a
+    'urls'), else the built-in STUN + Open Relay defaults."""
+    raw = os.environ.get("HERE_ICE_SERVERS", "")
+    if raw and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            out = [e for e in parsed
+                   if isinstance(e, dict) and e.get("urls")]
+            if out:
+                return out
+    return [dict(e) for e in DEFAULT_ICE_SERVERS]
+
+
+@app.get("/ice.json")
+async def ice_json(request: Request):
+    """Public on purpose: the STUN/TURN values are the same community
+    credentials already shipped in the page templates; the live and
+    call clients fetch this before creating peer connections."""
+    return JSONResponse({"iceServers": get_ice_servers()})
+
+
 @app.get("/lives", response_class=HTMLResponse)
 async def lives_page(request: Request):
     user, err = require_login(request)
@@ -7961,9 +8008,22 @@ async def live_page(request: Request, lid: int):
     boot = {"id": lid, "me": user["id"], "role": role,
             "host": host, "guest": guest, "title": live["title"],
             "created_at": live["created_at"]}
+    # Browse mode (fullscreen-live rework): the watch page renders a
+    # browse section server-side at load — other current lives this
+    # viewer may watch (live_now_for, excluding THIS live) and the
+    # latest ~10 home-feed posts (the same post_card dicts /home
+    # renders, so the post_card partial works unchanged). The
+    # section stays hidden until the viewer shrinks the live into
+    # its floating tile; following a card link navigates away and
+    # ends this viewing session (the beforeunload leave beacon),
+    # exactly like leaving a call page.
+    more_lives = [r for r in live_now_for(user["id"], owner_on)
+                  if r["id"] != lid]
+    browse_posts = _home_posts(user, owner_on)[:10]
     return render(request, "live.html", {
         "mode": "live", "live": live, "host": host, "guest": guest,
-        "role": role,
+        "role": role, "more_lives": more_lives,
+        "browse_posts": browse_posts,
         "boot": json.dumps(boot).replace("</", "<\\/"),
         "hide_golive": True})
 
@@ -8111,7 +8171,13 @@ async def live_state(request: Request, lid: int):
     is_mod = is_host or viewer_is_admin
     members = _live_active_members(conn, lid)
     member_map = {m["user_id"]: m for m in members}
-    am_member = user["id"] in member_map
+    # The host is ALWAYS on the panel (panelist #1 by role) but is
+    # never a live_members row, so membership must include is_host —
+    # reporting False here once demoted the host's own client to a
+    # watcher on its first state poll, which tore down every peer
+    # and made the host ignore all hellos: nobody could see or hear
+    # anybody (Ken's 2026-10-23 live report).
+    am_member = is_host or user["id"] in member_map
     rows = conn.execute(
         "SELECT lc.*, u.name, u.avatar FROM live_comments lc "
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.live_id=? AND "
@@ -8177,7 +8243,7 @@ async def live_state(request: Request, lid: int):
         "my_panel": {
             "am_member": am_member,
             "muted": bool(member_map[user["id"]]["muted"])
-                     if am_member else False,
+                     if user["id"] in member_map else False,
             "is_admin": viewer_is_admin,
             "is_host": is_host},
         "pending_invites_for_me": invites_for_me,
@@ -8971,7 +9037,7 @@ async def live_join_request(request: Request, lid: int):
 async def live_join_decide(request: Request, lid: int):
     """Host OR an admin of this live settles a kind='request' join
     request. Approving puts the requester on the panel (live_members
-    + panel_order) unless the panel is already at the 16 cap."""
+    + panel_order) unless the panel already has 8 guests."""
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
@@ -9007,7 +9073,7 @@ async def live_join_decide(request: Request, lid: int):
     if approve and not _live_add_member(conn, live, req["user_id"]):
         conn.close()
         return JSONResponse(
-            {"ok": False, "error": "Panel is full (16 max)."},
+            {"ok": False, "error": "Panel is full (8 guests max)."},
             status_code=409)
     conn.execute(
         "UPDATE live_join_requests SET status=?, decided_at=? "
@@ -9262,8 +9328,8 @@ async def live_invite(request: Request, lid: int):
 @app.post("/live/{lid}/invite-decide")
 async def live_invite_decide(request: Request, lid: int):
     """The INVITEE settles their own kind='invite' row: accept puts
-    them on the panel (16 cap, same message as join-decide);
-    decline just settles the row."""
+    them on the panel (host + 8 guests cap, same message as
+    join-decide); decline just settles the row."""
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
@@ -9311,7 +9377,7 @@ async def live_invite_decide(request: Request, lid: int):
     if accept and not _live_add_member(conn, live, user["id"]):
         conn.close()
         return JSONResponse(
-            {"ok": False, "error": "Panel is full (16 max)."},
+            {"ok": False, "error": "Panel is full (8 guests max)."},
             status_code=409)
     conn.execute(
         "UPDATE live_join_requests SET status=?, decided_at=? "
