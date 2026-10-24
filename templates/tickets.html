@@ -42,6 +42,65 @@
     {% endfor %}
   </div>
   <p style="color:var(--muted);font-size:12.5px;margin-top:8px">Secure card checkout by Stripe. Tickets land in your wallet the moment the payment clears.</p>
+
+  <form method="post" action="/tickets/buy" id="custom-buy" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+    <input type="hidden" name="pack_key" value="custom">
+    <div style="font-weight:800;font-size:15.5px">🎟️ Buy any amount</div>
+    <p style="color:var(--muted);font-size:12.5px;margin:4px 0 10px">1 ticket = $0.01 — grab exactly what you need. {{ custom_min }} tickets minimum (50¢), up to {{ "{:,}".format(custom_max) }} at once.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      {% for q in [100, 250, 500, 1000, 2500] %}
+      <button type="button" class="btn-ghost btn-sm custom-chip" data-qty="{{ q }}">{{ "{:,}".format(q) }} 🎟️</button>
+      {% endfor %}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+      <input type="number" id="custom-qty" name="qty" min="{{ custom_min }}" max="{{ custom_max }}" step="1" inputmode="numeric" placeholder="How many tickets?"
+        style="flex:1;min-width:160px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:14px">
+      <button type="submit" class="btn">Buy<span id="custom-price"></span></button>
+    </div>
+    <p id="custom-err" style="color:var(--red);font-size:12.5px;margin-top:6px" hidden></p>
+  </form>
+  <script>
+  (function(){
+    var form = document.getElementById('custom-buy');
+    if (!form) return;
+    var qty = document.getElementById('custom-qty'),
+        price = document.getElementById('custom-price'),
+        err = document.getElementById('custom-err'),
+        MIN = {{ custom_min }}, MAX = {{ custom_max }};
+    function fmt(cents){
+      return '$' + (cents / 100).toLocaleString('en-US',
+        {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+    function paint(){
+      var v = parseInt(qty.value, 10);
+      if (isNaN(v)){ price.textContent = ''; err.hidden = true; return; }
+      price.textContent = ' · ' + fmt(v);
+      if (v < MIN){
+        err.textContent = 'Minimum is ' + MIN + ' tickets ($0.50).';
+        err.hidden = false;
+      } else if (v > MAX){
+        err.textContent = 'Maximum is ' + MAX.toLocaleString('en-US') + ' tickets at once.';
+        err.hidden = false;
+      } else {
+        err.hidden = true;
+      }
+    }
+    qty.addEventListener('input', paint);
+    var chips = form.querySelectorAll('.custom-chip');
+    for (var i = 0; i < chips.length; i++){
+      chips[i].addEventListener('click', function(){
+        qty.value = this.getAttribute('data-qty');
+        paint();
+        qty.focus();
+      });
+    }
+    form.addEventListener('submit', function(ev){
+      var v = parseInt(qty.value, 10);
+      if (isNaN(v) || v < MIN || v > MAX){ ev.preventDefault(); paint(); }
+    });
+    paint();
+  })();
+  </script>
   {% else %}
   <p style="font-size:15px;margin-top:8px">🎟️ <strong>Ticket sales open soon</strong> — the register isn't switched on yet. Your earned tickets below still count.</p>
   {% endif %}
