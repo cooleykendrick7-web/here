@@ -138,7 +138,7 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
 body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass table.admin{background:rgba(255,255,255,var(--box-alpha))}
 body.boxes-glass:not(.viewer-spot-card) .card{background:rgba(255,255,255,var(--box-alpha))}
 body.boxes-glass:not(.viewer-spot-card) .comment .cbub{background:rgba(240,242,245,var(--box-alpha))}
-body.boxes-glass .topbar{background:rgba(17,17,17,var(--box-alpha))}
+body.boxes-glass .topbar, body.boxes-glass .mobmenu{background:rgba(17,17,17,var(--box-alpha))}
 body.boxes-glass .flashmsg div{background:rgba(253,238,240,var(--box-alpha))}
 body.boxes-glass .msg-theirs{background:rgba(228,230,235,var(--box-alpha))}
 body.boxes-glass .btn-ghost{background:rgba(228,230,235,var(--box-alpha))}
@@ -146,7 +146,7 @@ body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dm
 body.boxes-glass #incoming-sheet, body.boxes-glass #request-sheet{background:rgba(17,17,17,var(--box-alpha))}
 body.boxes-glass .kind-tab, body.boxes-glass .picker-chip, body.boxes-glass .poll-opt-btn{background:rgba(245,246,247,var(--box-alpha))}
 body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
-@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ body.boxes-glass .card, body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass .topbar, body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet {backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)} }
+@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ body.boxes-glass .card, body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass .topbar, body.boxes-glass .mobmenu, body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet {backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)} }
 
 /* Box Transparency settings preview (Settings → Box Transparency) */
 .box-preview{border-radius:10px;padding:14px;margin-top:6px;background:linear-gradient(135deg,#d41f2e,#7a0f18 45%,#141419)}
@@ -710,20 +710,47 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
   .side-right{display:none}
   .layout{grid-template-columns:280px minmax(0,1fr)}
 }
-.menu-toggle{display:none;border:none;color:#f0f0f0;cursor:pointer;font-size:22px}
-.mobmenu{display:none}
+.menu-toggle{border:none;color:#f0f0f0;cursor:pointer}
+/* ===== main menu: ONE grouped dropdown at every width, opened
+   from the ☰ button in the slim topbar. (Build S declutter: the
+   old topbar carried 8 icon links + a wrapping search row, and the
+   same 18 destinations were ALSO a flat sidebar list and a flat
+   mobile list. Now: slim primary bar + grouped menu; the desktop
+   sidebar below carries the same labeled groups.) ===== */
+.mobmenu{display:none;position:fixed;top:68px;right:12px;width:min(340px,calc(100vw - 24px));
+  max-height:calc(100dvh - 84px);overflow-y:auto;z-index:1001;background:var(--black);
+  border:1px solid #3d3d3d;border-radius:14px;padding:12px 14px 16px;
+  box-shadow:0 12px 32px rgba(0,0,0,.55)}
+.mobmenu.open{display:block}
+.mobmenu a{display:flex;align-items:center;gap:12px;padding:10px 8px;border-radius:8px;
+  font-weight:600;color:#f0f0f0;font-size:15.5px}
+.mobmenu a:hover{background:#2b2b2b}
+.mobmenu .menu-act{display:flex;align-items:center;gap:12px;padding:10px 8px;border-radius:8px;
+  font-weight:600;color:#f0f0f0;font-size:15.5px;background:none;border:none;width:100%;
+  text-align:left;cursor:pointer;font-family:inherit}
+.mobmenu .menu-act:hover{background:#2b2b2b}
+.menu-group{font-size:11.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;
+  color:#9a9a9a;margin:14px 4px 2px}
+.mobmenu .menu-group:first-of-type{margin-top:8px}
+.menu-search{display:none}
+.side-left .menu-group{color:var(--muted)}
+.side-left .menu-group:first-child{margin-top:2px}
+button.menu-item{background:none;border:none;width:100%;text-align:left;
+  font:inherit;color:inherit;cursor:pointer}
 @media (max-width:600px){
   .side-left{display:none}
-  .layout{grid-template-columns:minmax(0,1fr);margin-top:126px}
-  .topbar{flex-wrap:wrap;height:auto;row-gap:8px;padding:8px 12px}
-  .search-form{flex:1 1 100%;order:5;display:block}
-  .menu-toggle{display:flex}
-  .mobmenu{position:fixed;top:0;left:0;width:100%;z-index:1001;background:var(--black);
-    padding:12px 16px 20px;box-shadow:0 4px 12px rgba(0,0,0,.5)}
-  .mobmenu.open{display:block}
-  .mobmenu a{display:flex;align-items:center;gap:12px;padding:11px 8px;border-radius:8px;
-    font-weight:600;color:#f0f0f0;font-size:16px}
-  .mobmenu a:hover{background:var(--border)}
+  .layout{grid-template-columns:minmax(0,1fr);margin-top:76px}
+  .topbar{gap:8px;padding:0 10px}
+  .topbar .search-form{display:none}
+  .logo{font-size:26px}
+  .nav-ic{width:38px;height:38px;font-size:18px}
+  .nav-av img,.nav-av .av-ph{width:38px;height:38px}
+  .menu-search{display:block;margin:10px 0 2px}
+  .menu-search input{width:100%;background:#2b2b2b;border:1px solid #3d3d3d;border-radius:20px;
+    padding:9px 15px;color:#f0f0f0;font-size:15px;outline:none}
+  .menu-search input::placeholder{color:#9a9a9a}
+  .menu-search input:focus{border-color:var(--red)}
+  .mobmenu{top:64px;left:8px;right:8px;width:auto}
 }
 </style>
 {% block head_extra %}{% endblock %}
@@ -741,15 +768,11 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <input type="text" name="q" placeholder="Search HERE" value="{{ q|default('')|e }}" autocomplete="off">
   </form>
   <nav class="topnav">
-    <a class="nav-ic" href="/home" title="Home">🏠</a>
     <a class="nav-ic" href="/lives" title="Lives">🔴</a>
     <a class="nav-ic" href="/market" title="Market">🛒</a>
-    <a class="nav-ic" href="/tickets" title="Live Tickets">🎟️</a>
-    <a class="nav-ic" href="/views" title="My Views">🎬</a>
     <a class="nav-ic" href="/messages" title="Messages">💬{% if unread_msgs %}<span class="badge">{{ unread_msgs }}</span>{% endif %}</a>
     <a class="nav-ic" href="/notifications" title="Notifications">🔔{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
-    <a class="nav-ic" href="/friends" title="Friends">👥{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
-    <button class="nav-ic menu-toggle" title="Menu" aria-label="Menu" onclick="document.getElementById('mobmenu').classList.toggle('open')">☰</button>
+    <button class="nav-ic menu-toggle" id="menu-btn" title="Menu" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="mobmenu">☰</button>
     {% if user %}
     <a class="nav-av" href="/user/{{ user.id }}" title="{{ user.name|e }}">
       {% if user.avatar %}<img src="{{ user.avatar|e }}" alt="me"{% if viewer_gold %} class="av-gold"{% endif %}>
@@ -759,30 +782,48 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   </nav>
 </header>
 
-<div class="mobmenu" id="mobmenu">
+<div class="mobmenu" id="mobmenu" role="menu" aria-label="Main menu">
   <div style="display:flex;align-items:center;margin-bottom:4px">
     <span class="logo" style="font-size:24px">HERE</span>
-    <button class="nav-ic" style="margin-left:auto;border:none;color:#f0f0f0;cursor:pointer" aria-label="Close menu" onclick="document.getElementById('mobmenu').classList.remove('open')">✕</button>
+    <button class="nav-ic" id="mobmenu-close" style="margin-left:auto;border:none;color:#f0f0f0;cursor:pointer" aria-label="Close menu">✕</button>
   </div>
+  <form class="search-form menu-search" action="/search" method="get" role="search">
+    <input type="text" name="q" placeholder="Search HERE" value="{{ q|default('')|e }}" autocomplete="off" aria-label="Search HERE">
+  </form>
   {% if user %}
   <a href="/user/{{ user.id }}"><span>👤</span> My Profile</a>
   {% endif %}
-  <a href="/friends"><span>👥</span> Friends</a>
-  <a href="/search"><span>🔎</span> Find Friends</a>
-  <a href="/discover"><span>🧭</span> Discover</a>
-  <a href="/lives"><span>🔴</span> Lives</a>
-  <a href="/market"><span>🛒</span> Market</a>
+  <div class="menu-group">Create</div>
+  <a href="/home#composer-body"><span>➕</span> New post</a>
+  <button type="button" class="menu-act" id="menu-golive"><span>🔴</span> Go live</button>
+  <a href="/stories/new"><span>📸</span> New story</a>
+  <a href="/market/new"><span>🛒</span> Sell on Market</a>
+  <a href="/pages/new"><span>📄</span> Create Page</a>
+  <div class="menu-group">Fun</div>
+  <a href="/games"><span>🎮</span> Games</a>
   <a href="/tickets"><span>🎟️</span> Tickets</a>
   <a href="/views"><span>🎬</span> My Views</a>
-  <a href="/messages"><span>💬</span> Messages</a>
-  <a href="/pages"><span>📄</span> Pages</a>
-  <a href="/hidden"><span>🙈</span> Hidden</a>
-  <a href="/notifications"><span>🔔</span> Notifications</a>
-  <a href="/app"><span>📱</span> Get the app</a>
-  <a href="/invite"><span>🎟</span> Invite</a>
+  <a href="/discover"><span>🧭</span> Discover</a>
   <a href="/daily"><span>🔥</span> Daily</a>
   <a href="/contest"><span>🏆</span> Contest</a>
-  <a href="/games"><span>🎮</span> Games</a>
+  <div class="menu-group">You</div>
+  <a href="/friends"><span>👥</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
+  <a href="/search"><span>🔎</span> Find Friends</a>
+  <a href="/pages"><span>📄</span> Pages</a>
+  <a href="/messages"><span>💬</span> Messages</a>
+  <a href="/lives"><span>🔴</span> Lives</a>
+  <a href="/market"><span>🛒</span> Market</a>
+  <a href="/hidden"><span>🙈</span> Hidden</a>
+  <a href="/invite"><span>💌</span> Invite</a>
+  <div class="menu-group">Settings</div>
+  <a href="/settings/profile"><span>✏️</span> Edit Profile</a>
+  <a href="/settings/profile#spot"><span>🏠</span> Your Spot</a>
+  <a href="/settings/profile#status"><span>⚡</span> Status</a>
+  <a href="/settings/profile#boxes"><span>🪟</span> Boxes</a>
+  <a href="/settings/profile#privacy"><span>🔒</span> Privacy</a>
+  <div class="menu-group">More</div>
+  <a href="/notifications"><span>🔔</span> Notifications</a>
+  <a href="/app"><span>📱</span> Get the app</a>
   <a href="/logout"><span>🚪</span> Logout</a>
 </div>
 
@@ -795,22 +836,37 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     {% if user %}
     <a class="menu-item" href="/user/{{ user.id }}"><span class="menu-ic">👤</span> My Profile</a>
     {% endif %}
-    <a class="menu-item" href="/friends"><span class="menu-ic">👥</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
-    <a class="menu-item" href="/search"><span class="menu-ic">🔎</span> Find Friends</a>
-    <a class="menu-item" href="/discover"><span class="menu-ic">🧭</span> Discover</a>
-    <a class="menu-item" href="/lives"><span class="menu-ic">🔴</span> Lives</a>
-    <a class="menu-item" href="/market"><span class="menu-ic">🛒</span> Market</a>
+    <div class="menu-group">Create</div>
+    <a class="menu-item" href="/home#composer-body"><span class="menu-ic">➕</span> New post</a>
+    <button type="button" class="menu-item menu-act" id="side-golive"><span class="menu-ic">🔴</span> Go live</button>
+    <a class="menu-item" href="/stories/new"><span class="menu-ic">📸</span> New story</a>
+    <a class="menu-item" href="/market/new"><span class="menu-ic">🛒</span> Sell on Market</a>
+    <a class="menu-item" href="/pages/new"><span class="menu-ic">📄</span> Create Page</a>
+    <div class="menu-group">Fun</div>
+    <a class="menu-item" href="/games"><span class="menu-ic">🎮</span> Games</a>
     <a class="menu-item" href="/tickets"><span class="menu-ic">🎟️</span> Tickets</a>
     <a class="menu-item" href="/views"><span class="menu-ic">🎬</span> My Views</a>
-    <a class="menu-item" href="/messages"><span class="menu-ic">💬</span> Messages</a>
-    <a class="menu-item" href="/pages"><span class="menu-ic">📄</span> Pages</a>
-    <a class="menu-item" href="/hidden"><span class="menu-ic">🙈</span> Hidden</a>
-    <a class="menu-item" href="/notifications"><span class="menu-ic">🔔</span> Notifications</a>
-    <a class="menu-item" href="/app"><span class="menu-ic">📱</span> Get the app</a>
-    <a class="menu-item" href="/invite"><span class="menu-ic">🎟</span> Invite</a>
+    <a class="menu-item" href="/discover"><span class="menu-ic">🧭</span> Discover</a>
     <a class="menu-item" href="/daily"><span class="menu-ic">🔥</span> Daily</a>
     <a class="menu-item" href="/contest"><span class="menu-ic">🏆</span> Contest</a>
-    <a class="menu-item" href="/games"><span class="menu-ic">🎮</span> Games</a>
+    <div class="menu-group">You</div>
+    <a class="menu-item" href="/friends"><span class="menu-ic">👥</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
+    <a class="menu-item" href="/search"><span class="menu-ic">🔎</span> Find Friends</a>
+    <a class="menu-item" href="/pages"><span class="menu-ic">📄</span> Pages</a>
+    <a class="menu-item" href="/messages"><span class="menu-ic">💬</span> Messages</a>
+    <a class="menu-item" href="/lives"><span class="menu-ic">🔴</span> Lives</a>
+    <a class="menu-item" href="/market"><span class="menu-ic">🛒</span> Market</a>
+    <a class="menu-item" href="/hidden"><span class="menu-ic">🙈</span> Hidden</a>
+    <a class="menu-item" href="/invite"><span class="menu-ic">💌</span> Invite</a>
+    <div class="menu-group">Settings</div>
+    <a class="menu-item" href="/settings/profile"><span class="menu-ic">✏️</span> Edit Profile</a>
+    <a class="menu-item" href="/settings/profile#spot"><span class="menu-ic">🏠</span> Your Spot</a>
+    <a class="menu-item" href="/settings/profile#status"><span class="menu-ic">⚡</span> Status</a>
+    <a class="menu-item" href="/settings/profile#boxes"><span class="menu-ic">🪟</span> Boxes</a>
+    <a class="menu-item" href="/settings/profile#privacy"><span class="menu-ic">🔒</span> Privacy</a>
+    <div class="menu-group">More</div>
+    <a class="menu-item" href="/notifications"><span class="menu-ic">🔔</span> Notifications</a>
+    <a class="menu-item" href="/app"><span class="menu-ic">📱</span> Get the app</a>
     <a class="menu-item" href="/logout"><span class="menu-ic">🚪</span> Logout</a>
   </aside>
 
@@ -1085,6 +1141,45 @@ document.addEventListener('click', function(ev){
     if (ap){ if (ap.hidden) openAudPopup(ap); else closeAudPopup(ap); }
   }
 });
+</script>
+<script>
+/* ===== Main menu (☰): the grouped dropdown in base.html. One
+   panel at every width — opens from the topbar button, closes on
+   outside click / Esc / the ✕ / choosing Go live. The Go live
+   rows hand off to the floating Go Live sheet; on pages where
+   the sheet isn't rendered (/live/ pages) they go to /lives. ===== */
+(function(){
+  var btn = document.getElementById('menu-btn'),
+      panel = document.getElementById('mobmenu');
+  if (!btn || !panel) return;
+  function isOpen(){ return panel.classList.contains('open'); }
+  function setOpen(open){
+    panel.classList.toggle('open', open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  btn.addEventListener('click', function(ev){
+    ev.stopPropagation();
+    setOpen(!isOpen());
+  });
+  document.addEventListener('click', function(ev){
+    if (isOpen() && !panel.contains(ev.target)) setOpen(false);
+  });
+  document.addEventListener('keydown', function(ev){
+    if (ev.key === 'Escape' && isOpen()){ setOpen(false); btn.focus(); }
+  });
+  var closeBtn = document.getElementById('mobmenu-close');
+  if (closeBtn) closeBtn.addEventListener('click', function(){ setOpen(false); });
+  function goLive(){
+    setOpen(false);
+    var tab = document.getElementById('golive-btn');
+    if (tab) tab.click();
+    else window.location.href = '/lives';
+  }
+  ['menu-golive', 'side-golive'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('click', goLive);
+  });
+})();
 </script>
 <script>
 /* ===== Go Live floating tab: open the sheet, POST /live/start,
