@@ -1,4 +1,14 @@
 {% extends "base.html" %}
+{% block head_extra %}
+<style>
+.mkt-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.mkt-mini{display:block;text-decoration:none;color:inherit}
+.mkt-mini img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px;display:block;background:#e4e6eb}
+.mkt-mini-ph{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:1/1;border-radius:10px;background:#e4e6eb;font-size:30px}
+.mkt-mini-title{display:block;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px}
+.mkt-mini-price{display:block;font-size:12.5px;color:var(--red);font-weight:800}
+</style>
+{% endblock %}
 {% block title %}{% if profile.spot_name %}{{ profile.spot_name|e }} · HERE{% else %}{{ profile.name|e }} — HERE{% endif %}{% endblock %}
 {% block content %}
 
@@ -133,6 +143,23 @@
   {% else %}
   <p style="color:var(--muted);margin-top:8px">Photos you post will show up here.</p>
   {% endif %}
+</div>
+{% endif %}
+{% if selling %}
+<div class="card">
+  <div style="display:flex;align-items:center;gap:8px">
+    <h3 style="margin:0">🛒 Selling{% if selling_count %} ({{ selling_count }}){% endif %}</h3>
+    <a href="/market?seller={{ profile.id }}" style="margin-left:auto">See all →</a>
+  </div>
+  <div class="mkt-strip">
+    {% for l in selling %}
+    <a class="mkt-mini" href="/market/{{ l.id }}">
+      {% if l.first_photo %}<img src="{{ l.first_photo|e }}" alt="">{% else %}<span class="mkt-mini-ph">🛒</span>{% endif %}
+      <span class="mkt-mini-title">{{ l.title|e }}</span>
+      <span class="mkt-mini-price">{{ l.price|e }}{% if l.sold %} · <b>SOLD</b>{% endif %}</span>
+    </a>
+    {% endfor %}
+  </div>
 </div>
 {% endif %}
 {% for post in posts %}

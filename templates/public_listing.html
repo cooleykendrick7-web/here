@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0a">
+<title>{{ listing.title|e }} — {{ listing.price|e }} on HERE</title>
+<meta property="og:title" content="{{ listing.title|e }} — {{ listing.price|e }} on HERE">
+<meta property="og:description" content="{{ excerpt|e }}">
+{% if og_image %}<meta property="og:image" content="{{ og_image|e }}">{% endif %}
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 24px 110px}
+.brand{font-size:52px;font-weight:900;color:#d41f2e;letter-spacing:-2px;text-shadow:0 0 40px rgba(212,31,46,.45)}
+.card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:24px;width:100%;max-width:560px;box-shadow:0 8px 32px rgba(212,31,46,.15);margin-top:20px}
+.who{display:flex;gap:12px;align-items:center;margin-bottom:14px}
+.avatar{border-radius:50%;object-fit:cover;width:48px;height:48px;background:#ccc}
+.av-ph{border-radius:50%;background:#d41f2e;color:#fff;font-weight:800;width:48px;height:48px;display:flex;align-items:center;justify-content:center;font-size:20px}
+.nm{font-weight:800;font-size:17px}
+.meta{color:#9a9a9a;font-size:13px}
+.price{font-size:30px;font-weight:900;color:#d41f2e}
+.sold{display:inline-block;background:#f0f0f0;color:#111;font-weight:900;letter-spacing:1px;border-radius:8px;padding:4px 12px;font-size:15px;vertical-align:middle;margin-left:8px}
+.ttl{font-size:21px;font-weight:800;margin-top:4px}
+.tags{color:#9a9a9a;font-size:14px;margin-top:8px}
+.body{white-space:pre-wrap;font-size:16px;line-height:1.55;word-wrap:break-word;margin-top:12px}
+.media{width:100%;border-radius:10px;margin-top:14px;display:block}
+.thumbs{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.thumbs img{width:72px;height:72px;object-fit:cover;border-radius:8px}
+.safety{color:#9a9a9a;font-size:13.5px;margin-top:16px}
+.cta{position:fixed;left:0;right:0;bottom:0;background:#111;border-top:1px solid #2a2a2a;padding:14px 20px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:8px;padding:12px 26px;font-size:16px;font-weight:800;text-decoration:none}
+.btn:hover{background:#a8151f}
+.cta a.login{color:#f0f0f0;font-weight:700}
+.back{margin-top:14px;font-size:14px}
+.back a{color:#f0f0f0;font-weight:600}
+</style>
+</head>
+<body>
+<div class="brand">HERE</div>
+<div class="card">
+  <div class="who">
+    {% if seller.avatar %}<img class="avatar" src="{{ seller.avatar|e }}" alt="">
+    {% else %}<span class="av-ph">{{ seller.name[:1]|upper|e }}</span>{% endif %}
+    <div>
+      <div class="nm">{{ seller.name|e }}</div>
+      <div class="meta">selling on HERE Market{% if listing.location %} · 📍 {{ listing.location|e }}{% endif %}</div>
+    </div>
+  </div>
+  <span class="price">{{ listing.price|e }}</span>
+  {% if listing.sold %}<span class="sold">SOLD</span>{% endif %}
+  <div class="ttl">{{ listing.title|e }}</div>
+  <div class="tags">{{ listing.condition|e }} · {{ listing.category|e }} · {{ listing.created|e }}</div>
+  {% if listing.photos %}
+  <img class="media" src="{{ listing.photos[0]|e }}" alt="listing photo">
+  {% if listing.photos|length > 1 %}
+  <div class="thumbs">
+    {% for ph in listing.photos[1:] %}<img src="{{ ph|e }}" alt="">{% endfor %}
+  </div>
+  {% endif %}
+  {% endif %}
+  {% if listing.description %}<div class="body">{{ listing.description|e }}</div>{% endif %}
+  <div class="safety">⚠️ {{ safety_note|e }}</div>
+</div>
+{% if logged_in %}<div class="back"><a href="/home">← Back to HERE</a></div>{% endif %}
+<div class="cta">
+  <a class="btn" href="/signup">Join HERE — it's free</a>
+  <a class="login" href="/login">Log in</a>
+</div>
+</body>
+</html>

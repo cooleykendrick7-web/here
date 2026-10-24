@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}{% if gone %}Listing gone{% else %}{{ listing.title|e }}{% endif %} — HERE Market{% endblock %}
+{% block head_extra %}
+<style>
+.mkt-main{width:100%;max-height:70vh;object-fit:contain;background:#111;border-radius:12px;display:block}
+.mkt-nophoto{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:1/1;background:#e4e6eb;border-radius:12px;font-size:72px}
+.mkt-thumbs{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.mkt-thumbs button{border:2px solid transparent;border-radius:10px;padding:0;background:none;cursor:pointer}
+.mkt-thumbs button.on{border-color:var(--red)}
+.mkt-thumbs img{width:64px;height:64px;object-fit:cover;border-radius:8px;display:block}
+.mkt-price-big{font-size:28px;font-weight:900;color:var(--red)}
+.mkt-sold-big{display:inline-block;background:#111;color:#fff;font-weight:900;letter-spacing:1px;border-radius:8px;padding:5px 14px;font-size:16px;vertical-align:middle;margin-left:8px}
+.mkt-tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.mkt-tag{border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-size:12.5px;font-weight:700}
+.mkt-safety{border:1px solid #e6c65c;background:#fdf6d8;border-radius:10px;padding:10px 12px;font-size:13.5px;margin-top:14px}
+.mkt-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:flex-start}
+.mkt-msgform{display:flex;gap:8px;flex:1;min-width:230px}
+.mkt-msgform input{flex:1;min-width:0}
+</style>
+{% endblock %}
+{% block content %}
+
+{% if gone %}
+<div class="card" style="text-align:center;padding:36px 20px">
+  <div style="font-size:44px">🛒</div>
+  <h3 style="margin:10px 0 6px">This listing is gone.</h3>
+  <p style="color:var(--muted);font-size:15px">The seller took it down. There's plenty more in the Market.</p>
+  <a class="btn" href="/market" style="margin-top:12px">Browse the Market</a>
+</div>
+{% else %}
+
+<div class="card">
+  {% if listing.photos %}
+  <img class="mkt-main" id="mkt-main" src="{{ listing.photos[0]|e }}" alt="">
+  {% if listing.photos|length > 1 %}
+  <div class="mkt-thumbs">
+    {% for ph in listing.photos %}
+    <button type="button" class="{% if loop.first %}on{% endif %}" data-mkt-photo="{{ ph|e }}"><img src="{{ ph|e }}" alt=""></button>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="mkt-nophoto">🛒</div>
+  {% endif %}
+
+  <div style="margin-top:14px">
+    <span class="mkt-price-big">{{ listing.price|e }}</span>
+    {% if listing.sold %}<span class="mkt-sold-big">SOLD</span>{% endif %}
+    <h2 style="font-size:22px;margin-top:4px">{{ listing.title|e }}</h2>
+    <div class="mkt-tags">
+      <span class="mkt-tag">{{ listing.condition|e }}</span>
+      <span class="mkt-tag">{{ listing.category|e }}</span>
+      {% if listing.location %}<span class="mkt-tag">📍 {{ listing.location|e }}</span>{% endif %}
+      <span class="mkt-tag">🕐 {{ listing.created|e }}</span>
+    </div>
+    {% if listing.description %}
+    <p style="margin-top:12px;white-space:pre-wrap">{{ listing.description|e }}</p>
+    {% endif %}
+  </div>
+
+  {% if seller %}
+  <div class="row-item" style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px">
+    {% if seller.avatar %}<img class="avatar av-40" src="{{ seller.avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ seller.name[:1]|upper|e }}</span>{% endif %}
+    <div class="grow">
+      <div class="nm"><a href="/user/{{ seller.id }}">{{ seller.name|e }}</a></div>
+      <div style="font-size:12.5px;color:var(--muted)">Seller · joined {{ seller.joined|e }}</div>
+    </div>
+    {% if more_count %}<a class="btn-ghost btn-sm" href="/market?seller={{ seller.id }}">More from this seller →</a>{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="mkt-safety">⚠️ <b>Stay safe:</b> {{ safety_note|e }}</div>
+
+  <div class="mkt-actions">
+    {% if is_seller %}
+    <form class="inline-form" action="/market/{{ listing.id }}/sold" method="post">
+      <button type="submit" class="btn">{% if listing.sold %}Mark available again{% else %}Mark SOLD{% endif %}</button>
+    </form>
+    <a class="btn-ghost" href="/market/{{ listing.id }}/edit">✏️ Edit</a>
+    <form class="inline-form" action="/market/{{ listing.id }}/delete" method="post" onsubmit="return confirm('Delete this listing? It disappears from the Market (messages about it keep their snapshot card).');">
+      <button type="submit" class="btn-danger">🗑 Delete</button>
+    </form>
+    {% else %}
+    <form class="mkt-msgform" action="/market/{{ listing.id }}/message" method="post">
+      <input type="text" name="body" maxlength="2000" value="Hi! Is this still available?" aria-label="Message to the seller">
+      <button type="submit" class="btn">💬 Message seller</button>
+    </form>
+    <form class="inline-form" action="/market/{{ listing.id }}/save" method="post">
+      <button type="submit" class="btn-ghost">{% if saved %}♥ Saved{% else %}🤍 Save{% endif %}</button>
+    </form>
+    <button type="button" class="btn-ghost" data-copy-path="/m/{{ listing.id }}">🔗 Share</button>
+    {% endif %}
+  </div>
+</div>
+
+<div style="margin-top:10px"><a href="/market">← Back to the Market</a></div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  var main = document.getElementById('mkt-main');
+  if (!main) return;
+  document.querySelectorAll('[data-mkt-photo]').forEach(function(b){
+    b.addEventListener('click', function(){
+      main.src = b.getAttribute('data-mkt-photo');
+      document.querySelectorAll('[data-mkt-photo]').forEach(function(x){ x.classList.remove('on'); });
+      b.classList.add('on');
+    });
+  });
+})();
+</script>
+{% endblock %}

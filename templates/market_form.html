@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{% if editing %}✏️ Edit listing{% else %}➕ Sell something{% endif %} — HERE{% endblock %}
+{% block head_extra %}
+<style>
+.mkt-cur{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.mkt-cur figure{margin:0;text-align:center}
+.mkt-cur img{width:76px;height:76px;object-fit:cover;border-radius:10px;display:block;background:#e4e6eb}
+.mkt-cur label{font-size:12px;color:var(--muted);display:block;margin-top:3px}
+</style>
+{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">{% if editing %}✏️ Edit listing{% else %}➕ Sell something{% endif %}</div>
+  <form action="{{ action|e }}" method="post" enctype="multipart/form-data" style="margin-top:12px">
+    <div class="field">
+      <label for="mk-title">Title</label>
+      <input type="text" id="mk-title" name="title" required maxlength="120" placeholder="What are you selling?"
+             value="{% if listing %}{{ listing.title|e }}{% endif %}">
+    </div>
+    <div class="field">
+      <label for="mk-price">Price (dollars — 0 means FREE)</label>
+      <input type="text" id="mk-price" name="price" required inputmode="decimal" placeholder="25 or 25.50"
+             value="{% if listing %}{{ listing.price_input|e }}{% endif %}">
+    </div>
+    <div class="field">
+      <label for="mk-cat">Category</label>
+      <select id="mk-cat" name="category" required>
+        {% for c in categories %}
+        <option value="{{ c|e }}"{% if listing and listing.category == c %} selected{% endif %}>{{ c|e }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="mk-cond">Condition</label>
+      <select id="mk-cond" name="condition" required>
+        {% for c in conditions %}
+        <option value="{{ c|e }}"{% if listing and listing.condition == c %} selected{% endif %}>{{ c|e }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="mk-desc">Description</label>
+      <textarea id="mk-desc" name="description" maxlength="2000" placeholder="Details, size, why you're selling…">{% if listing %}{{ listing.description|e }}{% endif %}</textarea>
+    </div>
+    <div class="field">
+      <label for="mk-loc">Location (city / area)</label>
+      <input type="text" id="mk-loc" name="location" maxlength="80" placeholder="e.g. Jackson, MS"
+             value="{% if listing %}{{ listing.location|e }}{% endif %}">
+    </div>
+    {% if editing and listing.photo_paths %}
+    <div class="field">
+      <label>Current photos — check to remove</label>
+      <div class="mkt-cur">
+        {% for p in listing.photo_paths %}
+        <figure>
+          <img src="/uploads/{{ p|e }}" alt="">
+          <label><input type="checkbox" name="remove_photo" value="{{ p|e }}"> Remove</label>
+        </figure>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    <div class="field">
+      <label for="mk-photos">{% if editing %}Add photos{% else %}Photos{% endif %} (up to 4, images only)</label><br>
+      <input type="file" id="mk-photos" name="photos" accept="image/*" multiple>
+    </div>
+    {% if not editing %}
+    <div class="field">
+      <label style="display:flex;gap:8px;align-items:center;font-weight:600">
+        <input type="checkbox" name="share_to_feed" value="1" checked>
+        Also post it to my feed
+      </label>
+    </div>
+    {% endif %}
+    <button type="submit" class="btn">{% if editing %}Save changes{% else %}Post listing{% endif %}</button>
+    <a class="btn-ghost" href="{% if editing %}/market/{{ listing.id }}{% else %}/market{% endif %}" style="margin-left:8px">Cancel</a>
+  </form>
+</div>
+
+{% endblock %}

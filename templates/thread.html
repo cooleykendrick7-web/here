@@ -1,5 +1,15 @@
 {% extends "base.html" %}
 {% block title %}{{ friend.name|e }} — HERE{% endblock %}
+{% block head_extra %}
+<style>
+.listing-card{display:flex;gap:10px;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;margin-bottom:6px;text-decoration:none;color:inherit;max-width:280px}
+.listing-thumb{width:52px;height:52px;border-radius:8px;object-fit:cover;flex:none;background:#e4e6eb}
+.listing-thumb-ph{display:flex;align-items:center;justify-content:center;font-size:24px}
+.listing-meta{display:flex;flex-direction:column;min-width:0;text-align:left}
+.listing-title{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.listing-price{color:var(--red);font-weight:800;font-size:14px}
+</style>
+{% endblock %}
 {% block content %}
 
 <div class="card">
@@ -68,6 +78,13 @@
           {% endif %}
           <div class="story-card-label">{{ m.story.label|e }}</div>
         </div>
+        {% endif %}
+        {% if m.listing %}
+        <a class="listing-card" href="/market/{{ m.listing.id }}">
+          {% if m.listing.thumb %}<img class="listing-thumb" src="{{ m.listing.thumb|e }}" alt="">
+          {% else %}<span class="listing-thumb listing-thumb-ph">🛒</span>{% endif %}
+          <span class="listing-meta"><span class="listing-title">{{ m.listing.title|e }}</span><span class="listing-price">{{ m.listing.price|e }}</span></span>
+        </a>
         {% endif %}
         <div class="msg-bub {% if m.mine %}msg-mine{% else %}msg-theirs{% endif %}">{{ m.body|e }}</div>
         <div class="msg-time">{{ m.created_at|e }}<button type="button" class="mmenu-btn" title="Message options" aria-label="Message options"

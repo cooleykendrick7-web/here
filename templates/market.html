@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}{% if saved_page %}♥ Saved listings{% elif mine_page %}🛒 My listings{% else %}🛒 Market{% endif %} — HERE{% endblock %}
+{% block head_extra %}
+<style>
+.mkt-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:820px){.mkt-grid{grid-template-columns:repeat(3,1fr)}}
+.mkt-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.mkt-photo{display:block;position:relative;aspect-ratio:1/1;background:#e4e6eb}
+.mkt-photo img{width:100%;height:100%;object-fit:cover;display:block}
+.mkt-ph{display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:52px}
+.mkt-price{position:absolute;left:8px;bottom:8px;background:var(--red);color:#fff;font-weight:800;font-size:14px;border-radius:8px;padding:3px 9px}
+.mkt-sold{position:absolute;top:8px;right:8px;background:#111;color:#fff;font-weight:900;font-size:13px;letter-spacing:1px;border-radius:8px;padding:4px 10px;transform:rotate(6deg)}
+.mkt-cbody{padding:10px}
+.mkt-title{display:block;font-weight:800;font-size:15px;color:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mkt-meta{font-size:12.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mkt-seller{display:flex;align-items:center;gap:6px;margin-top:7px;font-size:13px}
+.mkt-seller img{width:22px;height:22px;border-radius:50%;object-fit:cover;background:#ccc}
+.mkt-saved-tag{margin-left:auto;color:var(--red);font-weight:800;font-size:12px}
+.mkt-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.mkt-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.mkt-chip{border:1px solid var(--border);background:var(--card);border-radius:999px;padding:5px 12px;font-size:13px;font-weight:700;color:inherit;text-decoration:none}
+.mkt-chip.on{background:var(--red);border-color:var(--red);color:#fff}
+.mkt-search{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.mkt-search input[type=text]{flex:1;min-width:140px}
+</style>
+{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <div class="grow" style="flex:1;min-width:160px">
+      {% if saved_page %}
+      <div class="section-title">♥ Saved listings</div>
+      <p style="color:var(--muted);font-size:14px">Items you saved — actives first, sold ones badged.</p>
+      {% elif mine_page %}
+      <div class="section-title">🛒 My listings</div>
+      <p style="color:var(--muted);font-size:14px">Everything you're selling on HERE.</p>
+      {% elif seller %}
+      <div class="section-title">🛒 For sale by {{ seller.name|e }}</div>
+      <p style="color:var(--muted);font-size:14px"><a href="/user/{{ seller.id }}">← Back to {{ seller.name|e }}'s profile</a></p>
+      {% else %}
+      <div class="section-title">🛒 HERE Market</div>
+      <p style="color:var(--muted);font-size:14px">Buy &amp; sell with people on HERE. Meet in a public place — HERE doesn't handle payments.</p>
+      {% endif %}
+    </div>
+    <a class="btn btn-sm" href="/market/new">➕ Sell something</a>
+  </div>
+  {% if not saved_page and not mine_page %}
+  <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+    <a class="btn-ghost btn-sm" href="/market/mine">My listings</a>
+    <a class="btn-ghost btn-sm" href="/market/saved">♥ Saved</a>
+    {% if seller %}<a class="btn-ghost btn-sm" href="/market">← All of the Market</a>{% endif %}
+  </div>
+  <form class="mkt-search" action="/market" method="get">
+    <input type="text" name="q" placeholder="Search the Market…" value="{{ q|e }}" maxlength="80">
+    <select name="category">
+      <option value="">All categories</option>
+      {% for c in categories %}<option value="{{ c|e }}"{% if category == c %} selected{% endif %}>{{ c|e }}</option>{% endfor %}
+    </select>
+    <select name="sort">
+      <option value="new"{% if sort == 'new' %} selected{% endif %}>Newest first</option>
+      <option value="price_asc"{% if sort == 'price_asc' %} selected{% endif %}>Price: low → high</option>
+      <option value="price_desc"{% if sort == 'price_desc' %} selected{% endif %}>Price: high → low</option>
+    </select>
+    <label style="font-size:13.5px;display:flex;align-items:center;gap:5px"><input type="checkbox" name="sold" value="1"{% if include_sold %} checked{% endif %}> Include sold</label>
+    {% if seller %}<input type="hidden" name="seller" value="{{ seller.id }}">{% endif %}
+    <button type="submit" class="btn btn-sm">Search</button>
+  </form>
+  <div class="mkt-chips">
+    <a class="mkt-chip{% if not category %} on{% endif %}" href="/market{% if seller %}?seller={{ seller.id }}{% endif %}">All</a>
+    {% for c in categories %}
+    <a class="mkt-chip{% if category == c %} on{% endif %}" href="/market?category={{ c|urlencode }}{% if seller %}&amp;seller={{ seller.id }}{% endif %}">{{ c|e }}</a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+    <a class="btn-ghost btn-sm" href="/market">← Browse the Market</a>
+    {% if saved_page %}<a class="btn-ghost btn-sm" href="/market/mine">My listings</a>{% endif %}
+    {% if mine_page %}<a class="btn-ghost btn-sm" href="/market/saved">♥ Saved</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if listings %}
+<div class="mkt-grid">
+  {% for l in listings %}
+  {% include "partials/listing_card.html" %}
+  {% endfor %}
+</div>
+{% else %}
+<div class="card"><p style="color:var(--muted)">
+  {% if saved_page %}You haven't saved anything yet — tap ♥ Save on a listing and it'll wait for you here.
+  {% elif mine_page %}You're not selling anything yet — tap ➕ Sell something to post your first listing.
+  {% elif seller %}Nothing for sale here right now.
+  {% else %}Nothing matches — try a different search, or be the first to <a href="/market/new">sell something</a>.
+  {% endif %}
+</p></div>
+{% endif %}
+
+{% endblock %}
