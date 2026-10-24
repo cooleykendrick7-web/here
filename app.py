@@ -10353,6 +10353,38 @@ TICKET_PACKS = {
     "pack500": {"key": "pack500", "tickets": 500, "price_cents": 499},
     "pack1500": {"key": "pack1500", "tickets": 1500, "price_cents": 1399},
 }
+# Custom-amount buys: pack_key "custom" + a qty. The price is
+# computed SERVER-SIDE only — 1 ticket = 1 cent, so price_cents ==
+# qty. The 50 floor is Stripe's $0.50 minimum charge; the cap
+# keeps a typo from becoming a second mortgage.
+CUSTOM_PACK_KEY = "custom"
+CUSTOM_MIN_QTY = 50
+CUSTOM_MAX_QTY = 1_000_000
+CUSTOM_CENTS_PER_TICKET = 1
+
+
+def _buy_tickets_for(meta):
+    """Tickets a paid checkout session credits, derived ONLY from
+    the server-set session metadata. Packs resolve through
+    TICKET_PACKS (the canonical count for the pack key — metadata
+    alone can't inflate a pack); a custom buy carries its qty in
+    metadata but is re-validated against the custom bounds before
+    anyone trusts it. Returns 0 for anything unrecognized, which
+    both crediting paths treat as 'not a buy session'."""
+    meta = meta or {}
+    pk = meta.get("pack_key")
+    if pk in TICKET_PACKS:
+        return TICKET_PACKS[pk]["tickets"]
+    if pk == CUSTOM_PACK_KEY:
+        try:
+            qty = int(meta.get("tickets") or 0)
+        except (TypeError, ValueError):
+            return 0
+        if CUSTOM_MIN_QTY <= qty <= CUSTOM_MAX_QTY:
+            return qty
+    return 0
+
+
 SHOUT_COST_TICKETS = 20
 SHOUT_SECONDS = 60
 CASHOUT_MIN_TICKETS = 2000  # = $10.00 at 0.5¢ per earned ticket
@@ -10476,13 +10508,13 @@ async def tickets_page(request: Request):
             sess = _stripe_api(
                 "GET", f"/v1/checkout/sessions/{session_id}")
             meta = sess.get("metadata") or {}
+            n_tickets = _buy_tickets_for(meta)
             if (sess.get("payment_status") == "paid"
                     and str(meta.get("user_id")) == str(user["id"])
-                    and meta.get("tickets")
-                    and meta.get("pack_key") in TICKET_PACKS):
-                if credit_purchase(user["id"], int(meta["tickets"]),
+                    and n_tickets):
+                if credit_purchase(user["id"], n_tickets,
                                    session_id):
-                    bought_msg = (f"🎟️ {meta['tickets']} tickets "
+                    bought_msg = (f"🎟️ {n_tickets} tickets "
                                   "added to your wallet!")
         except Exception:
             # Never let a verification failure break the wallet page;
@@ -10518,6 +10550,8 @@ async def tickets_page(request: Request):
                   ("pack100", "pack500", "pack1500")],
         "pack_prices": {k: _money(v["price_cents"])
                         for k, v in TICKET_PACKS.items()},
+        "custom_min": CUSTOM_MIN_QTY,
+        "custom_max": CUSTOM_MAX_QTY,
         "stripe_on": stripe_enabled(),
         "history": history,
         "bought_msg": bought_msg})
@@ -10525,9 +10559,13 @@ async def tickets_page(request: Request):
 
 @app.post("/tickets/buy")
 async def tickets_buy(request: Request):
-    """Create a Stripe Checkout session for one pack. Amounts come
-    ONLY from TICKET_PACKS — the client sends just the pack key.
-    Disabled (no STRIPE_SECRET_KEY) = honest 503, nothing half-sold."""
+    """Create a Stripe Checkout session for one pack — or for a
+    custom ticket amount (pack_key 'custom' + qty). Amounts are
+    computed HERE, server-side, always: packs come from
+    TICKET_PACKS; a custom qty is priced at 1 ticket = 1 cent and
+    bounded (50..1,000,000) before a session exists. The client
+    never sends a price. Disabled (no STRIPE_SECRET_KEY) = honest
+    503, nothing half-sold."""
     user, err = require_login(request)
     if err:
         return err
@@ -10537,25 +10575,44 @@ async def tickets_buy(request: Request):
             status_code=503)
     try:
         form = await request.form()
-        pack_key = (form.get("pack_key") or "").strip()
     except Exception:
-        pack_key = ""
-    pack = TICKET_PACKS.get(pack_key)
-    if not pack:
-        return JSONResponse({"ok": False, "error": "Unknown pack."},
-                            status_code=400)
+        form = {}
+    pack_key = (form.get("pack_key") or "").strip()
+    if pack_key == CUSTOM_PACK_KEY:
+        raw_qty = (form.get("qty") or "").strip()
+        try:
+            qty = int(raw_qty)
+        except (TypeError, ValueError):
+            qty = 0
+        if not (CUSTOM_MIN_QTY <= qty <= CUSTOM_MAX_QTY):
+            return JSONResponse(
+                {"ok": False, "error":
+                 f"Custom amounts run from {CUSTOM_MIN_QTY} to "
+                 f"{CUSTOM_MAX_QTY:,} tickets."},
+                status_code=400)
+        tickets_n = qty
+        price_cents = qty * CUSTOM_CENTS_PER_TICKET
+        product_name = f"HERE Tickets ×{qty}"
+    else:
+        pack = TICKET_PACKS.get(pack_key)
+        if not pack:
+            return JSONResponse({"ok": False, "error": "Unknown pack."},
+                                status_code=400)
+        tickets_n = pack["tickets"]
+        price_cents = pack["price_cents"]
+        product_name = f"HERE Live Tickets — {pack['tickets']} 🎟️"
     base = str(request.base_url).rstrip("/")
     params = {
         "mode": "payment",
         "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]":
-            str(pack["price_cents"]),
+            str(price_cents),
         "line_items[0][price_data][product_data][name]":
-            f"HERE Live Tickets — {pack['tickets']} 🎟️",
+            product_name,
         "line_items[0][quantity]": "1",
         "metadata[user_id]": str(user["id"]),
         "metadata[pack_key]": pack_key,
-        "metadata[tickets]": str(pack["tickets"]),
+        "metadata[tickets]": str(tickets_n),
         "success_url": base + "/tickets?session_id="
                         "{CHECKOUT_SESSION_ID}&bought=1",
         "cancel_url": base + "/tickets",
@@ -10688,10 +10745,10 @@ async def stripe_webhook(request: Request):
     session_id = obj.get("id") or ""
     try:
         uid = int(meta.get("user_id") or 0)
-        tickets = int(meta.get("tickets") or 0)
     except (TypeError, ValueError):
-        uid, tickets = 0, 0
-    if uid and tickets and meta.get("pack_key") in TICKET_PACKS:
+        uid = 0
+    tickets = _buy_tickets_for(meta)
+    if uid and tickets:
         credit_purchase(uid, tickets, session_id)
     return JSONResponse({"ok": True})
 
