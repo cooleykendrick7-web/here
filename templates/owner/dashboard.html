@@ -60,6 +60,31 @@ table.admin tr:last-child td{border-bottom:none}
 </div>
 
 <section>
+  <h2>💵 HERE Money — what the site itself made</h2>
+  <div class="stat-cards">
+    <div class="stat-card"><div class="num" style="font-size:38px">🏆 {{ money_panel.profit }}</div><div class="lbl">HERE'S PROFIT (all time)</div></div>
+    <div class="stat-card"><div class="num">{{ money_panel.gross }}</div><div class="lbl">Money in — ticket sales ({{ money_panel.sales }} sales)</div></div>
+    <div class="stat-card"><div class="num">{{ money_panel.gross_today }}</div><div class="lbl">Money in today</div></div>
+    <div class="stat-card"><div class="num">{{ money_panel.gross_month }}</div><div class="lbl">Money in this month</div></div>
+    <div class="stat-card"><div class="num">{{ money_panel.fee_est }}</div><div class="lbl">Stripe's cut (estimate)</div></div>
+    <div class="stat-card"><div class="num">{{ money_panel.paid_out }}</div><div class="lbl">Paid out to streamers ({{ money_panel.paid_count }} payouts)</div></div>
+    <div class="stat-card"><div class="num">{{ money_panel.owed }}</div><div class="lbl">Still owed to streamers</div></div>
+    <div class="stat-card"><div class="num">{{ money_panel.floating }} 🎟️</div><div class="lbl">Tickets floating (in wallets now)</div></div>
+  </div>
+  <p style="color:#9a9a9a;font-size:13px;margin-bottom:10px">Still owed = <strong>{{ money_panel.owed_earned }}</strong> sitting in streamer earnings (not asked for yet) + <strong>{{ money_panel.owed_held }}</strong> in cash-outs waiting/sending — every earned ticket counted once, at every stage. The "Owed to streamers if all cashed out" card above values every earned + held ticket at 0.5¢ in one sum; this panel counts each waiting cash-out at the exact dollars locked in when the streamer asked, so the two can differ by a cent or two — this panel's numbers are the ones money actually moves by. <strong>Profit = money in − Stripe's cut − paid out − still owed.</strong> Stripe's cut is an estimate (2.9% + 30¢ per sale, the standard card rate — Stripe doesn't report exact per-sale fees to the app). Tickets sold all time: {{ money_panel.sold }} 🎟️ (same count as the card above). Days run on Chicago time.</p>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>Day</th><th>Sales</th><th>Money in</th></tr></thead>
+      <tbody>
+        {% for d in money_panel.days %}
+        <tr><td>{{ d.label }}{% if d.today %} (today){% endif %}</td><td>{{ d.count }}</td><td>{{ d.gross }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
   <h2>💰 Payouts (Live Tickets cash-outs)</h2>
   <p style="color:#9a9a9a;font-size:13px;margin-bottom:6px">Streamers cash out earned tickets at $0.005 each. Tickets are held the moment they ask. If a streamer finished <strong>bank setup</strong>, tap <strong>💸 Approve &amp; send via Stripe</strong> — Stripe sends it to their bank for you. Otherwise <strong>send the money yourself</strong> (Cash App / bank — their note says where), then tap <strong>Mark paid</strong>. Declining returns their tickets instantly.</p>
   <p style="font-size:13.5px;margin-bottom:10px">{% if connect_state.state == 'ready' %}🏦 Bank payouts: <strong>ON</strong> — Stripe payouts to streamer banks are live.{% elif connect_state.state == 'blocked' %}🏦 Bank payouts: <strong>waiting on Stripe verification (owner step)</strong>{% if connect_state.error %} — last word from Stripe: {{ connect_state.error|e }}{% endif %}. Hand payouts work meanwhile.{% else %}🏦 Bank payouts: not proven yet — the state flips ON the first time a streamer sets up bank payouts (or shows the Stripe blocker if verification is still owed). Hand payouts work meanwhile.{% endif %}</p>
