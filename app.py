@@ -16,12 +16,14 @@ import hashlib
 import hmac
 import html
 import json
+import mimetypes
 import os
 import re
 import secrets
 import shutil
 import smtplib
 import sqlite3
+import tempfile
 import threading
 import time
 import uuid
@@ -38,6 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import moderation
+import storage
 
 # Web Push (phone notifications). Imported defensively: if the library
 # is ever missing, the site runs exactly as before with push disabled —
@@ -108,8 +111,52 @@ os.makedirs(os.path.join(BASE, "static"), exist_ok=True)
 
 app = FastAPI(title="HERE")
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# Build U: in R2 mode /uploads is NOT a static mount — the
+# uploads_serve route below resolves each key (disk first, so legacy
+# pre-migration files keep serving; then a 302 to R2). Disk mode
+# keeps the historical mount, byte-for-byte.
+_R2_MODE = storage.r2_enabled()
+if not _R2_MODE:
+    app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 templates = Jinja2Templates(directory=os.path.join(BASE, "templates"))
+
+
+# ---------------- media storage (Build U) ----------------
+# Short-lived cache of R2 existence/read URLs for the /uploads route:
+# media URLs are hot (every avatar + photo in a feed), and a HEAD per
+# render would tax every page. Misses (ghosts) are cached too.
+_uploads_cache = {}
+_UPLOADS_CACHE_TTL = 120
+
+
+def _uploads_r2_url(key):
+    """The read URL for key when the object lives in R2, else None."""
+    now = time.time()
+    hit = _uploads_cache.get(key)
+    if hit and now - hit[0] < _UPLOADS_CACHE_TTL:
+        return hit[1]
+    url = None
+    try:
+        if storage.exists(key):
+            url = storage.read_url(key)
+    except storage.StorageError:
+        url = None
+    _uploads_cache[key] = (now, url)
+    return url
+
+
+if _R2_MODE:
+    @app.get("/uploads/{key:path}")
+    async def uploads_serve(key: str):
+        if not key or any(p in ("", ".", "..") for p in key.split("/")):
+            raise HTTPException(status_code=404)
+        disk = os.path.join(UPLOAD_DIR, key)
+        if os.path.isfile(disk):
+            return FileResponse(disk)
+        url = _uploads_r2_url(key)
+        if url:
+            return RedirectResponse(url, status_code=302)
+        raise HTTPException(status_code=404)
 
 
 def fancy_time(value):
@@ -1568,6 +1615,71 @@ def send_push(user_id, title, body, url="/", tag="", ttl=86400):
     threading.Thread(target=_work, daemon=True).start()
 
 
+_UPLOAD_FAIL = "That file couldn't be uploaded — try a different one."
+
+
+def _save_upload_r2(up, subdir, ext, cap_mb):
+    """R2-mode save_upload: spool the stream to a temp file (counting
+    bytes), then one signed PUT. Cap policy: post videos and story
+    media are UNCAPPED in R2 mode (the browser-direct path is the
+    intended big-file route, but a relayed video gets the same
+    policy); image surfaces keep their historical silent cap. Any
+    storage failure becomes the generic friendly error — never a 500,
+    and NEVER a silent disk write (mixed storage would strand files
+    where the read path doesn't expect them)."""
+    uncapped = subdir == "stories" or (subdir == "posts"
+                                       and ext in VID_EXTS)
+    limit = None if uncapped else cap_mb * 1024 * 1024
+    key = f"{subdir}/{uuid.uuid4().hex}.{ext}"
+    src = up.file
+    try:
+        src.seek(0)
+    except Exception:
+        pass
+    total = 0
+    tmp = tempfile.TemporaryFile()
+    try:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if limit is not None and total > limit:
+                raise ValueError(_UPLOAD_FAIL)
+            tmp.write(chunk)
+        tmp.seek(0)
+        ctype = (getattr(up, "content_type", "") or
+                 mimetypes.guess_type(up.filename or "")[0] or
+                 "application/octet-stream")
+        try:
+            storage.put_object(key, tmp, ctype, size=total)
+        except storage.StorageError:
+            raise ValueError(_UPLOAD_FAIL)
+    finally:
+        tmp.close()
+    return key
+
+
+def _accept_media_key(user, key, subdir, allowed_exts):
+    """Validate a browser-direct (presigned) upload key submitted with
+    a post/story form. The key must be one THIS server minted for THIS
+    user + surface ('<subdir>/u<uid>-<uuid>.<ext>'), its extension
+    must be allowed on the surface, and the object must actually exist
+    in R2 (a minted-but-never-uploaded key is worthless). Returns
+    (media, error) — exactly one of the two is non-empty."""
+    m = re.fullmatch(
+        rf"{subdir}/u{user['id']}-([0-9a-f]{{32}})\.([a-z0-9]+)",
+        (key or "").strip())
+    if not m or m.group(2) not in allowed_exts:
+        return "", "That upload couldn't be used — please try again."
+    try:
+        if not storage.exists(key):
+            return "", "That upload couldn't be found — please try again."
+    except storage.StorageError:
+        return "", "That upload couldn't be checked — please try again."
+    return key, ""
+
+
 def save_upload(up, subdir, allowed, max_mb=0):
     """Save an uploaded file under UPLOAD_DIR/subdir with a uuid name.
     Returns the relative path (e.g. 'avatars/abc123.png') or '' if no file.
@@ -1581,6 +1693,8 @@ def save_upload(up, subdir, allowed, max_mb=0):
     if ext not in allowed:
         raise ValueError(f"File type .{ext} not allowed.")
     cap_mb = max_mb or MAX_UPLOAD_MB
+    if storage.r2_enabled():
+        return _save_upload_r2(up, subdir, ext, cap_mb)
     limit = cap_mb * 1024 * 1024
     name = f"{uuid.uuid4().hex}.{ext}"
     dest = os.path.join(UPLOAD_DIR, subdir, name)
@@ -2277,6 +2391,12 @@ def avatar_url(path):
     a broken <img> (iOS shows those as a box-with-question-mark)."""
     if not path:
         return ""
+    if storage.r2_enabled():
+        # The object may live in R2 or on disk (pre-migration); the
+        # /uploads route resolves either. A ref to a truly deleted
+        # file renders a broken <img> instead of the placeholder —
+        # accepted tradeoff (a HEAD per avatar render is too slow).
+        return "/uploads/" + str(path)
     try:
         if not os.path.isfile(os.path.join(UPLOAD_DIR, str(path))):
             return ""
@@ -2442,6 +2562,47 @@ async def push_test(request: Request):
                   "HERE notifications work.",
                   "/app", tag="test")
     return JSONResponse({"ok": True, "devices": n})
+
+
+# ---------------- direct-to-R2 uploads (Build U) ----------------
+# The browser asks here first; the server mints the object key itself
+# (never trust a client-chosen key) and hands back a short-lived
+# presigned PUT URL. The big file then travels browser -> R2 directly,
+# and the post/story form submits with media_key instead of a file.
+# Only VIDEO goes direct (that's the big-file problem); images keep
+# relaying through save_upload, and in disk mode nothing is direct.
+_PRESIGN_SURFACES = {"post": "posts", "story": "stories"}
+_PRESIGN_VIDEO_TYPES = {"video/mp4": "mp4", "video/webm": "webm",
+                        "video/quicktime": "mov"}
+
+
+@app.post("/api/uploads/presign")
+async def uploads_presign(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    subdir = _PRESIGN_SURFACES.get(str(data.get("surface") or ""))
+    if subdir is None:
+        return JSONResponse({"ok": False, "error": "surface"},
+                            status_code=400)
+    ext = _PRESIGN_VIDEO_TYPES.get(
+        str(data.get("content_type") or "").lower())
+    if not storage.r2_enabled() or ext is None:
+        return JSONResponse({"ok": True, "direct": False})
+    key = f"{subdir}/u{user['id']}-{uuid.uuid4().hex}.{ext}"
+    try:
+        url = storage.presign_put(key, expires=1800)
+    except storage.StorageError:
+        return JSONResponse({"ok": True, "direct": False})
+    return JSONResponse({"ok": True, "direct": True,
+                         "key": key, "url": url})
 
 
 # ---------------- root / auth ----------------
@@ -3436,6 +3597,13 @@ def create_post_from_form(user, form, page_id=None):
     cap = POST_VIDEO_MAX_MB if _mext in VID_EXTS else 0
     if poll_options is not None:
         media = ""  # polls are text-only by design; any file is ignored
+    elif (form.get("media_key") or "").strip() and storage.r2_enabled():
+        # Browser-direct upload (Build U): the file already sits in
+        # R2; the form carries only the server-minted key.
+        media, _kerr = _accept_media_key(
+            user, (form.get("media_key") or "").strip(), "posts", allowed)
+        if _kerr:
+            return None, _kerr
     else:
         try:
             media = save_upload(media_file, "posts", allowed, max_mb=cap)
@@ -5403,10 +5571,18 @@ async def story_create(request: Request):
     except ValueError as e:
         return redir("/stories/new", str(e))
     # --- media; a bad story file rejects the whole post ---
-    try:
-        media = save_upload(form.get("media"), "stories", STORY_EXTS)
-    except ValueError as e:
-        return redir("/stories/new", str(e))
+    _skey = (form.get("media_key") or "").strip()
+    if _skey and storage.r2_enabled():
+        # Browser-direct upload (Build U), same contract as posts.
+        media, _kerr = _accept_media_key(user, _skey, "stories",
+                                         STORY_EXTS)
+        if _kerr:
+            return redir("/stories/new", _kerr)
+    else:
+        try:
+            media = save_upload(form.get("media"), "stories", STORY_EXTS)
+        except ValueError as e:
+            return redir("/stories/new", str(e))
     if not media:
         return redir("/stories/new", "Choose a photo or short video.")
     mins = _story_lifetime_minutes(form)
@@ -5507,6 +5683,21 @@ async def story_viewers(request: Request, sid: int):
         for r in rows]})
 
 
+def _upload_exists(rel):
+    """Existence of a stored upload in whichever backend holds it:
+    disk, or (R2 mode) R2. In disk mode this is exactly isfile."""
+    if not rel:
+        return False
+    if os.path.isfile(os.path.join(UPLOAD_DIR, str(rel))):
+        return True
+    if storage.r2_enabled():
+        try:
+            return storage.exists(rel)
+        except storage.StorageError:
+            return False
+    return False
+
+
 def _story_clip_for_replies(conn, s):
     """Uploads-relative path of the shared clip copy for story s —
     uploads/story_replies/<story_id>-<basename> — created on the FIRST
@@ -5520,15 +5711,25 @@ def _story_clip_for_replies(conn, s):
     row = conn.execute(
         "SELECT story_media FROM messages WHERE story_id=? "
         "AND story_media != '' LIMIT 1", (s["id"],)).fetchone()
-    if row and os.path.isfile(os.path.join(UPLOAD_DIR, row["story_media"])):
+    if row and _upload_exists(row["story_media"]):
         return row["story_media"]
     src_rel = s["media"] or ""
     if not src_rel:
         return ""
+    dest_rel = f"story_replies/{s['id']}-{os.path.basename(src_rel)}"
+    if storage.r2_enabled():
+        # Server-side copy inside the bucket; a pre-migration source
+        # that only exists on disk falls through to the disk copy
+        # below (the /uploads route serves either home).
+        try:
+            if storage.exists(src_rel):
+                storage.copy_object(src_rel, dest_rel)
+                return dest_rel
+        except storage.StorageError:
+            pass
     src = os.path.join(UPLOAD_DIR, src_rel)
     if not os.path.isfile(src):
         return ""
-    dest_rel = f"story_replies/{s['id']}-{os.path.basename(src_rel)}"
     dest = os.path.join(UPLOAD_DIR, dest_rel)
     try:
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -6487,6 +6688,11 @@ def _delete_upload(rel_path):
     """Best-effort removal of a stored upload (e.g. replaced backgrounds)."""
     try:
         if rel_path and not rel_path.startswith(("http://", "https://", "/")):
+            if storage.r2_enabled():
+                try:
+                    storage.delete_object(rel_path)
+                except storage.StorageError:
+                    pass
             p = os.path.join(UPLOAD_DIR, rel_path)
             if os.path.isfile(p):
                 os.remove(p)
