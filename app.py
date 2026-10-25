@@ -1029,6 +1029,15 @@ def init_db():
         c.execute("ALTER TABLE users ADD COLUMN gift_lifetime "
                   "INTEGER DEFAULT 0")
         _lifetime_backfill = True
+    if "stripe_acct_id" not in _user_cols_lt:
+        # Build R: the streamer's Stripe Connect (Express) account
+        # id, created by POST /payouts/setup; payout_ready is the
+        # cached readiness flag (refreshed from Stripe on /tickets
+        # loads — see _refresh_payout_ready).
+        c.execute("ALTER TABLE users ADD COLUMN stripe_acct_id TEXT")
+    if "payout_ready" not in _user_cols_lt:
+        c.execute("ALTER TABLE users ADD COLUMN payout_ready "
+                  "INTEGER DEFAULT 0")
     c.execute("""CREATE TABLE IF NOT EXISTS ticket_txns (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL, kind TEXT NOT NULL,
@@ -1072,6 +1081,17 @@ def init_db():
         created_at TEXT NOT NULL, decided_at TEXT)""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_payouts_status "
               "ON payout_requests(status, id)")
+    # Build R: how a decided request was settled + the Stripe
+    # transfer id when it went to a bank. status also gains a
+    # transient 'sending' state (the approve-and-send claim — see
+    # owner_payout_send). NULL method = pending / pre-Build-R row.
+    _pr_cols = [r["name"] for r in
+                c.execute("PRAGMA table_info(payout_requests)").fetchall()]
+    if "method" not in _pr_cols:
+        c.execute("ALTER TABLE payout_requests ADD COLUMN method TEXT")
+    if "stripe_transfer_id" not in _pr_cols:
+        c.execute("ALTER TABLE payout_requests ADD COLUMN "
+                  "stripe_transfer_id TEXT")
     conn.commit()
     conn.close()
 
@@ -10763,17 +10783,39 @@ async def tickets_page(request: Request):
             # lands (and the buyer can refresh this page to retry).
             pass
     me = get_user(user["id"]) or {}
+    # Build R: returning from Stripe onboarding (?setup=done) — or
+    # holding an unfinished setup — refresh the cached payout-ready
+    # flag from Stripe itself (at most one API call, only in those
+    # cases; a Stripe failure keeps the cached value).
+    setup_q = (request.query_params.get("setup") or "").strip()
+    if (me.get("stripe_acct_id") and stripe_enabled()
+            and (not me.get("payout_ready") or setup_q == "done")):
+        me["payout_ready"] = _refresh_payout_ready(me)
     balance = me.get("tickets_balance") or 0
     earned = me.get("gift_earned") or 0
     conn = db()
     pending = conn.execute(
         "SELECT * FROM payout_requests WHERE user_id=? AND "
-        "status='pending' ORDER BY id DESC LIMIT 1",
+        "status IN ('pending','sending') ORDER BY id DESC LIMIT 1",
         (user["id"],)).fetchone()
+    my_payouts = conn.execute(
+        "SELECT * FROM payout_requests WHERE user_id=? ORDER BY id "
+        "DESC LIMIT 10", (user["id"],)).fetchall()
     txns = conn.execute(
         "SELECT * FROM ticket_txns WHERE user_id=? ORDER BY id DESC "
         "LIMIT 30", (user["id"],)).fetchall()
     conn.close()
+    payouts_history = [{
+        "tickets": p["tickets"],
+        "dollars": _money(p["dollars_cents"]),
+        "when": fancy_time(p["created_at"]),
+        "status_text": _payout_status_text(dict(p)),
+        "decided": (fancy_time(p["decided_at"])
+                    if p["decided_at"] else "")}
+        for p in my_payouts]
+    bank_state = ("ready" if me.get("payout_ready")
+                  else "started" if me.get("stripe_acct_id")
+                  else "none")
     history = [{"text": _txn_line(dict(t)),
                 "when": fancy_time(t["created_at"])} for t in txns]
     return render(request, "tickets.html", {
@@ -10795,7 +10837,10 @@ async def tickets_page(request: Request):
         "custom_max": CUSTOM_MAX_QTY,
         "stripe_on": stripe_enabled(),
         "history": history,
-        "bought_msg": bought_msg})
+        "bought_msg": bought_msg,
+        "bank_state": bank_state,
+        "setup_q": setup_q,
+        "payouts_history": payouts_history})
 
 
 @app.post("/tickets/buy")
@@ -10901,7 +10946,8 @@ async def tickets_cashout(request: Request):
                      "to cash out ($10 minimum).")
     if conn.execute(
             "SELECT 1 FROM payout_requests WHERE user_id=? AND "
-            "status='pending'", (user["id"],)).fetchone():
+            "status IN ('pending','sending')",
+            (user["id"],)).fetchone():
         conn.close()
         return redir("/tickets",
                      "You already have a cash-out waiting for "
@@ -10928,6 +10974,205 @@ async def tickets_cashout(request: Request):
     return redir("/tickets",
                  "Cash-out sent for approval 💰 — the owner sends it "
                  "and marks it paid.")
+
+
+# ---------------- Build R: automatic bank payouts (Stripe Connect) ----
+# A streamer can link a Stripe Express account ONCE (POST
+# /payouts/setup — Stripe hosts the onboarding and holds the bank
+# details; HERE stores only the account id). After that, the owner's
+# approve action on a cash-out can SEND the money straight to the
+# streamer's bank (POST /owner/payouts/{id}/send → a Stripe
+# Transfer). The Build M manual flow (Mark paid / Decline) remains
+# the fallback for anyone who hasn't set up — and for any send
+# Stripe refuses.
+#
+# Capability honesty: live Connect needs one owner-side Stripe
+# identity verification. Until Stripe lets account creation
+# through, creation fails — that failure (or a creation success) is
+# cached in app_settings('stripe_connect_state') and shown on the
+# owner panel, so the state we present is always the last thing
+# Stripe itself proved, never a guess.
+
+
+def _app_setting(key):
+    conn = db()
+    row = conn.execute("SELECT value FROM app_settings WHERE key=?",
+                       (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else None
+
+
+def _set_app_setting(key, value):
+    conn = db()
+    conn.execute("INSERT OR REPLACE INTO app_settings(key, value) "
+                 "VALUES(?,?)", (key, value))
+    conn.commit()
+    conn.close()
+
+
+def _connect_state():
+    """Cached bank-payout capability: {'state': 'ready' | 'blocked'
+    | 'unknown', 'error': short class, 'at': iso}. 'ready' = a
+    connected-account creation has succeeded; 'blocked' = the last
+    creation attempt failed (error holds the reason class);
+    'unknown' = never proven either way."""
+    raw = _app_setting("stripe_connect_state")
+    if raw:
+        try:
+            d = json.loads(raw)
+            if d.get("state") in ("ready", "blocked"):
+                return d
+        except Exception:
+            pass
+    return {"state": "unknown", "error": "", "at": ""}
+
+
+def _connect_mark(state, error=""):
+    _set_app_setting("stripe_connect_state", json.dumps(
+        {"state": state, "error": error, "at": now_iso()}))
+
+
+def _stripe_err_class(e):
+    """Short, safe reason class for a Stripe failure — the ONLY part
+    of a Stripe error that ever reaches a page. Keyword-classified;
+    never the raw Stripe body."""
+    msg = str(e).lower()
+    if "insufficien" in msg:
+        return "not enough money in HERE's Stripe balance yet"
+    if ("connect" in msg or "capabilit" in msg or "verif" in msg
+            or "not enabled" in msg or "not activated" in msg):
+        return ("bank payouts aren't switched on at Stripe yet "
+                "(owner verification step)")
+    if "account" in msg:
+        return "the streamer's Stripe account has a problem"
+    return "Stripe refused it"
+
+
+def _refresh_payout_ready(me):
+    """One Stripe GET against the user's Express account: ready =
+    payouts_enabled AND details_submitted. Caches the result on
+    users.payout_ready and returns it. Any Stripe failure keeps the
+    cached value — this never raises."""
+    acct_id = me.get("stripe_acct_id")
+    if not acct_id or not stripe_enabled():
+        return me.get("payout_ready") or 0
+    try:
+        acct = _stripe_api("GET", f"/v1/accounts/{acct_id}")
+    except Exception:
+        return me.get("payout_ready") or 0
+    ready = 1 if (acct.get("payouts_enabled")
+                  and acct.get("details_submitted")) else 0
+    if ready != (me.get("payout_ready") or 0):
+        conn = db()
+        conn.execute("UPDATE users SET payout_ready=? WHERE id=?",
+                     (ready, me["id"]))
+        conn.commit()
+        conn.close()
+    if ready:
+        _connect_mark("ready")
+    return ready
+
+
+def _payout_status_text(pr):
+    """One payout_requests row -> the streamer's plain-English
+    status (wallet page 'Your cash-outs' list)."""
+    st = pr["status"]
+    if st == "pending":
+        return "⏳ Waiting for approval"
+    if st == "sending":
+        return "💸 Sending to your bank…"
+    if st == "declined":
+        return "↩️ Declined — tickets returned"
+    if st == "paid":
+        if pr.get("method") == "stripe":
+            return ("💸 Sent to your bank — lands in ~2 business "
+                    "days")
+        return "✅ Paid"
+    return st
+
+
+@app.post("/payouts/setup")
+async def payouts_setup(request: Request):
+    """Start (or resume) the streamer's Stripe Express onboarding:
+    create the connected account on first use, then hand the user a
+    fresh Stripe-hosted onboarding link. ANY Stripe failure lands
+    back on /tickets?setup=unavailable with a friendly state — the
+    raw error is logged server-side only, never leaked."""
+    user, err = require_login(request)
+    if err:
+        return err
+    if not stripe_enabled():
+        return redir("/tickets?setup=unavailable")
+    me = get_user(user["id"]) or {}
+    acct_id = me.get("stripe_acct_id")
+    base = str(request.base_url).rstrip("/")
+    try:
+        if not acct_id:
+            resp = _stripe_api("POST", "/v1/accounts", {
+                "type": "express",
+                "country": "US",
+                "email": me.get("email") or "",
+                "capabilities[transfers][requested]": "true",
+                "business_type": "individual",
+            })
+            acct_id = resp.get("id")
+            if not acct_id:
+                raise RuntimeError("Stripe returned no account id")
+            conn = db()
+            conn.execute(
+                "UPDATE users SET stripe_acct_id=? WHERE id=?",
+                (acct_id, user["id"]))
+            conn.commit()
+            conn.close()
+            # A creation success is the proof Connect is live for
+            # us — cache it for the owner panel's capability line.
+            _connect_mark("ready")
+        link = _stripe_api("POST", "/v1/account_links", {
+            "account": acct_id,
+            "type": "account_onboarding",
+            "return_url": base + "/tickets?setup=done",
+            "refresh_url": base + "/tickets?setup=retry",
+        })
+        url = link.get("url")
+        if not url:
+            raise RuntimeError("Stripe returned no onboarding link")
+    except Exception as e:
+        print(f"[payouts] setup failed for user {user['id']}: {e}")
+        if not acct_id:
+            # Creation itself failed — that's the capability signal
+            # (until the owner's verification lands, this is the
+            # expected Connect-not-enabled refusal).
+            _connect_mark("blocked", _stripe_err_class(e))
+        return redir("/tickets?setup=unavailable")
+    return RedirectResponse(url, status_code=303)
+
+
+@app.post("/payouts/update")
+async def payouts_update(request: Request):
+    """Send a payout-ready streamer to their Stripe Express
+    dashboard — bank details live at Stripe, never here."""
+    user, err = require_login(request)
+    if err:
+        return err
+    me = get_user(user["id"]) or {}
+    if not (me.get("stripe_acct_id") and me.get("payout_ready")):
+        return redir("/tickets",
+                     "Bank payouts aren't ready yet — finish the "
+                     "setup first.")
+    try:
+        link = _stripe_api(
+            "POST",
+            f"/v1/accounts/{me['stripe_acct_id']}/login_links")
+        url = link.get("url")
+        if not url:
+            raise RuntimeError("Stripe returned no login link")
+    except Exception as e:
+        print(f"[payouts] login link failed for user "
+              f"{user['id']}: {e}")
+        return redir("/tickets",
+                     "Couldn't open your Stripe bank page just "
+                     "now — try again in a bit.")
+    return RedirectResponse(url, status_code=303)
 
 
 def _stripe_sig_ok(raw_body, sig_header, secret):
@@ -11732,9 +11977,11 @@ async def owner_dashboard(request: Request):
     }
     # --- live tickets: payout queue (pending first) + money row ---
     prow_orders = conn.execute(
-        "SELECT pr.*, u.name AS user_name, u.email AS user_email "
+        "SELECT pr.*, u.name AS user_name, u.email AS user_email, "
+        "u.payout_ready AS user_payout_ready "
         "FROM payout_requests pr LEFT JOIN users u ON u.id=pr.user_id "
-        "ORDER BY CASE pr.status WHEN 'pending' THEN 0 ELSE 1 END, "
+        "ORDER BY CASE WHEN pr.status IN ('pending','sending') "
+        "THEN 0 ELSE 1 END, "
         "pr.created_at DESC LIMIT 50").fetchall()
     payouts = [{
         "id": r["id"], "user_id": r["user_id"],
@@ -11743,6 +11990,9 @@ async def owner_dashboard(request: Request):
         "tickets": r["tickets"],
         "dollars": _money(r["dollars_cents"]),
         "payout_note": r["payout_note"], "status": r["status"],
+        "method": r["method"],
+        "stripe_transfer_id": r["stripe_transfer_id"],
+        "user_payout_ready": bool(r["user_payout_ready"]),
         "created_at": fancy_time(r["created_at"])}
         for r in prow_orders]
     tickets_sold = conn.execute(
@@ -11753,12 +12003,12 @@ async def owner_dashboard(request: Request):
     ).fetchone()["s"]
     held = conn.execute(
         "SELECT COALESCE(SUM(tickets),0) s FROM payout_requests "
-        "WHERE status='pending'").fetchone()["s"]
+        "WHERE status IN ('pending','sending')").fetchone()["s"]
     money_stats = {
         "tickets_sold": tickets_sold,
         "liability": _money(_earned_dollars(earned_out + held)),
         "payouts_pending": sum(1 for p in payouts
-                               if p["status"] == "pending")}
+                               if p["status"] in ("pending", "sending"))}
 
     conn.close()
     return render(request, "owner/dashboard.html", {
@@ -11766,7 +12016,8 @@ async def owner_dashboard(request: Request):
         "flags": flags, "pages": pages, "stats": stats,
         "verifications": verifications,
         "live_now": live_now, "live_recent": live_recent,
-        "payouts": payouts, "money_stats": money_stats})
+        "payouts": payouts, "money_stats": money_stats,
+        "connect_state": _connect_state()})
 
 
 @app.post("/owner/flag/{fid}/dismiss")
@@ -11939,6 +12190,111 @@ async def owner_verify_decline(request: Request, rid: int):
     return redir("/owner")
 
 
+@app.post("/owner/payouts/{pid}/send")
+async def owner_payout_send(request: Request, pid: int):
+    """Owner approves a cash-out AND sends it: a Stripe Transfer to
+    the streamer's Express account (their bank). Only for pending
+    requests whose streamer is payout_ready.
+
+    Idempotency (the double-send guard): the request is claimed
+    'pending' -> 'sending' in ONE guarded UPDATE before Stripe is
+    called, so a double-click / second tab can never create two
+    transfers — every decision path (paid / declined / send) only
+    acts on 'pending'. Outcomes:
+    - Transfer created: status 'paid', method 'stripe', transfer id
+      stored, the usual 0-delta cashout_paid audit row. Balances do
+      NOT move (tickets were held at request time).
+    - Stripe definitively refuses (HTTP error): the claim reverts
+      to 'pending' — no transfer exists, so the owner can safely
+      decide again, including paying by hand.
+    - Stripe doesn't answer (network/timeout): the outcome is
+      UNKNOWN, so the request stays 'sending' — stuck VISIBLE rather
+      than silently re-sendable; the owner checks Stripe first.
+    """
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    pr = conn.execute(
+        "SELECT pr.*, u.stripe_acct_id AS acct, "
+        "u.payout_ready AS ready FROM payout_requests pr "
+        "LEFT JOIN users u ON u.id=pr.user_id WHERE pr.id=?",
+        (pid,)).fetchone()
+    if not pr or pr["status"] != "pending":
+        conn.close()
+        return redir("/owner", "That cash-out was already decided.")
+    if not pr["ready"] or not pr["acct"]:
+        conn.close()
+        return redir("/owner",
+                     "That streamer hasn't finished bank setup — "
+                     "pay this one by hand instead.")
+    cur = conn.execute(
+        "UPDATE payout_requests SET status='sending' WHERE id=? "
+        "AND status='pending'", (pid,))
+    claimed = cur.rowcount == 1
+    conn.commit()
+    conn.close()
+    if not claimed:
+        return redir("/owner", "That cash-out was already decided.")
+    transfer_id = None
+    refused = None
+    try:
+        tr = _stripe_api("POST", "/v1/transfers", {
+            "amount": str(pr["dollars_cents"]),
+            "currency": "usd",
+            "destination": pr["acct"],
+            "description": f"HERE payout request {pid}",
+        })
+        transfer_id = tr.get("id")
+    except RuntimeError as e:
+        # _stripe_api only raises RuntimeError when Stripe ANSWERED
+        # with an error — the refusal is definitive, no transfer.
+        refused = e
+    except Exception as e:
+        # Network/timeout: no definitive answer (handled below).
+        print(f"[payouts] transfer outcome UNKNOWN for request "
+              f"{pid}: {e!r}")
+    if refused is not None:
+        conn = db()
+        conn.execute(
+            "UPDATE payout_requests SET status='pending' WHERE "
+            "id=? AND status='sending'", (pid,))
+        conn.commit()
+        conn.close()
+        cls = _stripe_err_class(refused)
+        if "switched on" in cls:
+            _connect_mark("blocked", cls)
+        print(f"[payouts] transfer for request {pid} refused: "
+              f"{refused}")
+        return redir("/owner",
+                     f"Stripe refused the send: {cls} — request "
+                     f"{pid} is still pending; you can pay by hand "
+                     "instead.")
+    if not transfer_id:
+        return redir("/owner",
+                     f"The send for request {pid} was attempted but "
+                     "Stripe didn't answer — check Stripe before "
+                     "doing anything else. The request is marked "
+                     "'sending' and can't be sent twice.")
+    stamp = now_iso()
+    conn = db()
+    conn.execute(
+        "UPDATE payout_requests SET status='paid', method='stripe', "
+        "stripe_transfer_id=?, decided_at=? WHERE id=? AND "
+        "status='sending'", (transfer_id, stamp, pid))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, note, "
+        "created_at) VALUES(?,?,?,?,?)",
+        (pr["user_id"], "cashout_paid", 0,
+         _money(pr["dollars_cents"]), stamp))
+    conn.commit()
+    conn.close()
+    _connect_mark("ready")
+    return redir("/owner",
+                 f"💸 Sent {_money(pr['dollars_cents'])} to the "
+                 f"streamer's bank (request {pid}).")
+
+
 @app.post("/owner/payouts/{pid}/paid")
 async def owner_payout_paid(request: Request, pid: int):
     """Owner marks a cash-out paid (he sent the money by hand). The
@@ -11954,7 +12310,7 @@ async def owner_payout_paid(request: Request, pid: int):
         stamp = now_iso()
         conn.execute(
             "UPDATE payout_requests SET status='paid', "
-            "decided_at=? WHERE id=?", (stamp, pid))
+            "method='manual', decided_at=? WHERE id=?", (stamp, pid))
         conn.execute(
             "INSERT INTO ticket_txns(user_id, kind, tickets, note, "
             "created_at) VALUES(?,?,?,?,?)",
