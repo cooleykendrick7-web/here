@@ -56,6 +56,7 @@ table.admin tr:last-child td{border-bottom:none}
   <div class="stat-card"><div class="num">{{ money_stats.tickets_sold }} 🎟️</div><div class="lbl">Tickets sold (all time)</div></div>
   <div class="stat-card"><div class="num">{{ money_stats.liability }}</div><div class="lbl">Owed to streamers if all cashed out</div></div>
   <div class="stat-card"><div class="num">{{ money_stats.payouts_pending }}</div><div class="lbl">Payouts waiting</div></div>
+  <div class="stat-card"><div class="num">{{ pw_help_pending }}</div><div class="lbl">Password help waiting</div></div>
 </div>
 
 <section>
@@ -100,6 +101,40 @@ table.admin tr:last-child td{border-bottom:none}
         </tr>
         {% else %}
         <tr><td colspan="9" class="empty">No cash-out requests yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>🔐 Password help</h2>
+  <p style="color:#9a9a9a;font-size:13px;margin-bottom:10px">People who asked for a password reset. When email sending is on, links go out by themselves (<strong>emailed</strong>). When it's off — or a send failed — the request waits here as <strong>queued</strong>: tap <strong>Show reset link</strong>, email that link to the person <strong>at the address on their account (never any other address)</strong>, then tap <strong>Mark hand-sent</strong>. A reset signs the account out everywhere and works once, for 1 hour. Support mailbox: wearehereyouarehere@gmail.com.</p>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>ID</th><th>User</th><th>Account email</th><th>Asked</th><th>Link dies</th><th>State</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for r in pw_resets %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td>{{ r.user_name|e }}</td>
+          <td>{{ r.user_email|e }}</td>
+          <td>{{ r.created_at|e }}</td>
+          <td>{{ r.expires_at|e }}</td>
+          <td><span class="status-pill">{{ r.state|e }}</span></td>
+          <td style="white-space:nowrap">
+            {% if r.can_act %}
+            <form class="inline-form" action="/owner/pwreset/{{ r.id }}/link" method="post">
+              <button type="submit" class="btn">Show reset link</button>
+            </form>
+            <form class="inline-form" action="/owner/pwreset/{{ r.id }}/hand-sent" method="post" onsubmit="return confirm('Mark this reset as hand-sent to {{ r.user_email|e }}? Only tap AFTER you emailed the link to that exact address.');">
+              <button type="submit" class="btn-ghost">Mark hand-sent</button>
+            </form>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">Nobody is waiting on password help.</td></tr>
         {% endfor %}
       </tbody>
     </table>
