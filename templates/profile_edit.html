@@ -66,11 +66,11 @@
         {% endfor %}
       </div>
     </div>
-    <div class="field">
-      <label for="spot-opacity">Bubble see-through — <span id="spot-opacity-val">{{ profile.spot_card_opacity if profile.spot_card_opacity is not none else 55 }}%</span> solid</label>
-      <input type="range" id="spot-opacity" name="spot_card_opacity" min="30" max="100" step="1" value="{{ profile.spot_card_opacity if profile.spot_card_opacity is not none else 55 }}">
-      <div style="font-size:12px;color:var(--muted);margin-top:2px">100% = solid bubbles · 30% = very see-through</div>
-    </div>
+    {# Build GLASS: the old "Bubble see-through" slider is GONE from
+       here — see-through is now the one unified Glass transparency
+       slider below (it drives these bubbles too). Your Spot keeps
+       the name + colors only. The stored spot_card_opacity tint
+       strength is preserved server-side when this form saves. #}
     <div class="field">
       <label>Preview — this is what visitors see</label>
       <div class="spot-preview" id="spot-preview"{% if profile.background %} style="background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,14,.58)),url('{{ profile.background|e }}')"{% endif %}>
@@ -97,14 +97,14 @@
 </div>
 
 <div class="card" id="boxes">
-  <div class="section-title">🪟 Box Transparency</div>
-  <p style="margin-top:8px;color:var(--muted)">This one is just for YOUR eyes — it changes how see-through the boxes are on your screen, on every page of HERE. It does not change what anybody else sees.</p>
-  <p style="margin-top:8px;color:var(--muted)">Lower = more see-through. This changes how boxes look on YOUR screen, everywhere on HERE.</p>
+  <div class="section-title">🪟 Glass transparency</div>
+  <p style="margin-top:8px;color:var(--muted)">This one is just for YOUR eyes — it sets how see-through the glass boxes and bubbles are on your screen, on every page of HERE: cards, posts, messages, menus, everything. It does not change what anybody else sees.</p>
+  <p style="margin-top:8px;color:var(--muted)">This is the old Box Transparency, widened — it now drives your Your Spot bubbles too, so there's just one slider for see-through. Until you save it, HERE uses the clean default glass.</p>
   <form action="/settings/boxes" method="post" style="margin-top:12px">
     <div class="field">
-      <label for="box-opacity">Box solidity — <span id="box-opacity-val">{{ profile.box_opacity if profile.box_opacity is not none else 100 }}%</span> solid</label>
-      <input type="range" id="box-opacity" name="box_opacity" min="30" max="100" step="1" value="{{ profile.box_opacity if profile.box_opacity is not none else 100 }}">
-      <div style="font-size:12px;color:var(--muted);margin-top:2px">100% = solid boxes · 30% = very see-through</div>
+      <label for="box-opacity">Glass transparency — <span id="box-opacity-val">{{ profile.box_opacity if profile.box_opacity is not none else 82 }}%</span> solid</label>
+      <input type="range" id="box-opacity" name="box_opacity" min="30" max="100" step="1" value="{{ profile.box_opacity if profile.box_opacity is not none else 82 }}">
+      <div style="font-size:12px;color:var(--muted);margin-top:2px">More clear ⟷ More solid · 100% = solid boxes · 30% = most see-through</div>
     </div>
     <div class="field">
       <label>Preview — this is how boxes look on your screen</label>
@@ -220,8 +220,10 @@
   var myName = {{ profile.name|tojson }};
   var textIn = document.getElementById('spot-text-color');
   var cardIn = document.getElementById('spot-card-color');
-  var opIn = document.getElementById('spot-opacity');
-  var opVal = document.getElementById('spot-opacity-val');
+  // Build GLASS: the Spot preview's see-through now follows the one
+  // unified Glass slider below (the old spot-opacity input is gone);
+  // fall back to the classic 0.55 tint when it isn't on the page.
+  var glassIn = document.getElementById('box-opacity');
   var pTitle = document.getElementById('spot-preview-title');
   var pCard = document.getElementById('spot-preview-card');
   var pMeta = document.getElementById('spot-preview-meta');
@@ -233,20 +235,23 @@
   }
   function update(){
     var rgb = hexRgb(cardIn.value);
-    var bg = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (opIn.value/100) + ')';
+    var bg = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (glassIn ? glassIn.value/100 : 0.55) + ')';
     pCard.style.background = bg;
     pBubble.style.background = bg;
     pCard.style.color = textIn.value;
     pMeta.style.color = textIn.value;
     pMeta.style.opacity = '.72';
-    opVal.textContent = opIn.value + '%';
     var n = nameIn.value.trim();
     pTitle.textContent = n ? n : myName;
   }
-  [nameIn, textIn, cardIn, opIn].forEach(function(el){
+  [nameIn, textIn, cardIn].forEach(function(el){
     el.addEventListener('input', update);
     el.addEventListener('change', update);
   });
+  if (glassIn){
+    glassIn.addEventListener('input', update);
+    glassIn.addEventListener('change', update);
+  }
   document.querySelectorAll('.spot-swatches').forEach(function(row){
     var target = document.getElementById(row.getAttribute('data-for'));
     row.querySelectorAll('.spot-swatch').forEach(function(btn){

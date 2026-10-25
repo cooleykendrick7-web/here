@@ -40,6 +40,12 @@
   --border:#e4e6eb;
   --green:#31a24c;
   --yellow:#ffd400;
+  /* Build GLASS: the unified glass alpha. render() overrides it per
+     viewer on the <body> style (their saved Glass transparency, or
+     the 0.82 default); the main surfaces across this stylesheet fill
+     with rgba(..., var(--glass-alpha)) so ONE setting drives the
+     whole site's glass. */
+  --glass-alpha:0.82;
 }
 *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 body{background:var(--bg);color:#1c1e21}
@@ -48,7 +54,7 @@ ul{list-style:none}
 img{max-width:100%}
 
 /* ===== fixed black header ===== */
-.topbar{position:fixed;top:0;left:0;width:100%;height:60px;background:var(--black);
+.topbar{position:fixed;top:0;left:0;width:100%;height:60px;background:rgba(17,17,17,var(--glass-alpha));
   display:flex;align-items:center;gap:14px;padding:0 16px;z-index:1000;
   box-shadow:0 1px 4px rgba(0,0,0,.4)}
 .logo{font-size:30px;font-weight:900;color:var(--red);letter-spacing:-1px;flex-shrink:0}
@@ -58,7 +64,7 @@ img{max-width:100%}
 .search-form input::placeholder{color:#9a9a9a}
 .search-form input:focus{border-color:var(--red)}
 .topnav{margin-left:auto;display:flex;align-items:center;gap:8px}
-.nav-ic{position:relative;width:42px;height:42px;border-radius:50%;background:#2b2b2b;
+.nav-ic{position:relative;width:42px;height:42px;border-radius:50%;background:rgba(70,70,78,var(--glass-alpha));
   display:flex;align-items:center;justify-content:center;font-size:20px}
 .nav-ic:hover{background:#3d3d3d}
 .badge{position:absolute;top:-5px;right:-5px;background:var(--red);color:#fff;font-size:11px;
@@ -90,7 +96,8 @@ img{max-width:100%}
 .bolt-label{font-size:13px;color:var(--muted);margin-left:3px;font-weight:500}
 
 /* ===== cards, avatars, buttons ===== */
-.card{background:var(--card);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.1);
+.card{background:rgba(255,255,255,var(--glass-alpha));border:1px solid rgba(255,255,255,.55);
+  border-radius:8px;box-shadow:0 4px 24px rgba(13,16,23,.08);
   padding:15px;margin-bottom:16px}
 .avatar{border-radius:50%;object-fit:cover;flex-shrink:0;background:#ccc;display:block}
 .av-ph{border-radius:50%;background:var(--red);color:#fff;font-weight:800;flex-shrink:0;
@@ -102,7 +109,7 @@ img{max-width:100%}
 .btn{display:inline-block;background:var(--red);color:#fff;border:none;border-radius:6px;
   padding:9px 18px;font-size:15px;font-weight:700;cursor:pointer}
 .btn:hover{background:var(--red-dark)}
-.btn-ghost{display:inline-block;background:#e4e6eb;color:#1c1e21;border:none;border-radius:6px;
+.btn-ghost{display:inline-block;background:rgba(228,230,235,var(--glass-alpha));color:#1c1e21;border:none;border-radius:6px;
   padding:8px 14px;font-size:14px;font-weight:600;cursor:pointer}
 .btn-ghost:hover{background:#d5d8de}
 .btn-danger{display:inline-block;background:#fff;color:var(--red);border:1px solid var(--red);
@@ -139,18 +146,23 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
    render() puts the boxes-glass class + a --box-alpha var on <body>
    and the rules below make the site's boxes see-through AT THAT
    ALPHA — on the viewer's screen only; nobody else's view changes.
-   At 100 (the default) neither the class nor the var is emitted and
-   pages render pixel-identical to before this feature.
+   At a SAVED 100 neither the class nor the var is emitted (the
+   viewer chose solid). Build GLASS note: these body.boxes-glass
+   rules are now just the saved-preference layer — the base surface
+   rules across this stylesheet fill with var(--glass-alpha)
+   directly, which render() ALWAYS emits (the viewer's saved value,
+   or the 0.82 default glass when they never chose), so the whole
+   site is glass for everyone, saved or not.
    Spot interplay: a viewer's own Your Spot card tint is a separate,
    deliberate color choice, so .card keeps the spot background when
    the viewer has one (the :not(.viewer-spot-card) guards below) —
    and the spot rules themselves multiply their alpha by
-   var(--box-alpha,1), so transparency still dims a spot card
+   var(--glass-alpha,1), so transparency still dims a spot card
    proportionally instead of replacing its color. Profile pages are
    ruled by the profile owner's .spot-scope (not guarded here, and
    profile routes don't blank viewer_box_alpha): the generic boxes
    below still go glass there, while spot-scoped cards keep the
-   owner's tint, likewise multiplied by --box-alpha. */
+   owner's tint, likewise multiplied by --glass-alpha. */
 body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass table.admin{background:rgba(255,255,255,var(--box-alpha))}
 body.boxes-glass:not(.viewer-spot-card) .card{background:rgba(255,255,255,var(--box-alpha))}
 body.boxes-glass:not(.viewer-spot-card) .comment .cbub{background:rgba(240,242,245,var(--box-alpha))}
@@ -163,6 +175,14 @@ body.boxes-glass #incoming-sheet, body.boxes-glass #request-sheet{background:rgb
 body.boxes-glass .kind-tab, body.boxes-glass .picker-chip, body.boxes-glass .poll-opt-btn{background:rgba(245,246,247,var(--box-alpha))}
 body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
 @supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ body.boxes-glass .card, body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass .topbar, body.boxes-glass .mobmenu, body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet {backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)} }
+
+/* Build GLASS: the glass blur applies to the LARGE surfaces for
+   EVERYONE now (the fills already carry --glass-alpha above) — same
+   selector set as the boxes-glass block, minus the class gate.
+   Small bubbles and chips (.cbub, .msg-theirs, chips) intentionally
+   get NO backdrop blur: dozens of them on screen would jank a phone;
+   their translucent fill alone reads as glass. */
+@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ .card, .page-card, .stat-card, .topbar, .mobmenu, .aud-popup, #cmenu-sheet, #dmenu-sheet {backdrop-filter:blur(6px) saturate(1.15);-webkit-backdrop-filter:blur(6px) saturate(1.15)} }
 
 /* Box Transparency settings preview (Settings → Box Transparency) */
 .box-preview{border-radius:10px;padding:14px;margin-top:6px;background:linear-gradient(135deg,#d41f2e,#7a0f18 45%,#141419)}
@@ -188,20 +208,20 @@ body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
 .spot-owner-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:3px}
 .spot-real-name{font-size:17px;font-weight:700}
 body .spot-scope.spot-has-card .card{
-  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--box-alpha,1)));
+  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--glass-alpha,1)));
   backdrop-filter:blur(10px) saturate(1.25);-webkit-backdrop-filter:blur(10px) saturate(1.25)}
 body .spot-scope.spot-has-card .comment .cbub{
-  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--box-alpha,1)));
+  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--glass-alpha,1)));
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 body .spot-scope.spot-has-text .card{color:var(--spot-text)}
 body .spot-scope.spot-has-text .card .post-meta,
 body .spot-scope.spot-has-text .card .comment .cmeta,
 body .spot-scope.spot-has-text .card .with-line{color:var(--spot-text);opacity:.72}
 body.viewer-spot-card .card{
-  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--box-alpha,1)));
+  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--glass-alpha,1)));
   backdrop-filter:blur(10px) saturate(1.25);-webkit-backdrop-filter:blur(10px) saturate(1.25)}
 body.viewer-spot-card .comment .cbub{
-  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--box-alpha,1)));
+  background:rgba(var(--spot-card-rgb,232,232,238),calc(var(--spot-card-alpha,.55) * var(--glass-alpha,1)));
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 body.viewer-spot-text .card{color:var(--spot-text)}
 body.viewer-spot-text .card .post-meta,
@@ -224,12 +244,12 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 
 /* ===== flash ===== */
 .flashmsg{max-width:1200px;margin:70px auto 0;padding:0 16px}
-.flashmsg div{background:var(--red-soft);border:1px solid var(--red);color:var(--red-dark);
+.flashmsg div{background:rgba(253,238,240,var(--glass-alpha));border:1px solid var(--red);color:var(--red-dark);
   border-radius:8px;padding:10px 14px;font-weight:600}
 
 /* ===== composer ===== */
 .kind-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
-.kind-tab{border:1px solid var(--border);background:#f5f6f7;border-radius:20px;padding:7px 13px;
+.kind-tab{border:1px solid var(--border);background:rgba(245,246,247,var(--glass-alpha));border-radius:20px;padding:7px 13px;
   font-size:13px;font-weight:600;cursor:pointer;color:var(--muted)}
 .kind-tab.active{background:var(--red);border-color:var(--red);color:#fff}
 .composer textarea{width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;
@@ -242,7 +262,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .composer .post-row{margin-top:12px;text-align:right}
 /* ===== tag / hide-from pickers ===== */
 .picker-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
-.picker-chip{display:inline-flex;align-items:center;gap:5px;background:#f5f6f7;
+.picker-chip{display:inline-flex;align-items:center;gap:5px;background:rgba(245,246,247,var(--glass-alpha));
   border:1px solid var(--border);border-radius:16px;padding:5px 11px;font-size:13px;
   font-weight:600;cursor:pointer;color:#333}
 .picker-chip input{accent-color:var(--red)}
@@ -250,7 +270,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .with-line a{color:var(--red);font-weight:600}
 /* ===== @ tag autocomplete (composer) ===== */
 .composer-body-wrap{position:relative}
-.tag-suggest{position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid var(--border);
+.tag-suggest{position:absolute;top:100%;left:0;right:0;background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);
   border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.2);z-index:70;max-height:280px;overflow-y:auto;margin-top:4px}
 .tag-suggest[hidden]{display:none}
 .tag-item{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;min-height:48px}
@@ -266,7 +286,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .aud-wrap{position:relative;display:inline-block}
 .aud-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
 .aud-popup{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,340px);
-  max-height:82vh;background:#fff;border:1px solid var(--border);
+  max-height:82vh;background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);
   border-radius:12px;padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left;
   display:flex;flex-direction:column}
 .aud-popup[hidden]{display:none}
@@ -281,6 +301,28 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
   border-radius:8px;font-size:13px;margin-bottom:10px;background:#f5f5f5;color:#1c1e21}
 .share-sheet .share-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
 .share-sheet .share-row a{text-decoration:none}
+/* ===== floating mini live player (Build GLASS) =====
+   A small draggable glass tile that keeps a minimized live playing
+   (an <iframe> of /live/{id}?embed=1) on every app page. Rendered
+   hidden; the script at the end of <body> only shows it when
+   localStorage here_mini_live is set, and never on the live page
+   itself, /owner, or auth pages. z-index 1600: above page content
+   and the topbar, below the modal sheets (2000) and call UI. */
+#mini-live{position:fixed;right:12px;bottom:84px;width:min(240px,46vw);z-index:1600;
+  background:rgba(14,16,20,0.88);border:1px solid rgba(255,255,255,0.25);border-radius:14px;
+  overflow:hidden;box-shadow:0 12px 34px rgba(0,0,0,0.45)}
+#mini-live[hidden]{display:none}
+.mini-live-head{display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:grab;
+  color:#fff;touch-action:none;user-select:none;-webkit-user-select:none}
+.mini-live-head:active{cursor:grabbing}
+.mini-live-dot{color:#ff4d5e;font-size:10px;font-weight:800;letter-spacing:.04em;flex:none}
+.mini-live-name{flex:1;min-width:0;font-size:12px;font-weight:700;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.mini-live-head button{flex:none;width:26px;height:26px;border-radius:50%;
+  border:1px solid rgba(255,255,255,0.25);background:rgba(255,255,255,0.12);color:#fff;
+  font-size:13px;line-height:1;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;padding:0}
+#mini-live-frame{display:block;width:100%;aspect-ratio:4/3;border:0;background:#000}
 /* ===== composer eyeball (hide-from picker behind a 👁 button, before posting) ===== */
 .composer-aud{position:relative;display:inline-block;margin-top:10px}
 
@@ -290,7 +332,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
    aud sheet but full-bleed: remote video fills it, local preview floats
    in the corner, controls ride along the bottom. */
 #incoming-sheet,#request-sheet{position:fixed;top:70px;left:50%;transform:translateX(-50%);
-  width:min(94vw,420px);background:var(--black);color:#fff;border:2px solid var(--red);
+  width:min(94vw,420px);background:rgba(17,17,17,var(--glass-alpha));color:#fff;border:2px solid var(--red);
   border-radius:14px;padding:14px 16px;z-index:3000;box-shadow:0 12px 34px rgba(0,0,0,.55)}
 #incoming-sheet[hidden],#request-sheet[hidden]{display:none}
 .inc-row{display:flex;align-items:center;gap:12px}
@@ -419,7 +461,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 /* post polls (games pack): tappable options before voting, result
    bars after (or for the author) — my pick highlighted red */
 .post-poll{margin:4px 0 12px;display:flex;flex-direction:column;gap:7px}
-.poll-opt-btn{text-align:left;background:#f5f6f7;border:1px solid var(--border);
+.poll-opt-btn{text-align:left;background:rgba(245,246,247,var(--glass-alpha));border:1px solid var(--border);
   border-radius:10px;padding:10px 13px;font-size:15px;font-weight:600;cursor:pointer;width:100%}
 .poll-opt-btn:hover{border-color:var(--red);background:var(--red-soft)}
 .poll-row{position:relative;border:1px solid var(--border);border-radius:10px;
@@ -608,7 +650,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .post-music-player iframe{width:100%;height:200px;display:block;border:0}
 /* ===== reaction picker ===== */
 .react-wrap{position:relative;display:inline-block}
-.react-picker{position:absolute;bottom:135%;left:0;background:#fff;border:1px solid var(--border);
+.react-picker{position:absolute;bottom:135%;left:0;background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);
   border-radius:24px;padding:6px 10px;display:flex;gap:4px;box-shadow:0 4px 14px rgba(0,0,0,.18);z-index:60}
 .react-picker[hidden]{display:none}
 .react-picker button{background:none;border:none;font-size:24px;cursor:pointer;padding:2px 4px}
@@ -618,7 +660,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 
 /* ===== comments ===== */
 .comment{display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--border)}
-.comment .cbub{background:#f0f2f5;border-radius:12px;padding:8px 12px;min-width:0}
+.comment .cbub{background:rgba(240,242,245,var(--glass-alpha));border-radius:12px;padding:8px 12px;min-width:0}
 .comment .cbub .cnm{font-weight:700;font-size:13px}
 .comment .cbub .ctxt{font-size:14px;white-space:pre-wrap;word-wrap:break-word}
 .comment .cmeta{font-size:11px;color:var(--muted);margin-top:3px}
@@ -648,7 +690,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 #cmenu-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
 #cmenu-backdrop[hidden]{display:none}
 #cmenu-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:min(92vw,340px);background:#fff;border:1px solid var(--border);border-radius:12px;
+  width:min(92vw,340px);background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);border-radius:12px;
   padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left}
 #cmenu-sheet[hidden]{display:none}
 #cmenu-confirm[hidden]{display:none}
@@ -666,7 +708,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 #dmenu-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
 #dmenu-backdrop[hidden]{display:none}
 #dmenu-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:min(92vw,340px);background:#fff;border:1px solid var(--border);border-radius:12px;
+  width:min(92vw,340px);background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);border-radius:12px;
   padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left}
 #dmenu-sheet[hidden]{display:none}
 #dmenu-confirm[hidden]{display:none}
@@ -686,7 +728,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .row-item .sub{font-size:12px;color:var(--muted)}
 .row-actions{display:flex;gap:6px;flex-shrink:0}
 .section-title{font-size:18px;font-weight:800;margin:0 0 6px}
-.unread-hl{background:var(--red-soft)}
+.unread-hl{background:rgba(253,238,240,var(--glass-alpha))}
 .field{margin-bottom:12px}
 .field label{display:block;font-size:14px;font-weight:600;margin-bottom:4px}
 .field input[type=text],.field input[type=email],.field input[type=password],.field textarea,.field select{
@@ -694,14 +736,14 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .field textarea{min-height:90px;resize:vertical}
 .msg-bub{max-width:75%;padding:9px 13px;border-radius:16px;font-size:15px;white-space:pre-wrap;word-wrap:break-word}
 .msg-mine{background:var(--red);color:#fff;border-bottom-right-radius:4px;margin-left:auto}
-.msg-theirs{background:#e4e6eb;color:#1c1e21;border-bottom-left-radius:4px}
+.msg-theirs{background:rgba(228,230,235,var(--glass-alpha));color:#1c1e21;border-bottom-left-radius:4px}
 .msg-row{display:flex;margin-bottom:8px}
 .msg-time{font-size:11px;color:var(--muted);margin-top:3px}
 .thread-box{max-height:55vh;overflow-y:auto;padding:6px 2px}
 
 /* ===== pages ===== */
 .pages-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
-.page-card{background:var(--card);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.1);overflow:hidden}
+.page-card{background:rgba(255,255,255,var(--glass-alpha));border:1px solid rgba(255,255,255,.55);border-radius:8px;box-shadow:0 4px 24px rgba(13,16,23,.08);overflow:hidden}
 .page-card .cover{height:110px;background:var(--red-soft);display:flex;align-items:center;justify-content:center;
   color:var(--red);font-size:36px;font-weight:900}
 .page-card .cover img{width:100%;height:100%;object-fit:cover}
@@ -717,10 +759,10 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 
 /* ===== owner dashboard ===== */
 .stat-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:18px}
-.stat-card{background:var(--card);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.1);padding:14px;text-align:center}
+.stat-card{background:rgba(255,255,255,var(--glass-alpha));border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.1);padding:14px;text-align:center}
 .stat-card .num{font-size:28px;font-weight:900;color:var(--red)}
 .stat-card .lbl{font-size:13px;color:var(--muted);font-weight:600}
-table.admin{width:100%;border-collapse:collapse;font-size:13px;background:var(--card);border-radius:8px;overflow:hidden}
+table.admin{width:100%;border-collapse:collapse;font-size:13px;background:rgba(255,255,255,var(--glass-alpha));border-radius:8px;overflow:hidden}
 table.admin th{background:var(--black);color:#fff;text-align:left;padding:9px 10px;font-size:12px}
 table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
 .flag-reasons{color:var(--red-dark);font-weight:600}
@@ -739,7 +781,7 @@ table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-a
    mobile list. Now: slim primary bar + grouped menu; the desktop
    sidebar below carries the same labeled groups.) ===== */
 .mobmenu{display:none;position:fixed;top:68px;right:12px;width:min(340px,calc(100vw - 24px));
-  max-height:calc(100dvh - 84px);overflow-y:auto;z-index:1001;background:var(--black);
+  max-height:calc(100dvh - 84px);overflow-y:auto;z-index:1001;background:rgba(17,17,17,var(--glass-alpha));
   border:1px solid #3d3d3d;border-radius:14px;padding:12px 14px 16px;
   box-shadow:0 12px 32px rgba(0,0,0,.55)}
 .mobmenu.open{display:block}
@@ -781,7 +823,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 </style>
 {% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}"{% if viewer_spot_style or viewer_box_alpha %} style="{% if viewer_spot_style %}{{ viewer_spot_style }};{% endif %}{% if viewer_box_alpha %}--box-alpha:{{ viewer_box_alpha }}{% endif %}"{% endif %}>
+<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
 
 <header class="topbar">
   <a class="logo" href="/home">HERE</a>
@@ -2531,6 +2573,20 @@ document.addEventListener('click', function(ev){
   });
 })();
 </script>
+{# Floating mini live player (Build GLASS): hidden by default; the
+   script after the share-sheet block shows it only when a minimized
+   live is stored, and never on the live page / owner / auth. #}
+<div id="mini-live" hidden>
+  <div class="mini-live-head" id="mini-live-head">
+    <span class="mini-live-dot">● LIVE</span>
+    <span class="mini-live-name" id="mini-live-name">Live</span>
+    <button type="button" id="mini-live-expand" title="Open the full live" aria-label="Open the full live">⤢</button>
+    <button type="button" id="mini-live-stop" title="Stop watching" aria-label="Stop watching">✕</button>
+  </div>
+  <iframe id="mini-live-frame" title="Mini live player"
+    allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+    allowfullscreen></iframe>
+</div>
 <script src="/static/r2upload.js" defer></script>
 {% block scripts %}{% endblock %}
 <script>
@@ -2631,6 +2687,101 @@ document.addEventListener('click', function (e) {
     }
   }
 });
+</script>
+<script>
+/* ===== Floating mini live player (Build GLASS) =====
+   When a viewer minimizes a live, the live page stores
+   localStorage here_mini_live = {id, title, host} and navigates
+   back; this script then floats the tile on every app page except
+   the live page itself, /owner and the auth pages. The tile embeds
+   /live/{id}?embed=1 (the normal viewer page, chrome-less), so the
+   viewer keeps counting as a real viewer. ⤢ opens the full live
+   (storage untouched — the live page is the full view); ✕ clears
+   the storage and unloads the iframe, which leaves the live like
+   any viewer closing the page. When the live ends, the embed posts
+   {hereMini:'ended'} and the tile clears itself. Drag is by the
+   header strip only (touch-action:none there), so the video area
+   never traps page scroll; the spot persists in here_mini_pos. */
+(function(){
+  var KEY = 'here_mini_live', POS = 'here_mini_pos';
+  var path = location.pathname;
+  if (path.indexOf('/live/') === 0 || path.indexOf('/owner') === 0 ||
+      path === '/login' || path === '/signup' || path === '/forgot' ||
+      path.indexOf('/reset') === 0) return;
+  var data = null;
+  try { data = JSON.parse(localStorage.getItem(KEY) || 'null'); }
+  catch (e) {}
+  if (!data || !data.id) return;
+  var tile = document.getElementById('mini-live');
+  var frame = document.getElementById('mini-live-frame');
+  var nameEl = document.getElementById('mini-live-name');
+  if (!tile || !frame || !nameEl) return;
+  function label(){
+    var t = (data.title || 'Live') + '';
+    nameEl.textContent = data.host ? (t + ' · ' + data.host) : t;
+    nameEl.title = nameEl.textContent;
+  }
+  label();
+  try {
+    var pos = JSON.parse(localStorage.getItem(POS) || 'null');
+    if (pos && typeof pos.x === 'number' && typeof pos.y === 'number'){
+      tile.style.left = Math.max(0, Math.min(pos.x,
+        window.innerWidth - 60)) + 'px';
+      tile.style.top = Math.max(0, Math.min(pos.y,
+        window.innerHeight - 40)) + 'px';
+      tile.style.right = 'auto'; tile.style.bottom = 'auto';
+    }
+  } catch (e) {}
+  tile.hidden = false;
+  frame.src = '/live/' + data.id + '?embed=1';
+  function stop(){
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    frame.src = 'about:blank';
+    tile.hidden = true;
+  }
+  document.getElementById('mini-live-stop').addEventListener('click',
+    stop);
+  document.getElementById('mini-live-expand').addEventListener(
+    'click', function(){ location.href = '/live/' + data.id; });
+  window.addEventListener('message', function(e){
+    if (e.origin !== location.origin) return;
+    if (e.source !== frame.contentWindow) return;
+    var d = e.data || {};
+    if (d.hereMini === 'ended') stop();
+    if (d.hereMini === 'meta'){
+      if (d.title) data.title = d.title;
+      if (d.host) data.host = d.host;
+      label();
+    }
+  });
+  var head = document.getElementById('mini-live-head');
+  var drag = null;
+  head.addEventListener('pointerdown', function(e){
+    if (e.target.closest && e.target.closest('button')) return;
+    var r = tile.getBoundingClientRect();
+    drag = {dx: e.clientX - r.left, dy: e.clientY - r.top};
+    try { head.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  head.addEventListener('pointermove', function(e){
+    if (!drag) return;
+    var x = Math.max(0, Math.min(e.clientX - drag.dx,
+      window.innerWidth - 48));
+    var y = Math.max(0, Math.min(e.clientY - drag.dy,
+      window.innerHeight - 32));
+    tile.style.left = x + 'px'; tile.style.top = y + 'px';
+    tile.style.right = 'auto'; tile.style.bottom = 'auto';
+  });
+  function endDrag(){
+    if (!drag) return;
+    drag = null;
+    try {
+      localStorage.setItem(POS, JSON.stringify(
+        {x: tile.offsetLeft, y: tile.offsetTop}));
+    } catch (e) {}
+  }
+  head.addEventListener('pointerup', endDrag);
+  head.addEventListener('pointercancel', endDrag);
+})();
 </script>
 <script>
 /* Post polls (games pack): one delegated handler for every poll
