@@ -612,6 +612,20 @@ def init_db():
     # box_opacity drives (100 then means solid BY CHOICE). ---
     if "glass_set" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN glass_set INTEGER DEFAULT 0")
+    # --- Build LOOKS: the look scheme + surface/accent colors.
+    # look_scheme: 'glass' (default for everybody) / 'solid' / 'mix'.
+    # look_surface / look_accent: #rrggbb or NULL (unset = theme
+    # default). One-time backfill: anyone who had already CHOSEN a
+    # solidity under Build GLASS (glass_set=1) was effectively living
+    # in Mix, so their scheme starts there; everyone else is Glass. ---
+    if "look_scheme" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN look_scheme TEXT "
+                  "DEFAULT 'glass'")
+        c.execute("UPDATE users SET look_scheme='mix' WHERE glass_set=1")
+    if "look_surface" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN look_surface TEXT")
+    if "look_accent" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN look_accent TEXT")
     # --- hide-from-specific-people + post tags (safe on existing DBs) ---
     c.execute("""CREATE TABLE IF NOT EXISTS post_hidden_from (
         post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
@@ -1450,8 +1464,16 @@ def render(request: Request, name, ctx=None):
         v_style, v_classes = viewer_spot_for(u)
         ctx.setdefault("viewer_spot_style", v_style)
         ctx.setdefault("viewer_spot_classes", v_classes)
-        ctx.setdefault("viewer_box_alpha", viewer_box_alpha_for(u))
+        # Build LOOKS: the legacy --box-alpha layer IS the Mix
+        # scheme's mechanism now — it is emitted only for a Mix
+        # viewer (glass ignores the slider; solid is alpha 1).
+        ctx.setdefault("viewer_box_alpha",
+                       viewer_box_alpha_for(u)
+                       if look_scheme_for(u) == "mix" else "")
         ctx.setdefault("viewer_glass_alpha", glass_alpha_for(u))
+        ctx.setdefault("viewer_glass_rgb", look_rgb_str_for(u))
+        ctx.setdefault("viewer_look_accent", look_accent_for(u))
+        ctx.setdefault("viewer_look_classes", look_scope_class_for(u))
         ctx.setdefault("viewer_gold", is_gold_inviter(u["id"]))
     else:
         ctx["user"] = None
@@ -1464,6 +1486,9 @@ def render(request: Request, name, ctx=None):
         ctx.setdefault("viewer_spot_classes", "")
         ctx.setdefault("viewer_box_alpha", "")
         ctx.setdefault("viewer_glass_alpha", GLASS_DEFAULT_ALPHA)
+        ctx.setdefault("viewer_glass_rgb", look_rgb_str_for(None))
+        ctx.setdefault("viewer_look_accent", LOOK_DEFAULT_ACCENT)
+        ctx.setdefault("viewer_look_classes", "")
     ctx.setdefault("flash", request.query_params.get("flash", ""))
     return templates.TemplateResponse(request, name, ctx)
 
@@ -3183,7 +3208,11 @@ async def public_profile(request: Request, user_id: int):
                 "avatar": avatar_url(prof.get("avatar", "")),
                 "spot_name": (prof.get("spot_name") or "").strip(),
                 "follower_count": follower_count(user_id),
-                "following_count": following_count(user_id)}
+                "following_count": following_count(user_id),
+                # Build LOOKS: even logged-out visitors see the
+                # profile in its owner's look.
+                "look_style": look_scope_style_for(prof),
+                "look_classes": look_scope_class_for(prof)}
     og_image = (_abs_url(request, prof_ctx["avatar"])
                 if prof_ctx["avatar"] else "")
     return render(request, "public_profile.html", {
@@ -3351,7 +3380,32 @@ async def welcome_page(request: Request):
         "suggestions": _welcome_suggestions(user),
         "trending": _welcome_trending(user),
         "onboarded": bool(user.get("onboarded")),
+        # Build LOOKS: the 🎨 Pick your vibe preset cards.
+        "look_presets": look_preset_views(),
+        "look_scheme": look_scheme_for(user),
     })
+
+
+@app.post("/welcome/look")
+async def welcome_look(request: Request):
+    """🎨 Pick your vibe: one tap on a welcome preset card applies
+    that look to the (new) user immediately, through the same
+    apply_preset/apply_look path as Settings. Skipping the step —
+    or picking nothing — keeps the classic glass default."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    conn = db()
+    name = apply_preset(conn, user["id"], (form.get("preset") or "")
+                        .strip())
+    conn.commit()
+    conn.close()
+    if name:
+        return redir("/welcome",
+                     f"Look applied: {name} 🎨 Change it anytime in "
+                     "Settings → 🎨 My Look.")
+    return redir("/welcome")
 
 
 @app.post("/welcome/topics")
@@ -6469,13 +6523,203 @@ GLASS_DEFAULT_ALPHA = "0.82"
 
 
 def glass_alpha_for(u):
-    """The viewer's unified Glass alpha string for --glass-alpha."""
+    """The viewer's unified Glass alpha string for --glass-alpha.
+
+    Build LOOKS: the alpha now follows the viewer's look SCHEME —
+    glass -> the house default (0.82) regardless of the slider;
+    solid -> "1"; mix -> the saved slider value with the Build GLASS
+    semantics (never saved -> the default glass)."""
     if not u:
         return GLASS_DEFAULT_ALPHA
+    scheme = look_scheme_for(u)
+    if scheme == "solid":
+        return "1"
+    if scheme == "glass":
+        return GLASS_DEFAULT_ALPHA
+    # mix: the saved solidity drives, exactly as Build GLASS had it.
     if not _uget(u, "glass_set"):
         return GLASS_DEFAULT_ALPHA
     a = viewer_box_alpha_for(u)
     return a if a else "1"
+
+
+# --- Build LOOKS: schemes, surface/accent colors, presets -----------
+# A "look" is: a scheme (glass / solid / mix), an optional surface
+# color (tints the glass; IS the card color when solid) and an
+# optional accent color (primary buttons, active states, content
+# links). Storage: users.look_scheme / look_surface / look_accent.
+# Emitted per viewer as --glass-alpha + --glass-rgb + --look-accent
+# on <body> (render ctx), and per profile owner on the .spot-scope.
+LOOK_SCHEMES = ("glass", "solid", "mix")
+LOOK_DEFAULT_ACCENT = "#d41f2e"          # HERE red
+LOOK_DEFAULT_RGB = (255, 255, 255)       # the glass fills' own white
+
+
+def look_scheme_for(u):
+    """The user's effective look scheme. A row whose stored value is
+    missing/invalid falls back to the Build GLASS semantics: having
+    chosen a solidity (glass_set) means Mix, otherwise Glass."""
+    s = str(_uget(u, "look_scheme") or "").strip().lower()
+    if s in LOOK_SCHEMES:
+        return s
+    return "mix" if _uget(u, "glass_set") else "glass"
+
+
+def _look_surface_hex(u):
+    """The user's surface color as a valid lowercase #rrggbb, or None."""
+    v = str(_uget(u, "look_surface") or "").strip().lower()
+    return v if _spot_hex_ok(v) else None
+
+
+def _look_accent_hex(u):
+    """The user's accent color as valid #rrggbb, or None (= HERE red)."""
+    v = str(_uget(u, "look_accent") or "").strip().lower()
+    return v if _spot_hex_ok(v) else None
+
+
+def look_rgb_for(u):
+    """(r, g, b) behind --glass-rgb: the surface color when set, else
+    the exact white triplet the glass fills have always used — so an
+    unset look renders pixel-identical to before."""
+    surf = _look_surface_hex(u)
+    return _hex_to_rgb(surf) if surf else LOOK_DEFAULT_RGB
+
+
+def look_rgb_str_for(u):
+    r, g, b = look_rgb_for(u)
+    return f"{r},{g},{b}"
+
+
+def look_accent_for(u):
+    return _look_accent_hex(u) or LOOK_DEFAULT_ACCENT
+
+
+def _hex_luminance(rgb):
+    """Relative luminance (sRGB coefficients) of an (r, g, b) triplet,
+    0.0 (black) .. 1.0 (white). Drives the readability guardrail."""
+    r, g, b = (c / 255.0 for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def look_scope_class_for(u):
+    """The readability-guardrail class for a scope carrying u's look:
+    'look-on-dark' when u's surface color is dark (text on the look
+    surfaces flips light), 'look-on-light' when it is light, and ""
+    when no surface is set (the scope renders exactly as today)."""
+    if not _look_surface_hex(u):
+        return ""
+    return ("look-on-light" if _hex_luminance(look_rgb_for(u)) >= 0.5
+            else "look-on-dark")
+
+
+def look_vars_for(u):
+    """(alpha, rgb_str, accent, scope_class) — the full look var set
+    for a user record (or the guest defaults for None)."""
+    if not u:
+        return (GLASS_DEFAULT_ALPHA, look_rgb_str_for(None),
+                LOOK_DEFAULT_ACCENT, "")
+    return (glass_alpha_for(u), look_rgb_str_for(u),
+            look_accent_for(u), look_scope_class_for(u))
+
+
+def look_scope_style_for(u):
+    """The owner's look vars as an inline style for a profile scope:
+    their --glass-alpha (by scheme), --glass-rgb and --look-accent,
+    always all three, so a viewer's own vars can never cascade into
+    somebody else's profile (the spot_scope_style_for discipline)."""
+    alpha, rgb, accent, _cls = look_vars_for(u)
+    return (f"--glass-alpha:{alpha};--glass-rgb:{rgb}"
+            f";--look-accent:{accent}")
+
+
+def apply_look(conn, user_id, values):
+    """Write a look to a user's row — THE one writer, shared by the
+    Settings My Look form, the preset cards, Steal This Look and the
+    welcome vibe picker. `values` may carry any of: scheme, surface,
+    accent, box_opacity, spot_text_color, spot_card_color. Only the
+    keys present are written. Colors validate as #rrggbb; an invalid
+    or empty color stores NULL (unset). box_opacity parses + clamps
+    to 30..100 and marks glass_set=1 (a chosen solidity)."""
+    sets, args = [], []
+
+    def _color(key, column):
+        if key in values:
+            v = values[key]
+            v = str(v).strip().lower() if v else None
+            sets.append(f"{column}=?")
+            args.append(v if _spot_hex_ok(v) else None)
+
+    if "scheme" in values:
+        s = str(values["scheme"] or "").strip().lower()
+        sets.append("look_scheme=?")
+        args.append(s if s in LOOK_SCHEMES else "glass")
+    _color("surface", "look_surface")
+    _color("accent", "look_accent")
+    _color("spot_text_color", "spot_text_color")
+    _color("spot_card_color", "spot_card_color")
+    if values.get("box_opacity") is not None:
+        try:
+            op = int(values["box_opacity"])
+        except (TypeError, ValueError):
+            op = None
+        if op is not None:
+            sets.append("box_opacity=?")
+            args.append(max(BOX_OPACITY_MIN, min(BOX_OPACITY_MAX, op)))
+            sets.append("glass_set=1")
+    if not sets:
+        return
+    args.append(user_id)
+    conn.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?", args)
+
+
+# Preset looks: one tap applies the whole bundle through apply_look.
+# surface/accent None = unset (theme default). Midnight Gold carries
+# Spot colors too — Ken's screenshot-2 look (solid near-black cards,
+# gold name) is a Spot text color as much as a scheme.
+LOOK_PRESETS = {
+    "classic": {"name": "Classic HERE Glass", "scheme": "glass",
+                "surface": None, "accent": None},
+    "midnight_gold": {"name": "Midnight Gold", "scheme": "solid",
+                      "surface": "#101010", "accent": "#d4af37",
+                      "spot_text_color": "#ffd700",
+                      "spot_card_color": "#101010"},
+    "ice": {"name": "Ice Glass", "scheme": "glass",
+            "surface": "#cfe8ff", "accent": "#38bdf8"},
+    "royal": {"name": "Royal Purple", "scheme": "mix", "box_opacity": 70,
+              "surface": "#2a1450", "accent": "#a78bfa"},
+    "money": {"name": "Money Green", "scheme": "solid",
+              "surface": "#0d2818", "accent": "#22c55e"},
+    "rose": {"name": "Rose Glow", "scheme": "glass",
+             "surface": "#3d1220", "accent": "#fb7185"},
+}
+LOOK_PRESET_ORDER = ["classic", "midnight_gold", "ice", "royal",
+                     "money", "rose"]
+_PRESET_KEYS = ("scheme", "surface", "accent", "box_opacity",
+                "spot_text_color", "spot_card_color")
+
+
+def apply_preset(conn, user_id, key):
+    """Apply a LOOK_PRESETS entry through apply_look. Returns the
+    preset's display name, or None for an unknown key."""
+    p = LOOK_PRESETS.get(key or "")
+    if not p:
+        return None
+    apply_look(conn, user_id, {k: p[k] for k in _PRESET_KEYS if k in p})
+    return p["name"]
+
+
+def look_preset_views():
+    """Preset cards for templates (Settings + welcome): the stored
+    values plus the swatch colors a card should paint with."""
+    out = []
+    for key in LOOK_PRESET_ORDER:
+        p = LOOK_PRESETS[key]
+        out.append({"key": key, "name": p["name"],
+                    "scheme": p["scheme"],
+                    "surface": p.get("surface"),
+                    "accent": p.get("accent") or LOOK_DEFAULT_ACCENT,
+                    "box_opacity": p.get("box_opacity")})
+    return out
 
 
 def _album_photos(viewer, owner_id, owner_on=False, limit=None):
@@ -6606,6 +6850,13 @@ async def profile(request: Request, uid: int):
         # into this profile — see spot_scope_style_for().
         "spot_style": spot_scope_style_for(prof),
         "spot_classes": spot_classes,
+        # Build LOOKS: the scope ALSO carries the OWNER's look vars
+        # (their scheme alpha, surface rgb, accent + readability
+        # class) — a visitor sees this profile in its owner's look,
+        # while their own chrome keeps their own look.
+        "look_style": look_scope_style_for(prof),
+        "look_classes": look_scope_class_for(prof),
+        "can_steal_look": bool(user["id"] != uid and not locked),
     }
     posts = []
     if not locked:
@@ -6655,6 +6906,53 @@ async def profile(request: Request, uid: int):
                    "viewer_spot_style": "", "viewer_spot_classes": ""})
 
 
+@app.post("/user/{uid}/steal-look")
+async def steal_look(request: Request, uid: int):
+    """🎨 Steal This Look: copy another user's look — scheme, surface
+    + accent colors, their blend solidity and their Spot COLORS — to
+    the caller's own row, through the shared apply_look writer. The
+    owner's spot NAME/title and their background photo are NOT looks
+    and never copy. Visibility matches the profile itself: a blocked
+    pair gets the unavailable page; a private profile the caller
+    can't fully view refuses. The owner is notified."""
+    user, err = require_login(request)
+    if err:
+        return err
+    prof = get_user(uid)
+    if not prof:
+        return redir("/home", "User not found.")
+    if user["id"] == uid:
+        return redir(f"/user/{uid}", "That's your own look 😄")
+    owner_on = is_owner(request)
+    if not owner_on and blocked_either_way(user["id"], uid):
+        return render(request, "profile_unavailable.html", {})
+    status = req_status(user["id"], uid)
+    locked = bool(prof.get("private_profile")) and not owner_on \
+        and status != "friends"
+    if locked:
+        return redir(f"/user/{uid}",
+                     "That look isn't up for grabs — "
+                     "the profile is private.")
+    values = {"scheme": look_scheme_for(prof),
+              "surface": prof.get("look_surface"),
+              "accent": prof.get("look_accent"),
+              "spot_text_color": prof.get("spot_text_color"),
+              "spot_card_color": prof.get("spot_card_color")}
+    if prof.get("glass_set") and prof.get("box_opacity") is not None:
+        values["box_opacity"] = prof.get("box_opacity")
+    conn = db()
+    apply_look(conn, user["id"], values)
+    conn.commit()
+    conn.close()
+    notify(uid, "look_steal",
+           f"{user['name']} stole your look 🎨",
+           f"/user/{user['id']}", actor_id=user["id"])
+    return redir(f"/user/{uid}",
+                 f"Look stolen from {prof['name']} 🎨 Colors + style "
+                 "are yours now — their background photo stays "
+                 "theirs.")
+
+
 @app.get("/user/{uid}/photos", response_class=HTMLResponse)
 async def user_photos(request: Request, uid: int):
     user, err = require_login(request)
@@ -6676,7 +6974,9 @@ async def user_photos(request: Request, uid: int):
            "is_self": user["id"] == uid,
            "is_private_locked": locked,
            "spot_style": spot_scope_style_for(prof),
-           "spot_classes": spot_classes}
+           "spot_classes": spot_classes,
+           "look_style": look_scope_style_for(prof),
+           "look_classes": look_scope_class_for(prof)}
     if locked:
         return render(request, "photos.html",
                       {"profile": ctx, "cover": [], "photos": [],
@@ -6746,7 +7046,12 @@ async def profile_edit_page(request: Request):
                     "box_opacity": (user.get("box_opacity")
                                     if user.get("glass_set")
                                     and user.get("box_opacity") is not None
-                                    else GLASS_DEFAULT_SOLIDITY)}})
+                                    else GLASS_DEFAULT_SOLIDITY),
+                    # Build LOOKS: the 🎨 My Look card's state.
+                    "look_scheme": look_scheme_for(user),
+                    "look_surface": user.get("look_surface") or "",
+                    "look_accent": user.get("look_accent") or "",
+                    "look_presets": look_preset_views()}})
 
 
 @app.post("/settings/status")
@@ -6869,12 +7174,60 @@ async def settings_boxes(request: Request):
                      "Box transparency needs a number from 30 to 100.")
     op = max(BOX_OPACITY_MIN, min(BOX_OPACITY_MAX, op))
     conn = db()
-    conn.execute("UPDATE users SET box_opacity=?, glass_set=1 WHERE id=?",
+    # Build LOOKS: choosing a custom solidity IS choosing Mix.
+    conn.execute("UPDATE users SET box_opacity=?, glass_set=1, "
+                 "look_scheme='mix' WHERE id=?",
                  (op, user["id"]))
     conn.commit()
     conn.close()
     return redir("/settings/profile",
                  f"Glass is now {op}% solid on your screen.")
+
+
+@app.post("/settings/look")
+async def settings_look(request: Request):
+    """Save the logged-in user's own 🎨 My Look — scheme + surface /
+    accent colors (+ the blend slider when the scheme is Mix) in ONE
+    atomic apply_look write. Also the target of the preset cards
+    (preset=<key>) and of Reset-to-classic (reset=1). Only ever
+    touches the caller's own row. The standalone /settings/boxes
+    route keeps working for back-compat."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    conn = db()
+    name = apply_preset(conn, user["id"], (form.get("preset") or "")
+                        .strip())
+    if name:
+        conn.commit()
+        conn.close()
+        return redir("/settings/profile", f"Look applied: {name} 🎨")
+    if (form.get("reset") or "") == "1":
+        apply_look(conn, user["id"], {"scheme": "glass",
+                                      "surface": None, "accent": None})
+        conn.commit()
+        conn.close()
+        return redir("/settings/profile",
+                     "Your look is back to the classic HERE glass.")
+    scheme = (form.get("scheme") or "glass").strip().lower()
+    if scheme not in LOOK_SCHEMES:
+        scheme = "glass"
+    values = {"scheme": scheme,
+              "surface": (None if (form.get("surface_clear") or "") == "1"
+                          else (form.get("surface") or "").strip()
+                          or None),
+              "accent": (None if (form.get("accent_clear") or "") == "1"
+                         else (form.get("accent") or "").strip()
+                         or None)}
+    if scheme == "mix":
+        raw = (form.get("box_opacity") or "").strip()
+        if raw:
+            values["box_opacity"] = raw
+    apply_look(conn, user["id"], values)
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile", "Your look was saved 🎨")
 
 
 def _delete_upload(rel_path):
