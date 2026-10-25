@@ -60,7 +60,8 @@ table.admin tr:last-child td{border-bottom:none}
 
 <section>
   <h2>💰 Payouts (Live Tickets cash-outs)</h2>
-  <p style="color:#9a9a9a;font-size:13px;margin-bottom:10px">Streamers cash out earned tickets at $0.005 each. Tickets are held the moment they ask. <strong>Send the money yourself</strong> (Cash App / bank — their note says where), then tap <strong>Mark paid</strong>. Declining returns their tickets instantly. Stripe holds the card money — HERE only tracks tickets.</p>
+  <p style="color:#9a9a9a;font-size:13px;margin-bottom:6px">Streamers cash out earned tickets at $0.005 each. Tickets are held the moment they ask. If a streamer finished <strong>bank setup</strong>, tap <strong>💸 Approve &amp; send via Stripe</strong> — Stripe sends it to their bank for you. Otherwise <strong>send the money yourself</strong> (Cash App / bank — their note says where), then tap <strong>Mark paid</strong>. Declining returns their tickets instantly.</p>
+  <p style="font-size:13.5px;margin-bottom:10px">{% if connect_state.state == 'ready' %}🏦 Bank payouts: <strong>ON</strong> — Stripe payouts to streamer banks are live.{% elif connect_state.state == 'blocked' %}🏦 Bank payouts: <strong>waiting on Stripe verification (owner step)</strong>{% if connect_state.error %} — last word from Stripe: {{ connect_state.error|e }}{% endif %}. Hand payouts work meanwhile.{% else %}🏦 Bank payouts: not proven yet — the state flips ON the first time a streamer sets up bank payouts (or shows the Stripe blocker if verification is still owed). Hand payouts work meanwhile.{% endif %}</p>
   <div class="table-wrap">
     <table class="admin">
       <thead><tr><th>ID</th><th>Streamer</th><th>Email</th><th>Tickets</th><th>Amount</th><th>Send to</th><th>Requested</th><th>Status</th><th>Actions</th></tr></thead>
@@ -74,15 +75,26 @@ table.admin tr:last-child td{border-bottom:none}
           <td><strong>{{ p.dollars|e }}</strong></td>
           <td>{{ p.payout_note|e }}</td>
           <td>{{ p.created_at|e }}</td>
-          <td><span class="status-pill {{ p.status|e }}">{{ p.status|e }}</span></td>
+          <td><span class="status-pill {{ p.status|e }}">{{ p.status|e }}</span>{% if p.status == 'paid' and p.method == 'stripe' %}<div style="font-size:11.5px;color:#9a9a9a">💸 Stripe → bank{% if p.stripe_transfer_id %} · {{ p.stripe_transfer_id|e }}{% endif %}</div>{% elif p.status == 'paid' and p.method == 'manual' %}<div style="font-size:11.5px;color:#9a9a9a">✋ paid by hand</div>{% elif p.status == 'pending' and p.user_payout_ready %}<div style="font-size:11.5px;color:#9a9a9a">🏦 bank ready</div>{% endif %}</td>
           <td style="white-space:nowrap">
             {% if p.status == 'pending' %}
+            {% if p.user_payout_ready %}
+            <form class="inline-form" action="/owner/payouts/{{ p.id }}/send" method="post" onsubmit="return confirm('Send {{ p.dollars|e }} to {{ p.user_name|e }}\'s bank via Stripe?');">
+              <button type="submit" class="btn">💸 Approve &amp; send via Stripe</button>
+            </form>
+            <form class="inline-form" action="/owner/payouts/{{ p.id }}/paid" method="post" onsubmit="return confirm('Mark {{ p.dollars|e }} paid to {{ p.user_name|e }} by hand? Only tap this AFTER you sent the money yourself.');">
+              <button type="submit" class="btn-ghost">Mark paid (by hand)</button>
+            </form>
+            {% else %}
             <form class="inline-form" action="/owner/payouts/{{ p.id }}/paid" method="post" onsubmit="return confirm('Mark {{ p.dollars|e }} paid to {{ p.user_name|e }}? Only tap this AFTER you sent the money.');">
               <button type="submit" class="btn">Mark paid</button>
             </form>
+            {% endif %}
             <form class="inline-form" action="/owner/payouts/{{ p.id }}/declined" method="post" onsubmit="return confirm('Decline this cash-out? The tickets go back to {{ p.user_name|e }}\'s earnings.');">
               <button type="submit" class="btn-ghost">Decline</button>
             </form>
+            {% elif p.status == 'sending' %}
+            <span style="font-size:12.5px;color:#9a9a9a">send attempted — check Stripe</span>
             {% else %}—{% endif %}
           </td>
         </tr>
