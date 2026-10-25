@@ -1599,7 +1599,9 @@ def save_upload(up, subdir, allowed, max_mb=0):
                     break
                 total += len(chunk)
                 if total > limit:
-                    raise ValueError(f"File too large (max {cap_mb}MB).")
+                    raise ValueError(
+                        "That file couldn't be uploaded — "
+                        "try a different one.")
                 f.write(chunk)
     except Exception:
         try:
