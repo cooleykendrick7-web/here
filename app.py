@@ -617,7 +617,10 @@ def init_db():
     # look_surface / look_accent: #rrggbb or NULL (unset = theme
     # default). One-time backfill: anyone who had already CHOSEN a
     # solidity under Build GLASS (glass_set=1) was effectively living
-    # in Mix, so their scheme starts there; everyone else is Glass. ---
+    # in Mix, so their scheme starts there; everyone else is Glass.
+    # Build CLEAR deliberately does NOT revisit that backfill: from
+    # here on only the settings doors assign schemes, and nobody is
+    # mass-moved between Glass and Mix after the fact. ---
     if "look_scheme" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN look_scheme TEXT "
                   "DEFAULT 'glass'")
@@ -1464,13 +1467,16 @@ def render(request: Request, name, ctx=None):
         v_style, v_classes = viewer_spot_for(u)
         ctx.setdefault("viewer_spot_style", v_style)
         ctx.setdefault("viewer_spot_classes", v_classes)
-        # Build LOOKS: the legacy --box-alpha layer IS the Mix
-        # scheme's mechanism now — it is emitted only for a Mix
-        # viewer (glass ignores the slider; solid is alpha 1).
+        # Build CLEAR: the legacy --box-alpha layer is the historical
+        # Glass mechanism — it is emitted only for a Glass viewer with
+        # a saved solidity below 100. Mix gets its glass from the new
+        # --glass-alpha-soft token instead, never from this layer.
         ctx.setdefault("viewer_box_alpha",
                        viewer_box_alpha_for(u)
-                       if look_scheme_for(u) == "mix" else "")
+                       if look_scheme_for(u) == "glass" else "")
         ctx.setdefault("viewer_glass_alpha", glass_alpha_for(u))
+        ctx.setdefault("viewer_glass_alpha_soft",
+                       glass_alpha_soft_for(u))
         ctx.setdefault("viewer_glass_rgb", look_rgb_str_for(u))
         ctx.setdefault("viewer_look_accent", look_accent_for(u))
         ctx.setdefault("viewer_look_classes", look_scope_class_for(u))
@@ -1486,6 +1492,7 @@ def render(request: Request, name, ctx=None):
         ctx.setdefault("viewer_spot_classes", "")
         ctx.setdefault("viewer_box_alpha", "")
         ctx.setdefault("viewer_glass_alpha", GLASS_DEFAULT_ALPHA)
+        ctx.setdefault("viewer_glass_alpha_soft", GLASS_DEFAULT_ALPHA)
         ctx.setdefault("viewer_glass_rgb", look_rgb_str_for(None))
         ctx.setdefault("viewer_look_accent", LOOK_DEFAULT_ACCENT)
         ctx.setdefault("viewer_look_classes", "")
@@ -6396,7 +6403,7 @@ async def audience_save(request: Request, pid: int):
 SPOT_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 SPOT_NAME_MAX = 60
 SPOT_OPACITY_MIN, SPOT_OPACITY_MAX = 30, 100
-BOX_OPACITY_MIN, BOX_OPACITY_MAX = 30, 100
+BOX_OPACITY_MIN, BOX_OPACITY_MAX = 0, 100
 # Theme defaults a spot falls back to (matches the glass look in base.html).
 SPOT_DEFAULT_TEXT = "#1c1e21"
 SPOT_DEFAULT_CARD_RGB = (232, 232, 238)
@@ -6489,10 +6496,10 @@ def viewer_spot_for(u):
 def viewer_box_alpha_for(u):
     """The viewer's own Box Transparency as a CSS alpha string.
 
-    users.box_opacity is a solidity percent (30-100). Returns "" when
+    users.box_opacity is a solidity percent (0-100). Returns "" when
     the viewer is at (or defaults to) 100 — fully solid, the default
     look with no glass overrides at all — otherwise the alpha as a
-    compact decimal string (55 -> "0.55", 30 -> "0.3").
+    compact decimal string (55 -> "0.55", 0 -> "0").
     """
     if not u:
         return ""
@@ -6522,25 +6529,48 @@ GLASS_DEFAULT_SOLIDITY = 82
 GLASS_DEFAULT_ALPHA = "0.82"
 
 
-def glass_alpha_for(u):
-    """The viewer's unified Glass alpha string for --glass-alpha.
+def _saved_glass_alpha_for(u):
+    """The viewer's chosen Glass solidity as an alpha string: the
+    saved box_opacity once glass_set (0 and 100 included — completely
+    clear and solid-by-choice are both real choices), else the house
+    default clean glass."""
+    if not u or not _uget(u, "glass_set"):
+        return GLASS_DEFAULT_ALPHA
+    a = viewer_box_alpha_for(u)
+    return a if a else "1"
 
-    Build LOOKS: the alpha now follows the viewer's look SCHEME —
-    glass -> the house default (0.82) regardless of the slider;
-    solid -> "1"; mix -> the saved slider value with the Build GLASS
-    semantics (never saved -> the default glass)."""
+
+def glass_alpha_for(u):
+    """The viewer's CARD-family alpha string for --glass-alpha.
+
+    Build CLEAR scheme semantics:
+    glass -> the saved Glass solidity (the slider's own scheme);
+    solid -> "1"; mix -> "1" too, because Mix cards are solid slabs
+    (Mix's glass lives on the small surfaces; see
+    glass_alpha_soft_for)."""
+    if not u:
+        return GLASS_DEFAULT_ALPHA
+    scheme = look_scheme_for(u)
+    if scheme == "glass":
+        return _saved_glass_alpha_for(u)
+    return "1"
+
+
+def glass_alpha_soft_for(u):
+    """The viewer's SMALL-surface alpha for --glass-alpha-soft
+    (post/comment/message bubbles, chips, nav pills).
+
+    glass -> the same saved solidity as the cards; solid -> "1";
+    mix -> the saved Glass solidity, so Mix bubbles borrow the
+    viewer's Glass transparency while their cards stay solid."""
     if not u:
         return GLASS_DEFAULT_ALPHA
     scheme = look_scheme_for(u)
     if scheme == "solid":
         return "1"
     if scheme == "glass":
-        return GLASS_DEFAULT_ALPHA
-    # mix: the saved solidity drives, exactly as Build GLASS had it.
-    if not _uget(u, "glass_set"):
-        return GLASS_DEFAULT_ALPHA
-    a = viewer_box_alpha_for(u)
-    return a if a else "1"
+        return _saved_glass_alpha_for(u)
+    return _saved_glass_alpha_for(u)
 
 
 # --- Build LOOKS: schemes, surface/accent colors, presets -----------
@@ -6613,13 +6643,15 @@ def look_scope_class_for(u):
 
 
 def look_vars_for(u):
-    """(alpha, rgb_str, accent, scope_class) — the full look var set
-    for a user record (or the guest defaults for None)."""
+    """(alpha, soft_alpha, rgb_str, accent, scope_class) — the full
+    look var set for a user record (or the guest defaults for None).
+    alpha drives the card family; soft_alpha the small surfaces."""
     if not u:
-        return (GLASS_DEFAULT_ALPHA, look_rgb_str_for(None),
-                LOOK_DEFAULT_ACCENT, "")
-    return (glass_alpha_for(u), look_rgb_str_for(u),
-            look_accent_for(u), look_scope_class_for(u))
+        return (GLASS_DEFAULT_ALPHA, GLASS_DEFAULT_ALPHA,
+                look_rgb_str_for(None), LOOK_DEFAULT_ACCENT, "")
+    return (glass_alpha_for(u), glass_alpha_soft_for(u),
+            look_rgb_str_for(u), look_accent_for(u),
+            look_scope_class_for(u))
 
 
 def look_scope_style_for(u):
@@ -6627,9 +6659,9 @@ def look_scope_style_for(u):
     their --glass-alpha (by scheme), --glass-rgb and --look-accent,
     always all three, so a viewer's own vars can never cascade into
     somebody else's profile (the spot_scope_style_for discipline)."""
-    alpha, rgb, accent, _cls = look_vars_for(u)
-    return (f"--glass-alpha:{alpha};--glass-rgb:{rgb}"
-            f";--look-accent:{accent}")
+    alpha, soft, rgb, accent, _cls = look_vars_for(u)
+    return (f"--glass-alpha:{alpha};--glass-alpha-soft:{soft}"
+            f";--glass-rgb:{rgb};--look-accent:{accent}")
 
 
 def apply_look(conn, user_id, values):
@@ -6639,7 +6671,8 @@ def apply_look(conn, user_id, values):
     accent, box_opacity, spot_text_color, spot_card_color. Only the
     keys present are written. Colors validate as #rrggbb; an invalid
     or empty color stores NULL (unset). box_opacity parses + clamps
-    to 30..100 and marks glass_set=1 (a chosen solidity)."""
+    to 0..100 and marks glass_set=1 (a chosen solidity — 0 is a real
+    choice: completely clear)."""
     sets, args = [], []
 
     def _color(key, column):
@@ -7171,12 +7204,14 @@ async def settings_boxes(request: Request):
         op = int(raw_op)
     except ValueError:
         return redir("/settings/profile",
-                     "Box transparency needs a number from 30 to 100.")
+                     "Box transparency needs a number from 0 to 100.")
     op = max(BOX_OPACITY_MIN, min(BOX_OPACITY_MAX, op))
     conn = db()
-    # Build LOOKS: choosing a custom solidity IS choosing Mix.
+    # Build CLEAR: this endpoint IS the Glass-transparency door —
+    # saving a solidity here puts the saver in the Glass scheme,
+    # the only scheme the slider belongs to.
     conn.execute("UPDATE users SET box_opacity=?, glass_set=1, "
-                 "look_scheme='mix' WHERE id=?",
+                 "look_scheme='glass' WHERE id=?",
                  (op, user["id"]))
     conn.commit()
     conn.close()
@@ -7187,8 +7222,8 @@ async def settings_boxes(request: Request):
 @app.post("/settings/look")
 async def settings_look(request: Request):
     """Save the logged-in user's own 🎨 My Look — scheme + surface /
-    accent colors (+ the blend slider when the scheme is Mix) in ONE
-    atomic apply_look write. Also the target of the preset cards
+    accent colors (+ the transparency slider when the scheme is
+    Glass) in ONE atomic apply_look write. Also the target of the preset cards
     (preset=<key>) and of Reset-to-classic (reset=1). Only ever
     touches the caller's own row. The standalone /settings/boxes
     route keeps working for back-compat."""
@@ -7220,7 +7255,7 @@ async def settings_look(request: Request):
               "accent": (None if (form.get("accent_clear") or "") == "1"
                          else (form.get("accent") or "").strip()
                          or None)}
-    if scheme == "mix":
+    if scheme == "glass":
         raw = (form.get("box_opacity") or "").strip()
         if raw:
             values["box_opacity"] = raw
