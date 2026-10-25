@@ -7,7 +7,9 @@ Run:  ./venv/bin/python tests/test_ads.py
 Uses a throwaway DB/uploads dir; no network.
 """
 import os
+import re
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -392,6 +394,53 @@ check("safe_link: internal path ok", ads.safe_link("/page/3") == "/page/3")
 check("safe_link: https ok",
       ads.safe_link("https://x.io/a") == "https://x.io/a")
 check("safe_link: empty -> '#'", ads.safe_link("") == "#")
+
+# ---------------- 14. ADS-2: video ads autoplay muted ---------------
+dbx("UPDATE ads SET status='paused'")
+VID = mkad(title="Video Ad", media_kind="video",
+           media_path="ads/probe.mp4", link_url="/market")
+VU, VU_ID = signup("Video Viewer", "vviewer@x.io")
+vhome = VU.get("/home").text
+check("video ad: renders in a fresh feed", "Video Ad" in vhome)
+_vm = re.search(r"<video[^>]*>", vhome)
+check("video ad: a <video> tag renders", _vm is not None)
+_vtag = _vm.group(0) if _vm else ""
+check("video ad: autoplay + muted + loop + playsinline",
+      all(a in _vtag for a in
+          ("autoplay", "muted", "loop", "playsinline")), _vtag)
+check("video ad: NO native controls attribute", "controls" not in _vtag,
+      _vtag)
+check("video ad: keeps the post-video-file styling hook",
+      "post-video-file" in _vtag)
+check("video ad: speaker chip button present with a label",
+      re.search(r'<button[^>]*class="ad-vol-btn"[^>]*aria-label=',
+                vhome) is not None)
+check("video ad: speaker chip starts in the muted state",
+      "🔇" in vhome and 'aria-label="Turn sound on"' in vhome)
+check("ads-2 script: shared IntersectionObserver play/pause wiring",
+      "IntersectionObserver" in vhome and "intersectionRatio" in vhome
+      and "0.5" in vhome and "__hereAdIO" in vhome)
+check("ads-2 script: both speaker states handled (🔇/🔊)",
+      "🔊" in vhome and "Turn sound off" in vhome)
+check("ads-2 script: chip tap can't trigger click-through",
+      "stopPropagation" in vhome)
+check("ads-2 script: unmute re-plays (iOS) + per-video mute toggle",
+      "v.muted = !v.muted" in vhome and "tryPlay(v)" in vhome)
+
+# node --check every inline script on the rendered feed
+_blocks = re.findall(r"<script>(.*?)</script>", vhome, re.S)
+_js_ok, _js_bad = True, []
+for _i, _blk in enumerate(_blocks):
+    _p = os.path.join(_tmp, f"ads2_chk_{_i}.js")
+    with open(_p, "w") as _f:
+        _f.write(_blk)
+    _r = subprocess.run(["node", "--check", _p],
+                        capture_output=True, text=True)
+    if _r.returncode != 0:
+        _js_ok = False
+        _js_bad.append(_r.stderr.strip()[:160])
+check("node --check: feed inline JS parses (incl. ADS-2 script)",
+      _js_ok and len(_blocks) >= 1, "; ".join(_js_bad))
 
 # ---------------- summary ----------------
 fails = [n for n, okk in RESULTS if not okk]
