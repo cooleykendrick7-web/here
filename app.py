@@ -39,6 +39,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import ads
 import moderation
 import storage
 
@@ -1232,6 +1233,8 @@ def init_db():
               "ON password_resets(user_id, id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_pwresets_ip "
               "ON password_resets(requester_ip, created_at)")
+    # --- ads (Build ADS): house + page ads and their event log ---
+    ads.ensure_schema(conn)
     conn.commit()
     conn.close()
 
@@ -3544,6 +3547,47 @@ async def tag_suggest(request: Request):
     return JSONResponse({"ok": True, "results": out[:8]})
 
 
+def _home_feed_items(user, post_cards_list):
+    """Interleave Sponsored cards into the home feed (Build ADS): at
+    most one ad per 8 feed items, plus one trailing ad on a short or
+    empty feed so a fresh account still meets the ad system. Ads are
+    chosen by the ads engine (schedule/targeting/rotation caps) and
+    each slotted ad records its impression for this viewer at render.
+    With no eligible ads the feed is exactly the post cards, as
+    before."""
+    n = len(post_cards_list)
+    slots = n // 8 + (1 if (n % 8 or n == 0) else 0)
+    conn = db()
+    chosen = ads.pick_feed_ads(
+        conn, user["id"], slots,
+        now=_chicago_now().replace(tzinfo=None))
+    cards = []
+    for ad in chosen:
+        sponsor_name, sponsor_avatar = "HERE", ""
+        if ad.get("kind") == "page" and ad.get("page_id"):
+            pg = conn.execute("SELECT name, cover FROM pages WHERE id=?",
+                              (ad["page_id"],)).fetchone()
+            if pg:
+                sponsor_name = pg["name"]
+                sponsor_avatar = avatar_url(pg["cover"] or "")
+        cards.append(ads.compose_card(ad, sponsor_name, sponsor_avatar))
+        ads.record_impression(conn, ad["id"], user["id"])
+    if chosen:
+        conn.commit()
+    conn.close()
+    out = []
+    ci = 0
+    for i, p in enumerate(post_cards_list):
+        out.append({"kind": "post", "post": p})
+        if (i + 1) % 8 == 0 and ci < len(cards):
+            out.append({"kind": "ad", "ad": cards[ci]})
+            ci += 1
+    while ci < len(cards):
+        out.append({"kind": "ad", "ad": cards[ci]})
+        ci += 1
+    return out
+
+
 @app.get("/home", response_class=HTMLResponse)
 async def home(request: Request):
     user, err = require_login(request)
@@ -3552,6 +3596,7 @@ async def home(request: Request):
     record_activity(user["id"])
     owner_on = is_owner(request)
     posts = _home_posts(user, owner_on)
+    feed_items = _home_feed_items(user, posts)
     fids = friend_id_set(user["id"])
     contacts = []
     if fids:
@@ -3570,7 +3615,8 @@ async def home(request: Request):
             c["name"].lower()))
     cfriends, cpages = composer_choices(user)
     return render(request, "home.html",
-                  {"posts": posts, "contacts": contacts,
+                  {"posts": posts, "feed_items": feed_items,
+                   "contacts": contacts,
                    "stories_tray": stories_tray(user["id"]),
                    "live_now": live_now_for(user["id"], owner_on),
                    "discover_people": discover_people(user["id"], 3),
@@ -11690,6 +11736,155 @@ async def page_edit(request: Request, pid: int):
     return redir(f"/page/{pid}")
 
 
+# ---------------- page ads: "📣 Run as ad" (Build ADS) ----------------
+# A page owner promotes their page — itself, one of its posts, one of
+# their Market listings, or a fully custom ad — into the same rotation
+# the house ads run in. Phase 1: free to run. Only the page owner can
+# create or manage a page's ads (pages have no separate admin role).
+
+def _page_ad_guard(user, pid):
+    """(page_row, error_response). 403 for anyone but the page owner —
+    ad power follows page ownership exactly."""
+    conn = db()
+    pg = conn.execute("SELECT * FROM pages WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    if not pg:
+        return None, redir("/pages", "Page not found.")
+    if pg["owner_id"] != user["id"]:
+        return None, HTMLResponse(
+            "Only the page owner can run ads for this page.",
+            status_code=403)
+    return pg, None
+
+
+@app.get("/page/{pid}/promote", response_class=HTMLResponse)
+async def page_promote(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    pg, gerr = _page_ad_guard(user, pid)
+    if gerr:
+        return gerr
+    conn = db()
+    posts = conn.execute(
+        "SELECT id, body, media FROM posts WHERE page_id=? "
+        "ORDER BY created_at DESC LIMIT 20", (pid,)).fetchall()
+    listings = conn.execute(
+        "SELECT id, title FROM market_listings WHERE seller_id=? "
+        "AND status='active' ORDER BY created_at DESC LIMIT 20",
+        (user["id"],)).fetchall()
+    my_ads = []
+    for r in conn.execute(
+            "SELECT * FROM ads WHERE page_id=? ORDER BY id DESC",
+            (pid,)).fetchall():
+        d = dict(r)
+        d["ctr"] = ads.ctr(d)
+        d["schedule_label"] = _ad_schedule_label(d)
+        my_ads.append(d)
+    conn.close()
+    return render(request, "page_promote.html", {
+        "page": page_ctx(dict(pg), user),
+        "page_posts": [{"id": p["id"],
+                        "label": (p["body"] or "📷 Media post")[:60]}
+                       for p in posts],
+        "my_listings": [{"id": l["id"], "title": l["title"]}
+                        for l in listings],
+        "my_ads": my_ads})
+
+
+@app.post("/page/{pid}/promote")
+async def page_promote_create(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    pg, gerr = _page_ad_guard(user, pid)
+    if gerr:
+        return gerr
+    form = await request.form()
+    fields = _ad_fields_from_form(form)
+    what = (form.get("promote_what") or "page").strip()
+    media_path, media_kind = "", "none"
+    conn = db()
+    if what == "post":
+        try:
+            post_id = int(form.get("post_id") or 0)
+        except (TypeError, ValueError):
+            post_id = 0
+        post = conn.execute(
+            "SELECT * FROM posts WHERE id=? AND page_id=?",
+            (post_id, pid)).fetchone()
+        if post:
+            fields["title"] = fields["title"] or (
+                (post["body"] or "").strip()[:70] or pg["name"])
+            fields["body"] = fields["body"] or (post["body"] or "")[:300]
+            fields["link_url"] = f"/post/{post_id}"
+            media_path = post["media"] or ""
+            if media_path:
+                ext = media_path.rsplit(".", 1)[-1].lower()
+                media_kind = ("video" if ext in VID_EXTS else "image")
+    elif what == "listing":
+        try:
+            lid = int(form.get("listing_id") or 0)
+        except (TypeError, ValueError):
+            lid = 0
+        lst = conn.execute(
+            "SELECT * FROM market_listings WHERE id=? AND seller_id=?",
+            (lid, user["id"])).fetchone()
+        if lst:
+            fields["title"] = fields["title"] or lst["title"]
+            fields["body"] = fields["body"] or (lst["description"] or "")[:300]
+            fields["link_url"] = f"/market/{lid}"
+            try:
+                photos = json.loads(lst["photos"] or "[]")
+            except ValueError:
+                photos = []
+            if photos:
+                media_path, media_kind = photos[0], "image"
+    elif what == "custom":
+        pass  # everything comes from the form itself
+    else:  # the page itself
+        what = "page"
+        fields["title"] = fields["title"] or pg["name"]
+        fields["body"] = fields["body"] or (pg["description"] or "")[:300]
+        fields["link_url"] = f"/page/{pid}"
+        media_path = pg["cover"] or ""
+        if media_path:
+            media_kind = "image"
+    conn.close()
+    if not fields["title"]:
+        return redir(f"/page/{pid}/promote", "Give the ad a headline.")
+    # A fresh upload on the form beats the promoted item's own media.
+    media_path, media_kind, merr = _ad_media_from_form(
+        form, media_path, media_kind)
+    if merr:
+        return redir(f"/page/{pid}/promote", merr)
+    if not fields["link_url"]:
+        fields["link_url"] = f"/page/{pid}"
+    _insert_ad(user, "page", pid, fields, media_path, media_kind)
+    return redir(f"/page/{pid}/promote",
+                "📣 Your ad is live in the rotation — free in phase 1.")
+
+
+@app.post("/page/{pid}/promote/{aid}/status")
+async def page_promote_status(request: Request, pid: int, aid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    pg, gerr = _page_ad_guard(user, pid)
+    if gerr:
+        return gerr
+    form = await request.form()
+    status = (form.get("status") or "").strip()
+    if status in ("active", "paused", "ended"):
+        conn = db()
+        conn.execute(
+            "UPDATE ads SET status=? WHERE id=? AND page_id=?",
+            (status, aid, pid))
+        conn.commit()
+        conn.close()
+    return redir(f"/page/{pid}/promote")
+
+
 # ---------------- Live Tickets: the live gift economy ----------------
 # Viewers buy 🎟️ Live Tickets (packs via Stripe Checkout) and spend
 # them on character gifts during lives; the host earns tickets on a
@@ -13158,6 +13353,330 @@ async def public_listing(request: Request, lid: int):
         "logged_in": bool(viewer)})
 
 
+# ---------------- ads (Build ADS) ----------------
+# One engine, two doors: house ads are authored in the owner panel
+# (kind='house'); page ads come from a Page's "📣 Run as ad" flow
+# (kind='page'). Phase 1: page ads are FREE to run. The engine lives
+# in ads.py (schedule/targeting/rotation/composition); these are the
+# HTTP surfaces: click + hide for viewers, the owner panel CRUD +
+# oversight, and the page promote flow with its mini-dashboard.
+
+_AD_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _ad_schedule_label(ad):
+    """One-line human summary of an ad's run rules, for dashboards."""
+    s = ad.get("schedule") or "always"
+    if s == "weekly":
+        days = sorted(ads._csv_ints(ad.get("weekly_days")))
+        base = "Weekly (" + (", ".join(_AD_WEEKDAYS[d] for d in days
+                                        if 0 <= d <= 6) or "no days") + ")"
+    elif s == "monthly":
+        days = sorted(ads._csv_ints(ad.get("monthly_days")))
+        base = "Monthly (days " + (", ".join(str(d) for d in days)
+                                   or "—") + ")"
+    else:
+        base = "Always"
+    hs, he = int(ad.get("hour_start") or 0), int(ad.get("hour_end") or 24)
+    if (hs, he) != (0, 24):
+        base += f" · {hs:02d}:00–{he:02d}:00"
+    if ad.get("smart_hours"):
+        base += " · ⚡ smart hours"
+    if ad.get("starts_on") or ad.get("ends_on"):
+        base += f" · {ad.get('starts_on') or '…'} → {ad.get('ends_on') or '…'}"
+    return base
+
+
+def _ad_fields_from_form(form, allow_weight=False):
+    """Parse the shared ad form (owner panel + page promote) into ads
+    column values. Media is resolved separately (uploads are stateful)."""
+    def _int(name, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(form.get(name) or default)))
+        except (TypeError, ValueError):
+            return default
+
+    def _date(name):
+        v = (form.get(name) or "").strip()
+        if not v:
+            return None
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+            return v
+        except ValueError:
+            return None
+
+    schedule = (form.get("schedule") or "always").strip()
+    if schedule not in ("always", "weekly", "monthly"):
+        schedule = "always"
+    weekly = set()
+    for v in form.getlist("weekly_days"):
+        try:
+            d = int(v)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= d <= 6:
+            weekly.add(d)
+    monthly = sorted(d for d in ads._csv_ints(form.get("monthly_days"))
+                     if 1 <= d <= 31)
+    return {
+        "title": (form.get("title") or "").strip()[:120],
+        "body": (form.get("body") or "").strip()[:1000],
+        "link_url": (form.get("link_url") or "").strip()[:500],
+        "cta_label": ((form.get("cta_label") or "").strip()[:30]
+                      or "Learn more"),
+        "tags": ",".join(ads.parse_tags(form.get("tags") or ""))[:200],
+        "schedule": schedule,
+        "weekly_days": ",".join(str(d) for d in sorted(weekly)),
+        "monthly_days": ",".join(str(d) for d in monthly),
+        "hour_start": _int("hour_start", 0, 0, 24),
+        "hour_end": _int("hour_end", 24, 0, 24),
+        "smart_hours": 1 if (form.get("smart_hours") or "") in (
+            "1", "on", "true") else 0,
+        "weight": _int("weight", 1, 1, 5) if allow_weight else 1,
+        "starts_on": _date("starts_on"),
+        "ends_on": _date("ends_on"),
+    }
+
+
+def _ad_media_from_form(form, existing_path="", existing_kind="none"):
+    """Resolve an ad's media: a fresh upload wins, then an existing
+    uploads path named by the form (promote-from-post/listing), then a
+    clear request, else whatever the ad already had.
+    Returns (media_path, media_kind, error)."""
+    up = form.get("media")
+    if up is not None and getattr(up, "filename", ""):
+        try:
+            path = save_upload(up, "ads", IMG_EXTS | VID_EXTS)
+        except ValueError as e:
+            return "", "none", str(e)
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        return path, ("video" if ext in VID_EXTS else "image"), None
+    mp = (form.get("media_path") or "").strip()
+    if mp:
+        if re.fullmatch(r"(posts|market|pages|ads)/[A-Za-z0-9._\-]+", mp):
+            ext = mp.rsplit(".", 1)[-1].lower() if "." in mp else ""
+            if ext in VID_EXTS:
+                return mp, "video", None
+            if ext in IMG_EXTS:
+                return mp, "image", None
+        return "", "none", "That media couldn't be used."
+    if (form.get("media_clear") or "") in ("1", "on", "true"):
+        return "", "none", None
+    return existing_path, existing_kind, None
+
+
+def _insert_ad(creator, kind, page_id, fields, media_path, media_kind):
+    """Insert an ad row and run the standard moderation scan over its
+    words (a hit queues a flag for the owner; the ad still runs —
+    flagging never blocks, like every other content type)."""
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO ads(creator_id, page_id, kind, title, body, "
+        "media_kind, media_path, link_url, cta_label, tags, status, "
+        "schedule, weekly_days, monthly_days, hour_start, hour_end, "
+        "smart_hours, weight, starts_on, ends_on, created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?, 'active', ?,?,?,?,?,?,?,?,?,?)",
+        (creator["id"], page_id, kind, fields["title"], fields["body"],
+         media_kind, media_path, fields["link_url"], fields["cta_label"],
+         fields["tags"], fields["schedule"], fields["weekly_days"],
+         fields["monthly_days"], fields["hour_start"], fields["hour_end"],
+         fields["smart_hours"], fields["weight"], fields["starts_on"],
+         fields["ends_on"], now_iso()))
+    ad_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    flag_item("ad", ad_id, creator["id"], creator["name"],
+              f"{fields['title']}\n{fields['body']}")
+    return ad_id
+
+
+def _update_ad(ad_id, fields, media_path, media_kind):
+    conn = db()
+    conn.execute(
+        "UPDATE ads SET title=?, body=?, media_kind=?, media_path=?, "
+        "link_url=?, cta_label=?, tags=?, schedule=?, weekly_days=?, "
+        "monthly_days=?, hour_start=?, hour_end=?, smart_hours=?, "
+        "weight=?, starts_on=?, ends_on=? WHERE id=?",
+        (fields["title"], fields["body"], media_kind, media_path,
+         fields["link_url"], fields["cta_label"], fields["tags"],
+         fields["schedule"], fields["weekly_days"],
+         fields["monthly_days"], fields["hour_start"], fields["hour_end"],
+         fields["smart_hours"], fields["weight"], fields["starts_on"],
+         fields["ends_on"], ad_id))
+    conn.commit()
+    conn.close()
+
+
+def _house_creator(request, conn):
+    """The user account house ads are attributed to: the owner's own
+    signed-in account when the panel is used alongside a user session
+    (the normal case), else the platform's first account."""
+    u = current_user(request)
+    if u:
+        return u
+    row = conn.execute("SELECT * FROM users ORDER BY id ASC LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
+@app.get("/ads/{aid}/click")
+async def ad_click(request: Request, aid: int):
+    """Log the click, then 302 to the ad's link. Only http(s) URLs and
+    internal paths are honored; anything else lands on '#'."""
+    user, err = require_login(request)
+    if err:
+        return err
+    target = "#"
+    conn = db()
+    ad = conn.execute("SELECT link_url FROM ads WHERE id=?",
+                      (aid,)).fetchone()
+    if ad:
+        ads.record_click(conn, aid, user["id"])
+        conn.commit()
+        target = ads.safe_link(ad["link_url"])
+    conn.close()
+    return RedirectResponse(target, status_code=302)
+
+
+@app.post("/ads/{aid}/hide")
+async def ad_hide(request: Request, aid: int):
+    """The card's ✕: this ad never shows for this viewer again."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    if conn.execute("SELECT id FROM ads WHERE id=?", (aid,)).fetchone():
+        ads.record_hide(conn, aid, user["id"])
+        conn.commit()
+    conn.close()
+    return redir("/home", "Got it — that ad won't show for you again.")
+
+
+@app.get("/owner/ads/new", response_class=HTMLResponse)
+async def owner_ad_new(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    return render(request, "owner/ads_form.html",
+                  {"ad": None, "action": "/owner/ads",
+                   "heading": "➕ New house ad", "error": ""})
+
+
+@app.post("/owner/ads")
+async def owner_ad_create(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    form = await request.form()
+    fields = _ad_fields_from_form(form, allow_weight=True)
+    if not fields["title"]:
+        return render(request, "owner/ads_form.html",
+                      {"ad": None, "action": "/owner/ads",
+                       "heading": "➕ New house ad",
+                       "error": "Give the ad a headline."})
+    media_path, media_kind, merr = _ad_media_from_form(form)
+    if merr:
+        return render(request, "owner/ads_form.html",
+                      {"ad": None, "action": "/owner/ads",
+                       "heading": "➕ New house ad", "error": merr})
+    conn = db()
+    creator = _house_creator(request, conn)
+    conn.close()
+    if not creator:
+        return redir("/owner", "Create a user account first.")
+    _insert_ad(creator, "house", None, fields, media_path, media_kind)
+    return redir("/owner", "📣 House ad created — it's in the rotation.")
+
+
+@app.get("/owner/ads/{aid}/edit", response_class=HTMLResponse)
+async def owner_ad_edit(request: Request, aid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    ad = conn.execute("SELECT * FROM ads WHERE id=?", (aid,)).fetchone()
+    conn.close()
+    if not ad:
+        return redir("/owner", "Ad not found.")
+    return render(request, "owner/ads_form.html",
+                  {"ad": dict(ad), "action": f"/owner/ads/{aid}",
+                   "heading": "✏️ Edit ad", "error": ""})
+
+
+@app.post("/owner/ads/{aid}")
+async def owner_ad_update(request: Request, aid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    ad = conn.execute("SELECT * FROM ads WHERE id=?", (aid,)).fetchone()
+    conn.close()
+    if not ad:
+        return redir("/owner", "Ad not found.")
+    ad = dict(ad)
+    form = await request.form()
+    fields = _ad_fields_from_form(form, allow_weight=True)
+    if not fields["title"]:
+        return render(request, "owner/ads_form.html",
+                      {"ad": ad, "action": f"/owner/ads/{aid}",
+                       "heading": "✏️ Edit ad",
+                       "error": "Give the ad a headline."})
+    media_path, media_kind, merr = _ad_media_from_form(
+        form, ad["media_path"], ad["media_kind"])
+    if merr:
+        return render(request, "owner/ads_form.html",
+                      {"ad": ad, "action": f"/owner/ads/{aid}",
+                       "heading": "✏️ Edit ad", "error": merr})
+    _update_ad(aid, fields, media_path, media_kind)
+    return redir("/owner", "📣 Ad updated.")
+
+
+@app.post("/owner/ads/{aid}/status")
+async def owner_ad_status(request: Request, aid: int):
+    """Owner controls for ANY ad (house or page): pause / resume /
+    end. Oversight lives here; page owners have their own switch on
+    their promote page for their own ads."""
+    err = require_owner(request)
+    if err:
+        return err
+    form = await request.form()
+    status = (form.get("status") or "").strip()
+    if status in ("active", "paused", "ended"):
+        conn = db()
+        conn.execute("UPDATE ads SET status=? WHERE id=?", (status, aid))
+        conn.commit()
+        conn.close()
+    return redir("/owner")
+
+
+def _owner_ads_ctx(conn):
+    """Dashboard data for the 📣 Ads section: every ad with sponsor +
+    stats, split house vs page, plus totals."""
+    rows = conn.execute(
+        "SELECT a.*, u.name AS creator_name, p.name AS page_name "
+        "FROM ads a LEFT JOIN users u ON u.id=a.creator_id "
+        "LEFT JOIN pages p ON p.id=a.page_id ORDER BY a.id DESC").fetchall()
+
+    def _row(r):
+        d = dict(r)
+        d["ctr"] = ads.ctr(d)
+        d["schedule_label"] = _ad_schedule_label(d)
+        d["sponsor"] = (d.get("page_name") if d["kind"] == "page"
+                        else "HERE (house)")
+        return d
+
+    house = [_row(r) for r in rows if r["kind"] == "house"]
+    page_ads = [_row(r) for r in rows if r["kind"] != "house"]
+    totals = {
+        "ads": len(rows),
+        "active": sum(1 for r in rows if r["status"] == "active"),
+        "impressions": sum(int(r["impressions"] or 0) for r in rows),
+        "clicks": sum(int(r["clicks"] or 0) for r in rows),
+    }
+    totals["ctr"] = ads.ctr(totals)
+    return house, page_ads, totals
+
+
 # ---------------- owner ----------------
 @app.get("/owner/login", response_class=HTMLResponse)
 async def owner_login_page(request: Request):
@@ -13455,6 +13974,9 @@ async def owner_dashboard(request: Request):
         "delivery='queued' AND used_at IS NULL AND expires_at>?",
         (_utcnow.isoformat(),)).fetchone()["c"]
 
+    # --- ads (Build ADS): house rotation + page-ad oversight ---
+    ads_house, ads_user, ads_totals = _owner_ads_ctx(conn)
+
     conn.close()
     return render(request, "owner/dashboard.html", {
         "users": users, "friend_activity": friend_activity,
@@ -13464,6 +13986,8 @@ async def owner_dashboard(request: Request):
         "payouts": payouts, "money_stats": money_stats,
         "money_panel": money_panel,
         "pw_resets": pw_resets, "pw_help_pending": pw_help_pending,
+        "ads_house": ads_house, "ads_user": ads_user,
+        "ads_totals": ads_totals,
         "connect_state": _connect_state()})
 
 
