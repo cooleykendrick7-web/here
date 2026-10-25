@@ -27,10 +27,77 @@
   {% if ad.layout == 'media' and ad.media_path %}
   <a href="{{ ad.click_url|e }}"><img class="post-img" src="/uploads/{{ ad.media_path|e }}" alt=""></a>
   {% elif ad.layout == 'video' and ad.media_path %}
-  <video class="post-video-file" controls muted playsinline preload="metadata" src="/uploads/{{ ad.media_path|e }}"></video>
+  <div class="ad-video-wrap" style="position:relative">
+    <video class="post-video-file" autoplay muted loop playsinline preload="metadata" src="/uploads/{{ ad.media_path|e }}"></video>
+    <button type="button" class="ad-vol-btn" aria-label="Turn sound on" title="Sound on/off" style="position:absolute;right:10px;bottom:18px;width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.55);background:rgba(10,10,14,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:#fff;font-size:17px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;z-index:2">🔇</button>
+  </div>
   {% endif %}
 
   <div class="post-row" style="margin-top:10px">
     <a class="btn" href="{{ ad.click_url|e }}">{{ ad.cta_label|e }}</a>
   </div>
 </div>
+{% if ad.layout == 'video' and ad.media_path %}
+<script>
+/* Build ADS-2: video ads autoplay MUTED as they scroll into view and
+   pause off-screen; the speaker chip toggles sound for that one video
+   only. One IntersectionObserver is shared by every ad card on the page
+   (window.__hereAdIO); each include re-runs init(), which wires only
+   the videos not wired yet (data-ad-wired). No IntersectionObserver ->
+   the autoplay attribute is left to do its thing. If the browser
+   refuses autoplay, the rejection is swallowed: the first frame just
+   sits there and tapping the video toggles play/pause by hand. */
+(function () {
+  function tryPlay(v) {
+    var p = v.play();
+    if (p && p.catch) { p.catch(function () { /* refused: stay quiet */ }); }
+  }
+  function wire(v) {
+    if (v.getAttribute("data-ad-wired")) { return; }
+    v.setAttribute("data-ad-wired", "1");
+    var wrap = v.parentNode;
+    var btn = wrap ? wrap.querySelector(".ad-vol-btn") : null;
+    function sync() {
+      if (!btn) { return; }
+      btn.textContent = v.muted ? "🔇" : "🔊";
+      btn.setAttribute("aria-label",
+                       v.muted ? "Turn sound on" : "Turn sound off");
+    }
+    if (btn) {
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        v.muted = !v.muted;
+        if (!v.muted) { tryPlay(v); }
+        sync();
+      });
+      sync();
+    }
+    v.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (v.paused) { tryPlay(v); } else { v.pause(); }
+    });
+    if (window.__hereAdIO) { window.__hereAdIO.observe(v); }
+  }
+  function init() {
+    var vids = document.querySelectorAll(".ad-card video.post-video-file");
+    for (var i = 0; i < vids.length; i++) { wire(vids[i]); }
+  }
+  if (!window.__hereAdIO && "IntersectionObserver" in window) {
+    window.__hereAdIO = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        var v = entries[i].target;
+        if (entries[i].intersectionRatio >= 0.5) { tryPlay(v); }
+        else { v.pause(); }
+      }
+    }, { threshold: [0, 0.5] });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+{% endif %}
