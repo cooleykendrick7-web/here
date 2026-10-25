@@ -2298,7 +2298,8 @@ def post_card(p, viewer, owner_on=False):
     if viewer and not can_view_post(viewer, p, owner_on):
         conn.close()
         return None
-    a = conn.execute("SELECT id,name,avatar,is_verified FROM users WHERE id=?",
+    a = conn.execute("SELECT id,name,avatar,is_verified,private_profile "
+                     "FROM users WHERE id=?",
                      (p["user_id"],)).fetchone()
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
                          (p["id"],)).fetchone()["c"]
@@ -2387,6 +2388,15 @@ def post_card(p, viewer, owner_on=False):
     if a and a["avatar"]:
         avatar = avatar_url(a["avatar"])
     priv = p.get("privacy") or "public"
+    # Build SHARE: the text riding along in share intents — the post's
+    # first non-empty line, else the author's name.
+    share_text = ""
+    for _line in (p["body"] or "").splitlines():
+        if _line.strip():
+            share_text = " ".join(_line.split())[:100]
+            break
+    if not share_text:
+        share_text = ((a["name"] if a else "Someone") + " on HERE")
     return {
         "id": p["id"], "user_id": p["user_id"],
         "dom_id": ("post-share-%d" % share["id"]) if share else ("post-%d" % p["id"]),
@@ -2422,6 +2432,16 @@ def post_card(p, viewer, owner_on=False):
         "can_pin": bool(viewer and viewer["id"] == p["user_id"]
                          and not p.get("page_id") and not share),
         "can_share": bool(viewer and not share and priv == "public"),
+        # Build SHARE: the external share sheet is offered ONLY when
+        # the /p/{id} public page would actually render this post to a
+        # stranger — post privacy 'public' AND the author is not a
+        # private profile. Anything else keeps the internal share
+        # behavior above and never exposes a working external link.
+        "can_share_external": bool(
+            viewer and priv == "public"
+            and not (a and a["private_profile"])),
+        "share_url": "https://joincomehere.com/p/%d" % p["id"],
+        "share_text": share_text,
         "can_hide": bool(viewer),
         "hidden_by_viewer": hidden_by_viewer,
         "is_share": bool(share),
@@ -13621,19 +13641,65 @@ def _house_creator(request, conn):
     return dict(row) if row else None
 
 
+@app.get("/a/{aid}", response_class=HTMLResponse)
+async def public_ad(request: Request, aid: int):
+    """Public landing page for one ad (Build SHARE): the destination
+    of every copied/shared ad link, open to logged-out visitors like
+    the other public pages. An ACTIVE ad renders large — Sponsored
+    label, media, full words, and the CTA routed through the logging
+    click route. A paused, ended or missing ad gets the generic join
+    teaser: never a 404, and no ad copy leaks once an ad stops."""
+    viewer = current_user(request)
+    conn = db()
+    row = conn.execute("SELECT * FROM ads WHERE id=?", (aid,)).fetchone()
+    ad = dict(row) if row else None
+    sponsor_name, sponsor_avatar = "HERE", ""
+    if ad and ad.get("kind") == "page" and ad.get("page_id"):
+        pg = conn.execute("SELECT name, cover FROM pages WHERE id=?",
+                          (ad["page_id"],)).fetchone()
+        if pg:
+            sponsor_name = pg["name"]
+            sponsor_avatar = avatar_url(pg["cover"] or "")
+    conn.close()
+    if not ad or (ad.get("status") or "") != "active":
+        return _public_teaser(request, viewer)
+    card = ads.compose_card(ad, sponsor_name, sponsor_avatar)
+    # The landing shows the advertiser's full words (the feed card's
+    # 70/160 trims are feed-only), over the composed layout/CTA/links.
+    card["title"] = (ad.get("title") or "").strip() or card["title"]
+    card["body"] = (ad.get("body") or "").strip()
+    og_image = ""
+    og_video = ""
+    if card["layout"] == "media" and card["media_path"]:
+        og_image = _abs_url(request, "/uploads/" + card["media_path"])
+    elif card["layout"] == "video" and card["media_path"]:
+        og_video = _abs_url(request, "/uploads/" + card["media_path"])
+    return render(request, "public_ad.html", {
+        "ad": card,
+        "excerpt": card["body"] or card["title"],
+        "og_image": og_image, "og_video": og_video,
+        "logged_in": bool(viewer),
+    })
+
+
 @app.get("/ads/{aid}/click")
 async def ad_click(request: Request, aid: int):
     """Log the click, then 302 to the ad's link. Only http(s) URLs and
-    internal paths are honored; anything else lands on '#'."""
-    user, err = require_login(request)
-    if err:
-        return err
+    internal paths are honored; anything else lands on '#'. Logged-in
+    clicks log a full event; a logged-out click (the shared-link case
+    from /a/{id}) still counts — ad_events.user_id is NOT NULL, so it
+    bumps the ads.clicks counter without an event row."""
+    user = current_user(request)
     target = "#"
     conn = db()
     ad = conn.execute("SELECT link_url FROM ads WHERE id=?",
                       (aid,)).fetchone()
     if ad:
-        ads.record_click(conn, aid, user["id"])
+        if user:
+            ads.record_click(conn, aid, user["id"])
+        else:
+            conn.execute("UPDATE ads SET clicks=clicks+1 WHERE id=?",
+                         (aid,))
         conn.commit()
         target = ads.safe_link(ad["link_url"])
     conn.close()

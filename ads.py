@@ -354,6 +354,10 @@ def compose_card(ad, sponsor_name="", sponsor_avatar=""):
         "cta_label": (ad.get("cta_label") or "Learn more")[:30],
         "click_url": f"/ads/{ad['id']}/click",
         "hide_url": f"/ads/{ad['id']}/hide",
+        # Build SHARE: every ad has a canonical public landing page;
+        # the card's share sheet copies / flies out this link.
+        "share_url": f"https://joincomehere.com/a/{ad['id']}",
+        "share_text": _trim(ad.get("title"), 100) or "HERE",
         "sponsor_name": sponsor_name,
         "sponsor_avatar": sponsor_avatar,
     }
