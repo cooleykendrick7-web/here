@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}📣 Run as ad — {{ page.name|e }} — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">📣 Run as ad — {{ page.name|e }}</div>
+  <p style="color:var(--muted);margin-top:8px">Promote your page in everyone's home feed as a <strong>Sponsored</strong> card — get sales and leads for your business. Running an ad is <strong>free</strong> right now. You write the words, HERE puts the ad together and runs it in the rotation.</p>
+
+  <form action="/page/{{ page.id }}/promote" method="post" enctype="multipart/form-data" style="margin-top:12px">
+    <div class="field">
+      <label>What are you promoting?</label>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px">
+        <label><input type="radio" name="promote_what" value="page" checked> 🏠 The page itself</label>
+        {% if page_posts %}<label><input type="radio" name="promote_what" value="post"> 📝 A page post</label>{% endif %}
+        {% if my_listings %}<label><input type="radio" name="promote_what" value="listing"> 🛒 A Market listing</label>{% endif %}
+        <label><input type="radio" name="promote_what" value="custom"> ✏️ Custom ad</label>
+      </div>
+    </div>
+    {% if page_posts %}
+    <div class="field">
+      <label for="pa-post">Page post</label>
+      <select id="pa-post" name="post_id">
+        {% for p in page_posts %}<option value="{{ p.id }}">{{ p.label|e }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    {% if my_listings %}
+    <div class="field">
+      <label for="pa-listing">Market listing</label>
+      <select id="pa-listing" name="listing_id">
+        {% for l in my_listings %}<option value="{{ l.id }}">{{ l.title|e }}</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <div class="field">
+      <label for="pa-title">Headline (blank = use the page / post / listing name)</label>
+      <input type="text" id="pa-title" name="title" maxlength="120" placeholder="Your headline">
+    </div>
+    <div class="field">
+      <label for="pa-body">Your words</label>
+      <textarea id="pa-body" name="body" maxlength="1000" placeholder="What should the ad say? (blank = the page description or post text)"></textarea>
+    </div>
+    <div class="field">
+      <label for="pa-media">Picture or video (optional — overrides the item's own media)</label>
+      <input type="file" id="pa-media" name="media" accept="image/*,video/*,.mp4,.mov,.webm">
+    </div>
+    <div class="field">
+      <label for="pa-link">Link (custom ads — where a click goes)</label>
+      <input type="text" id="pa-link" name="link_url" maxlength="500" placeholder="https://… or /page/{{ page.id }}">
+    </div>
+    <div class="field">
+      <label for="pa-cta">Button text</label>
+      <input type="text" id="pa-cta" name="cta_label" maxlength="30" value="Learn more">
+    </div>
+    <div class="field">
+      <label for="pa-tags">Interest tags (comma-separated — people into these see it more)</label>
+      <input type="text" id="pa-tags" name="tags" maxlength="200" placeholder="e.g. music, cars, gaming">
+    </div>
+    <div class="field">
+      <label>When should it run?</label>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px">
+        <label><input type="radio" name="schedule" value="always" checked> Always</label>
+        <label><input type="radio" name="schedule" value="weekly"> Weekly</label>
+        <label><input type="radio" name="schedule" value="monthly"> Monthly</label>
+      </div>
+    </div>
+    <div class="field">
+      <label>Weekly — which days</label>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">
+        {% for d, lbl in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),(5,'Sat'),(6,'Sun')] %}
+        <label><input type="checkbox" name="weekly_days" value="{{ d }}"> {{ lbl }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="field">
+      <label for="pa-mdays">Monthly — which days (e.g. 1, 15, 31)</label>
+      <input type="text" id="pa-mdays" name="monthly_days" placeholder="1, 15">
+    </div>
+    <div class="field" style="display:flex;gap:12px;flex-wrap:wrap">
+      <div>
+        <label for="pa-hs">Start hour (0–24, Chicago time)</label>
+        <input type="number" id="pa-hs" name="hour_start" min="0" max="24" value="0" style="width:110px">
+      </div>
+      <div>
+        <label for="pa-he">End hour (0–24)</label>
+        <input type="number" id="pa-he" name="hour_end" min="0" max="24" value="24" style="width:110px">
+      </div>
+    </div>
+    <div class="field">
+      <label><input type="checkbox" name="smart_hours" value="1"> ⚡ Smart hours — push harder at peak times (11am–2pm, 7–11pm)</label>
+    </div>
+    <div class="field" style="display:flex;gap:12px;flex-wrap:wrap">
+      <div>
+        <label for="pa-start">Starts on (optional)</label>
+        <input type="date" id="pa-start" name="starts_on">
+      </div>
+      <div>
+        <label for="pa-end">Ends on (optional)</label>
+        <input type="date" id="pa-end" name="ends_on">
+      </div>
+    </div>
+    <button type="submit" class="btn">📣 Run this ad</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="section-title">📊 Your ads for this page</div>
+  {% if my_ads %}
+  <div style="overflow-x:auto;margin-top:10px">
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+      <thead><tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px">Ad</th><th style="padding:6px 8px">Status</th><th style="padding:6px 8px">Schedule</th><th style="padding:6px 8px">Impressions</th><th style="padding:6px 8px">Clicks</th><th style="padding:6px 8px">CTR</th><th style="padding:6px 8px"></th></tr></thead>
+      <tbody>
+        {% for ad in my_ads %}
+        <tr style="border-top:1px solid var(--border)">
+          <td style="padding:6px 8px"><strong>{{ ad.title|e }}</strong></td>
+          <td style="padding:6px 8px">{{ ad.status|e }}</td>
+          <td style="padding:6px 8px">{{ ad.schedule_label|e }}</td>
+          <td style="padding:6px 8px">{{ ad.impressions }}</td>
+          <td style="padding:6px 8px">{{ ad.clicks }}</td>
+          <td style="padding:6px 8px">{{ ad.ctr|e }}</td>
+          <td style="padding:6px 8px;white-space:nowrap">
+            {% if ad.status == 'active' %}
+            <form class="inline-form" action="/page/{{ page.id }}/promote/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="paused"><button class="btn-ghost btn-sm" type="submit">⏸ Pause</button></form>
+            {% elif ad.status == 'paused' %}
+            <form class="inline-form" action="/page/{{ page.id }}/promote/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="active"><button class="btn-ghost btn-sm" type="submit">▶ Resume</button></form>
+            {% endif %}
+            {% if ad.status != 'ended' %}
+            <form class="inline-form" action="/page/{{ page.id }}/promote/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="ended"><button class="btn-ghost btn-sm" type="submit">⏹ End</button></form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p style="color:var(--muted);margin-top:8px">No ads yet — your first one takes a minute.</p>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -14,6 +14,7 @@
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       {% if page.is_owner %}
       <a class="btn-ghost btn-sm" href="/page/{{ page.id }}/edit">✏️ Edit Page</a>
+      <a class="btn-ghost btn-sm" href="/page/{{ page.id }}/promote">📣 Run as ad</a>
       {% if page.is_verified %}
       <span class="kind-tag"><span class="verified-star">★</span> Verified</span>
       {% elif page.verification_status == 'pending' %}

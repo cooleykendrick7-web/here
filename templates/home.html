@@ -135,8 +135,12 @@
   </form>
 </div>
 
-{% for post in posts %}
-  {% include "partials/post_card.html" %}
+{% for item in feed_items %}
+  {% if item.kind == 'ad' %}
+    {% with ad=item.ad %}{% include "partials/ad_card.html" %}{% endwith %}
+  {% else %}
+    {% with post=item.post %}{% include "partials/post_card.html" %}{% endwith %}
+  {% endif %}
 {% else %}
 <div class="card"><p style="color:var(--muted)">No posts yet. Be the first to say something!</p></div>
 {% endfor %}
