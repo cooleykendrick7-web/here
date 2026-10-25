@@ -765,6 +765,21 @@ def init_db():
     if "host_video_ok" not in _live_sess_cols:
         c.execute("ALTER TABLE live_sessions ADD COLUMN "
                   "host_video_ok INTEGER")
+    # --- Build X: TikTok-style panel grid state ---
+    # panel_open: the host has opened the panel grid (or the first
+    # guest was approved onto it — _live_add_member opens it).
+    # While open, the stage renders the equal-tile grid with empty
+    # "+ Request" squares; closed + no guests = solo fullscreen.
+    # panel_boxes: how many GUEST squares the host allows (1..8,
+    # default 5 — host + 5, the reference layout). Approving a
+    # join request at the boxes limit is refused; the hard cap
+    # LIVE_PANEL_MAX still bounds the panel absolutely.
+    if "panel_open" not in _live_sess_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "panel_open INTEGER DEFAULT 0")
+    if "panel_boxes" not in _live_sess_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "panel_boxes INTEGER DEFAULT 5")
     c.execute("UPDATE live_sessions SET like_count=0 "
               "WHERE like_count IS NULL")
     # Backfill pre-upgrade rooms: an approved join request WAS the
@@ -8391,6 +8406,17 @@ def _live_panel_size(conn, lid):
     return 1 + (r["c"] if r else 0)
 
 
+def _live_panel_boxes(live):
+    """Build X: the host's guest-square allowance for this live
+    (live_sessions.panel_boxes), clamped to 1..8; legacy rows with
+    no value read as the default 5."""
+    try:
+        n = int(live.get("panel_boxes") or 5)
+    except (TypeError, ValueError):
+        n = 5
+    return max(1, min(8, n))
+
+
 def _live_add_member(conn, live, uid):
     """Put uid on the panel (no commit). Returns False when the
     panel is already at the LIVE_PANEL_MAX cap; True when uid is
@@ -8404,6 +8430,11 @@ def _live_add_member(conn, live, uid):
         if uid not in ids:
             ids.append(uid)
             _live_set_panel_order(conn, lid, ids)
+        # Build X: a guest on the panel means the panel grid is
+        # open (the first approval opens it for everyone).
+        conn.execute(
+            "UPDATE live_sessions SET panel_open=1 WHERE id=?",
+            (lid,))
         return True
     if _live_panel_size(conn, lid) >= LIVE_PANEL_MAX:
         return False
@@ -8418,6 +8449,9 @@ def _live_add_member(conn, live, uid):
     if uid not in ids:
         ids.append(uid)
     _live_set_panel_order(conn, lid, ids)
+    # Build X: first guest on the panel opens the grid.
+    conn.execute(
+        "UPDATE live_sessions SET panel_open=1 WHERE id=?", (lid,))
     return True
 
 
@@ -9332,6 +9366,10 @@ async def live_state(request: Request, lid: int):
                                            else "watcher"),
         "my_join": None, "pending_requests": [],
         "panel": panel,
+        # Build X: the panel grid's shared state — open or not,
+        # and the host's guest-square allowance (1..8).
+        "panel_open": bool(live.get("panel_open")),
+        "panel_boxes": _live_panel_boxes(live),
         "like_count": live.get("like_count") or 0,
         "new_likes": min(new_like_count, 20),
         "like_cursor": like_cursor,
@@ -10706,11 +10744,30 @@ async def live_join_decide(request: Request, lid: int):
             {"ok": False,
              "error": "That's an invite, not a join request."},
             status_code=400)
-    if approve and not _live_add_member(conn, live, req["user_id"]):
-        conn.close()
-        return JSONResponse(
-            {"ok": False, "error": "Panel is full (8 guests max)."},
-            status_code=409)
+    if approve:
+        # Build X: two fullness gates, hard cap FIRST so its exact
+        # long-standing message wins at the absolute limit, then
+        # the host's own boxes allowance.
+        if _live_panel_size(conn, lid) >= LIVE_PANEL_MAX:
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "Panel is full (8 guests max)."},
+                status_code=409)
+        if len(_live_active_members(conn, lid)) \
+                >= _live_panel_boxes(live):
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "Panel is full — raise the boxes or "
+                          "remove someone."},
+                status_code=409)
+        if not _live_add_member(conn, live, req["user_id"]):
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "Panel is full (8 guests max)."},
+                status_code=409)
     conn.execute(
         "UPDATE live_join_requests SET status=?, decided_at=? "
         "WHERE id=?",
@@ -10718,6 +10775,74 @@ async def live_join_decide(request: Request, lid: int):
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/panel-open")
+async def live_panel_open(request: Request, lid: int):
+    """Build X, host only: open or close the panel grid. Opening
+    shows the grid + empty Request squares to the whole room.
+    Closing is refused while guests are on the panel (nobody is
+    ever kicked by a layout change); the first approved guest
+    opens the panel on its own (see _live_add_member)."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host can open or close the panel."},
+            status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    want_open = bool(data.get("open"))
+    conn = db()
+    if not want_open and _live_active_members(conn, lid):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "The panel can't close while guests are on "
+                      "it — remove them first, or let them step "
+                      "down."},
+            status_code=400)
+    conn.execute(
+        "UPDATE live_sessions SET panel_open=? WHERE id=?",
+        (1 if want_open else 0, lid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "panel_open": want_open})
+
+
+@app.post("/live/{lid}/panel-boxes")
+async def live_panel_boxes(request: Request, lid: int):
+    """Build X, host only: set how many GUEST squares the panel
+    shows (1..8, clamped; default 5). Lowering the count never
+    kicks anyone — it only stops further approvals until the
+    panel thins out or the host raises it again."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host can set the panel boxes."},
+            status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    n = _live_body_int(data, "boxes")
+    n = max(1, min(8, n or 5))
+    conn = db()
+    conn.execute(
+        "UPDATE live_sessions SET panel_boxes=? WHERE id=?",
+        (n, lid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "panel_boxes": n})
 
 
 @app.post("/live/{lid}/guest-leave")
