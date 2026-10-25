@@ -101,7 +101,9 @@ check("A: fresh user has NO boxes-glass class / --box-alpha "
 check("A: :root declares the glass default",
       "--glass-alpha:0.82;" in home)
 check("A: .card fills with the glass var",
-      ".card{background:rgba(255,255,255,var(--glass-alpha))" in home)
+      # Build LOOKS: the fill's triplet is now the --glass-rgb var
+      # (default 255,255,255 — the same white), alpha var unchanged.
+      ".card{background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha))" in home)
 check("A: .topbar fills with the glass var",
       "background:rgba(17,17,17,var(--glass-alpha))" in home)
 check("A: comment bubbles fill with the glass var (no blur)",
@@ -109,7 +111,7 @@ check("A: comment bubbles fill with the glass var (no blur)",
       in home)
 check("A: sheets fill with the glass var",
       ".aud-popup{position:fixed" in home
-      and "background:rgba(255,255,255,var(--glass-alpha))" in home)
+      and "background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha))" in home)
 check("A: large surfaces get the unconditional glass blur",
       "){ .card, .page-card, .stat-card, .topbar" in home)
 check("A: Your Spot tint multiplies by the unified glass alpha",
