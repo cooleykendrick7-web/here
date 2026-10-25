@@ -48,6 +48,7 @@
       {% if profile.streak and profile.streak >= 2 %}<span class="kind-tag">🔥 {{ profile.streak }} day streak</span>{% endif %}
       {% if profile.contest_winner %}<span class="kind-tag">🏆 My Views Winner</span>{% endif %}
       <span class="kind-tag">🎤 Live Level: {{ profile.live_level.label|e }}</span>
+      {% if profile.showdown_w or profile.showdown_l or profile.showdown_d %}<span class="kind-tag">⚔️ Showdowns: {{ profile.showdown_w }}W – {{ profile.showdown_l }}L{% if profile.showdown_d %} – {{ profile.showdown_d }}D{% endif %}</span>{% endif %}
       {% endif %}
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
       {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}

@@ -125,6 +125,24 @@
   filter:drop-shadow(0 6px 22px rgba(0,0,0,.55))}
 .live-gift-banner .gb-text{font-size:16px;font-weight:800;margin-top:6px;
   text-shadow:var(--lg-text-shadow)}
+/* ===== Build W2: ⚔️ LIVE SHOWDOWN bar ===== */
+.battle-vs{display:flex;align-items:center;gap:10px;margin-top:6px}
+.battle-side{flex:1;display:flex;align-items:center;gap:8px;min-width:0}
+.battle-side.right{flex-direction:row-reverse;text-align:right}
+.battle-side img,.battle-side .av-ph{width:38px;height:38px;border-radius:50%;
+  object-fit:cover;flex:none}
+.battle-side .b-name{font-weight:800;font-size:14.5px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.battle-side .b-score{font-size:24px;font-weight:900;line-height:1}
+.battle-mid{text-align:center;flex:none}
+.battle-mid .b-vs{font-size:19px;font-weight:900;color:#ffd97a}
+.battle-mid .b-clock{font-size:13px;font-weight:800;color:#fff}
+.battle-meter{display:flex;height:12px;border-radius:99px;overflow:hidden;
+  background:rgba(255,255,255,.16);margin-top:9px}
+.battle-meter .bm-me{background:var(--red);transition:width .6s ease}
+.battle-meter .bm-opp{background:#f2f2f2;transition:width .6s ease}
+.battle-note{font-size:12.5px;color:rgba(255,255,255,.82);margin-top:7px}
+.battle-crown{font-size:17px;font-weight:900;text-align:center;color:#ffd97a}
 /* Build P-GIFTS: art gift tiers — tier2 pop, tier4 takeover, tray
    tabs, rank/level chips. */
 .gift-pop{position:absolute;opacity:0;pointer-events:none;
@@ -388,6 +406,7 @@
   <button type="button" class="live-ctl" id="ctl-comment-focus" title="Comment">💬</button>
   <button type="button" class="live-ctl" id="ctl-poll" title="Poll / Trivia" hidden>📊</button>
   <button type="button" class="live-ctl" id="ctl-games" title="🎮 Games" hidden>🎮</button>
+  <button type="button" class="live-ctl" id="ctl-battle" title="⚔️ Live Showdown" hidden>⚔️</button>
  </div>
 <div class="live-controls" id="live-controls">
   <!-- panel members -->
@@ -448,6 +467,11 @@
 <div class="live-panel" id="live-game-closed" hidden style="border-color:rgba(255,150,160,.45)">
   <div id="live-game-closed-text" style="font-weight:700"></div>
   <div id="live-game-closed-detail" style="font-size:13.5px;margin-top:4px"></div>
+</div>
+<div class="live-panel" id="live-battle-bar" hidden style="border-color:rgba(255,217,122,.6)">
+  <div style="font-weight:900;letter-spacing:.4px">⚔️ LIVE SHOWDOWN</div>
+  <div id="live-battle-main"></div>
+  <div id="live-battle-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:9px"></div>
 </div>
 <div id="live-join-msg" style="font-size:13px;color:rgba(255,255,255,.88);margin:-6px 0 10px" hidden></div>
 <div id="live-muted-note" class="live-muted-note" hidden>🔇 You were muted by the host/admin — your mic is off for everyone until they unmute you.</div>
@@ -596,6 +620,11 @@ function liveRoomDiff(prev, next){
   var pendingInvites = [];
   var activePoll = null;          /* state payload's active_poll */
   var closedPoll = null;          /* state payload's last_closed_poll */
+  var battleState = null;         /* state payload's battle (W2) */
+  var battleCandidates = [];      /* host-only challenge list (W2) */
+  var battleSecondsLeft = null;   /* local countdown between polls */
+  var battleDeclinedSeen = 0;     /* declined battle id already toasted */
+  var battleDurPick = 300;        /* challenge length picker (W2) */
   var activeGame = null;          /* state payload's active_game */
   var lastGame = null;            /* state payload's last_game */
   /* ---- Live Tickets state ---- */
@@ -2570,6 +2599,257 @@ function liveRoomDiff(prev, next){
   }
   $('ctl-invite-others').addEventListener('click', openInviteSheet);
 
+  /* ---------------- ⚔️ LIVE SHOWDOWN (Build W2) ----------------
+     The state poll carries `battle` — the shared scoreboard from
+     THIS room's point of view ('me' = this room's host). Pending
+     incoming = Accept/Pass right in the bar; pending outgoing =
+     waiting + Cancel; active = VS scoreboard + tug meter +
+     countdown; finished = the 👑 banner (the server keeps it for
+     ~60s) with a one-tap Rematch for the host. */
+  function fmtClock(s){
+    s = Math.max(0, s | 0);
+    return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+  }
+  function battlePerson(person, score, right){
+    var wrap = document.createElement('div');
+    wrap.className = 'battle-side' + (right ? ' right' : '');
+    if (person.avatar){
+      var im = document.createElement('img');
+      im.src = person.avatar; im.alt = '';
+      wrap.appendChild(im);
+    } else {
+      var ph = document.createElement('span');
+      ph.className = 'av-ph';
+      ph.textContent = (person.name || '?').charAt(0).toUpperCase();
+      wrap.appendChild(ph);
+    }
+    var tx = document.createElement('div'); tx.style.minWidth = '0';
+    var nm = document.createElement('div'); nm.className = 'b-name';
+    nm.textContent = person.name;
+    var sc = document.createElement('div'); sc.className = 'b-score';
+    sc.textContent = score + ' pts';
+    tx.appendChild(nm); tx.appendChild(sc);
+    wrap.appendChild(tx);
+    return wrap;
+  }
+  function battleBtn(label, fn, primary){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = primary ? 'btn btn-sm' : 'btn-ghost btn-sm';
+    b.textContent = label;
+    b.addEventListener('click', fn);
+    return b;
+  }
+  function battleAct(path, okMsg){
+    post(path, {}).then(function(d){
+      if (d && d.ok){ if (okMsg) toast(okMsg); }
+      else toast((d && d.error) || 'Could not do that.');
+      pollState();
+    }).catch(function(){ toast('Could not do that.'); });
+  }
+  function renderBattle(){
+    var bar = $('live-battle-bar'), main = $('live-battle-main'),
+        acts = $('live-battle-actions');
+    var b = battleState;
+    if (!b || b.status === 'cancelled'){
+      bar.hidden = true;
+      battleSecondsLeft = null;
+      return;
+    }
+    if (b.status === 'declined'){
+      bar.hidden = true;
+      if (battleDeclinedSeen !== b.id){
+        battleDeclinedSeen = b.id;
+        toast('⚔️ ' + b.opponent.name + ' passed on the Showdown.');
+      }
+      return;
+    }
+    bar.hidden = false;
+    main.innerHTML = '';
+    acts.innerHTML = '';
+    if (b.status === 'pending'){
+      battleSecondsLeft = null;
+      var mins = Math.round(b.duration_sec / 60);
+      var line = document.createElement('div');
+      line.style.cssText = 'margin-top:6px;font-size:14.5px';
+      if (b.direction === 'incoming'){
+        line.textContent = '⚔️ ' + b.opponent.name
+          + ' challenges YOU — ' + mins + ' minutes, gifts are '
+          + 'points!';
+        acts.appendChild(battleBtn('⚔️ Accept the Showdown',
+          function(){
+            battleAct('/battle/' + b.id + '/accept',
+                      '⚔️ Showdown is ON!');
+          }, true));
+        acts.appendChild(battleBtn('Pass', function(){
+          battleAct('/battle/' + b.id + '/decline');
+        }));
+      } else {
+        line.textContent = '⚔️ Challenge sent to ' + b.opponent.name
+          + ' (' + mins + ' min) — waiting for them to accept…';
+        acts.appendChild(battleBtn('Cancel challenge', function(){
+          battleAct('/battle/' + b.id + '/cancel',
+                    'Challenge called off.');
+        }));
+      }
+      main.appendChild(line);
+      return;
+    }
+    /* active or finished: the VS scoreboard */
+    var vs = document.createElement('div');
+    vs.className = 'battle-vs';
+    vs.appendChild(battlePerson(b.me, b.my_score, false));
+    var mid = document.createElement('div');
+    mid.className = 'battle-mid';
+    var vsT = document.createElement('div'); vsT.className = 'b-vs';
+    vsT.textContent = 'VS';
+    var clock = document.createElement('div');
+    clock.className = 'b-clock';
+    clock.id = 'live-battle-clock';
+    clock.textContent = b.status === 'finished' ? 'FINAL'
+      : fmtClock(b.seconds_left || 0);
+    mid.appendChild(vsT); mid.appendChild(clock);
+    vs.appendChild(mid);
+    vs.appendChild(battlePerson(b.opponent, b.opp_score, true));
+    main.appendChild(vs);
+    var meter = document.createElement('div');
+    meter.className = 'battle-meter';
+    var total = (b.my_score + b.opp_score) || 0;
+    var myPct = total ? Math.round(100 * b.my_score / total) : 50;
+    var fMe = document.createElement('div'); fMe.className = 'bm-me';
+    fMe.style.width = myPct + '%';
+    var fOpp = document.createElement('div');
+    fOpp.className = 'bm-opp';
+    fOpp.style.width = (100 - myPct) + '%';
+    meter.appendChild(fMe); meter.appendChild(fOpp);
+    main.appendChild(meter);
+    if (b.status === 'active'){
+      battleSecondsLeft = (typeof b.seconds_left === 'number')
+        ? b.seconds_left : null;
+      var note = document.createElement('div');
+      note.className = 'battle-note';
+      note.textContent = 'Send ticket gifts to score points for '
+        + b.me.name + ' — free gifts cheer but don\'t score. 🎁';
+      main.appendChild(note);
+    } else {
+      battleSecondsLeft = null;
+      var crown = document.createElement('div');
+      crown.className = 'battle-crown';
+      crown.style.marginTop = '9px';
+      crown.textContent = b.winner_name
+        ? ('👑 ' + b.winner_name + ' takes the Showdown!')
+        : '🤝 It\'s a draw — nobody takes the crown!';
+      main.appendChild(crown);
+      if (b.forfeit){
+        var fn = document.createElement('div');
+        fn.className = 'battle-note';
+        fn.style.textAlign = 'center';
+        fn.textContent = 'Won by forfeit — the other live ended.';
+        main.appendChild(fn);
+      }
+      if (iAmHost()){
+        acts.appendChild(battleBtn('⚔️ Rematch', function(){
+          battleAct('/battle/' + b.id + '/rematch',
+                    '⚔️ Rematch challenge sent!');
+        }, true));
+      }
+    }
+  }
+  /* The host's ⚔️ sheet: pick a length, pick a live host. When a
+     battle already involves this room the sheet just says so. */
+  function openBattleSheet(){
+    sheetTitle.textContent = '⚔️ LIVE SHOWDOWN';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    var b = battleState;
+    function note(txt){
+      var d = document.createElement('div');
+      d.style.cssText = 'padding:10px 8px;font-size:14.5px';
+      d.textContent = txt;
+      sheetActions.appendChild(d);
+    }
+    if (b && (b.status === 'pending' || b.status === 'active')){
+      note(b.status === 'active'
+        ? 'You are mid-Showdown with ' + b.opponent.name + ' — '
+          + b.my_score + ' to ' + b.opp_score
+          + '. One battle at a time!'
+        : 'Your challenge to ' + b.opponent.name + ' is out — '
+          + 'watch the Showdown bar up top.');
+      sheetEl.hidden = false; sheetBd.hidden = false;
+      return;
+    }
+    note('Battle another live host head-to-head! Fans send gifts '
+      + 'to score points for whoever they like — most points when '
+      + 'the clock ends takes the crown 👑');
+    var durRow = document.createElement('div');
+    durRow.style.cssText = 'display:flex;gap:8px;padding:2px 8px 10px';
+    [[180, '3 min'], [300, '5 min'], [600, '10 min']]
+      .forEach(function(pair){
+        var db = document.createElement('button');
+        db.type = 'button';
+        db.className = 'live-ctl';
+        db.style.cssText = 'flex:1;font-size:14px;padding:7px 4px'
+          + (battleDurPick === pair[0]
+             ? ';background:var(--red);border-color:var(--red-dark)'
+             : '');
+        db.textContent = pair[1];
+        db.addEventListener('click', function(){
+          battleDurPick = pair[0];
+          openBattleSheet();
+        });
+        durRow.appendChild(db);
+      });
+    sheetActions.appendChild(durRow);
+    if (!battleCandidates.length){
+      note('Nobody else is live right now — check back when '
+        + 'another host goes live.');
+    }
+    battleCandidates.forEach(function(c){
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;'
+        + 'padding:7px 8px';
+      if (c.avatar){
+        var im = document.createElement('img');
+        im.className = 'avatar av-40'; im.src = c.avatar; im.alt = '';
+        row.appendChild(im);
+      } else {
+        var ph = document.createElement('span');
+        ph.className = 'av-ph av-40';
+        ph.textContent = (c.name || '?').charAt(0).toUpperCase();
+        row.appendChild(ph);
+      }
+      var nm = document.createElement('span');
+      nm.style.fontWeight = '700'; nm.style.flex = '1';
+      nm.textContent = c.name + (c.title ? ' — ' + c.title : '');
+      row.appendChild(nm);
+      var cb = document.createElement('button');
+      cb.type = 'button'; cb.className = 'btn btn-sm';
+      cb.textContent = '⚔️ Challenge';
+      cb.addEventListener('click', function(){
+        cb.disabled = true;
+        post('/battle/challenge', {opponent_live_id: c.live_id,
+            duration_sec: battleDurPick}).then(function(d){
+          if (d && d.ok){
+            toast('⚔️ Challenge sent to ' + c.name + '!');
+            closeSheet();
+          } else {
+            cb.disabled = false;
+            toast((d && d.error) || 'Could not send that challenge.');
+          }
+          pollState();
+        }).catch(function(){
+          cb.disabled = false;
+          toast('Could not send that challenge.');
+        });
+      });
+      row.appendChild(cb);
+      sheetActions.appendChild(row);
+    });
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  $('ctl-battle').addEventListener('click', openBattleSheet);
+
   /* ---------------- live polls + trivia (games pack) ----------------
      The state poll carries active_poll (never with the trivia
      answer) and last_closed_poll (answer + winners revealed once
@@ -3146,6 +3426,15 @@ function liveRoomDiff(prev, next){
       + 'rel="noopener" style="color:#ffd97a;font-weight:700">'
       + 'Get tickets 🎟️</a>';
     sheetActions.appendChild(bal);
+    if (battleState && battleState.status === 'active'){
+      var bnote = document.createElement('div');
+      bnote.style.cssText = 'padding:2px 8px 8px;font-size:13px;'
+        + 'color:#ffd97a;font-weight:700';
+      bnote.textContent = '⚔️ Showdown is ON — ticket gifts score '
+        + 'points in this room. Free gifts cheer — ticket gifts '
+        + 'score!';
+      sheetActions.appendChild(bnote);
+    }
     var tabs = document.createElement('div');
     tabs.className = 'gift-tabs';
     [['money', '💰 Money'], ['love', '❤️ Love'],
@@ -3267,6 +3556,8 @@ function liveRoomDiff(prev, next){
     $('ctl-invite-others').hidden = !canManage();
     $('ctl-poll').hidden = !canManage();
     $('ctl-games').hidden = !canManage();
+    /* ⚔️ Showdown is the HOST's button — only they can challenge. */
+    $('ctl-battle').hidden = !iAmHost();
     /* Gifts are for everyone except the host (no gifting your
        own live — the server refuses it too). */
     $('ctl-gift').hidden = iAmHost();
@@ -3424,6 +3715,9 @@ function liveRoomDiff(prev, next){
         activeGame = d.active_game || null;
         lastGame = d.last_game || null;
         renderLiveGame();
+        battleState = d.battle || null;
+        battleCandidates = d.battle_candidates || [];
+        renderBattle();
         /* Live Tickets: balance, gift animations, top gifters,
            pinned shout — all ride the same poll. */
         if (typeof d.my_tickets === 'number'){
@@ -3512,9 +3806,9 @@ function liveRoomDiff(prev, next){
     setStatus('📺 This live has ended.');
     $('live-comment-input').disabled = true;
     ['ctl-mute','ctl-cam','ctl-flip','ctl-connect','ctl-end','ctl-panel-leave',
-     'ctl-join','ctl-like','ctl-poll','ctl-games','ctl-gift','live-requests-panel','live-people-panel',
+     'ctl-join','ctl-like','ctl-poll','ctl-games','ctl-gift','ctl-battle','live-requests-panel','live-people-panel',
      'live-invite-banner','live-member-banner','live-poll-card',
-     'live-poll-closed','live-game-card','live-game-closed'].forEach(function(id){
+     'live-poll-closed','live-game-card','live-game-closed','live-battle-bar'].forEach(function(id){
       var el = $(id);
       if (el) el.hidden = true;
     });
@@ -3532,6 +3826,12 @@ function liveRoomDiff(prev, next){
     var s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
     timerEl.textContent = Math.floor(s / 60) + ':'
       + ('0' + (s % 60)).slice(-2);
+    /* Showdown countdown ticks locally between state polls. */
+    if (battleSecondsLeft !== null && battleSecondsLeft > 0){
+      battleSecondsLeft -= 1;
+      var bc = $('live-battle-clock');
+      if (bc) bc.textContent = fmtClock(battleSecondsLeft);
+    }
     tickShout();
   }, 1000);
 

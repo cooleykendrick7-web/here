@@ -25,6 +25,15 @@
   </div>
 </div>
 
+{% if recent_showdowns %}
+<div class="card" id="lives-recent-showdowns">
+  <h3 style="font-size:18px">🏆 Recent Showdowns</h3>
+  {% for s in recent_showdowns %}
+  <p style="margin-top:6px;font-size:14.5px">⚔️ {% if s.winner_name %}<strong>{{ s.winner_name|e }}</strong> won{% else %}Draw{% endif %} — {{ s.challenger_name|e }} {{ s.challenger_score }} – {{ s.opponent_score }} {{ s.opponent_name|e }}{% if s.forfeit %} (forfeit){% endif %}</p>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div id="lives-sections">
   {% for s in sections %}
   <h3 class="lives-section-title">{{ s.title|e }}</h3>
