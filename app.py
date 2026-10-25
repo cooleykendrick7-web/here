@@ -3076,7 +3076,9 @@ async def public_post(request: Request, post_id: int):
         "embed_url": embed_url, "music_embed": music_embed,
         "like_count": like_count, "comment_count": comment_count,
         "created": fancy_time(p.get("created_at")),
-        "excerpt": (p.get("body") or "")[:160],
+        "excerpt": ((p.get("body") or "").strip()[:200]
+                    or f"{author['name']} posted on HERE — join free "
+                       "to see more."),
         "og_image": og_image,
         "logged_in": bool(viewer),
     })
@@ -13151,7 +13153,7 @@ async def public_listing(request: Request, lid: int):
         "seller": {"name": row["sname"],
                    "avatar": avatar_url(row["savatar"] or "")},
         "og_image": og_image,
-        "excerpt": (row["description"] or row["title"] or "")[:160],
+        "excerpt": (row["description"] or row["title"] or "")[:200],
         "safety_note": MARKET_SAFETY_NOTE,
         "logged_in": bool(viewer)})
 
