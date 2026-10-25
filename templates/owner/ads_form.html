@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ heading }} — Owner Panel — HERE</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;padding:20px;max-width:760px;margin:0 auto}
+a{color:#ff8f98;text-decoration:none}
+h1{font-size:22px;margin-bottom:6px;color:#ffd400}
+.sub{color:#9a9a9a;font-size:14px;margin-bottom:18px}
+.err{background:#3a0d12;border:1px solid #d41f2e;color:#ffb3ba;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:14px}
+label.fld{display:block;font-size:13px;font-weight:700;color:#ffd400;margin:16px 0 6px}
+input[type=text],input[type=url],input[type=number],input[type=date],textarea,select{width:100%;background:#141414;border:1px solid #2a2a2a;border-radius:8px;color:#f0f0f0;padding:9px 11px;font-size:14px}
+textarea{min-height:84px}
+.hint{color:#9a9a9a;font-size:12.5px;margin-top:4px}
+.days{display:flex;gap:12px;flex-wrap:wrap}
+.days label{font-size:13.5px;font-weight:400;color:#f0f0f0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.radio-row{display:flex;gap:16px;flex-wrap:wrap;font-size:14px}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:6px;padding:9px 16px;font-size:14px;font-weight:700;cursor:pointer;margin-top:22px}
+.btn-ghost{display:inline-block;background:#2a2a2a;color:#f0f0f0;border:none;border-radius:6px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;margin-top:22px}
+.checkline{font-size:14px;margin-top:14px}
+</style>
+</head>
+<body>
+
+<p><a href="/owner">← Owner Panel</a></p>
+<h1>{{ heading }}</h1>
+<p class="sub">Plug in your words, a picture or a video, and a link — HERE puts it together as a Sponsored card and runs it in the home feed rotation. 📣 Ads are always labeled <strong>Sponsored</strong>.</p>
+
+{% if error %}<div class="err">{{ error|e }}</div>{% endif %}
+
+<form action="{{ action }}" method="post" enctype="multipart/form-data">
+  <label class="fld" for="f-title">Headline</label>
+  <input type="text" id="f-title" name="title" maxlength="120" value="{{ ad.title|e if ad else '' }}" placeholder="e.g. Friday Night Showdown — live at 8pm">
+
+  <label class="fld" for="f-body">Your words</label>
+  <textarea id="f-body" name="body" maxlength="1000" placeholder="Say it the way you'd say it. This is the ad's text.">{{ ad.body|e if ad else '' }}</textarea>
+
+  <label class="fld" for="f-media">Picture or video (optional)</label>
+  <input type="file" id="f-media" name="media" accept="image/*,video/*,.mp4,.mov,.webm">
+  {% if ad and ad.media_path %}
+  <p class="hint">Current media: {{ ad.media_path|e }} ({{ ad.media_kind|e }}) — upload a new file to replace it.</p>
+  <label class="checkline"><input type="checkbox" name="media_clear" value="1"> Remove the media</label>
+  {% endif %}
+
+  <label class="fld" for="f-link">Link (where a click goes)</label>
+  <input type="text" id="f-link" name="link_url" maxlength="500" value="{{ ad.link_url|e if ad else '' }}" placeholder="https://… or /page/3">
+
+  <div class="grid2">
+    <div>
+      <label class="fld" for="f-cta">Button text</label>
+      <input type="text" id="f-cta" name="cta_label" maxlength="30" value="{{ ad.cta_label|e if ad else 'Learn more' }}">
+    </div>
+    <div>
+      <label class="fld" for="f-weight">Weight (1–5, heavier = shown more)</label>
+      <input type="number" id="f-weight" name="weight" min="1" max="5" value="{{ ad.weight if ad else 1 }}">
+    </div>
+  </div>
+
+  <label class="fld" for="f-tags">Interest tags (comma-separated)</label>
+  <input type="text" id="f-tags" name="tags" maxlength="200" value="{{ ad.tags|e if ad else '' }}" placeholder="e.g. music, cars, gaming">
+  <p class="hint">People whose interests match a tag see this ad more often. Untagged ads still run for everybody.</p>
+
+  <label class="fld">When should it run?</label>
+  <div class="radio-row">
+    <label><input type="radio" name="schedule" value="always" {% if not ad or ad.schedule == 'always' %}checked{% endif %}> Always</label>
+    <label><input type="radio" name="schedule" value="weekly" {% if ad and ad.schedule == 'weekly' %}checked{% endif %}> Weekly</label>
+    <label><input type="radio" name="schedule" value="monthly" {% if ad and ad.schedule == 'monthly' %}checked{% endif %}> Monthly</label>
+  </div>
+
+  <label class="fld">Weekly — which days</label>
+  {% set wd = (ad.weekly_days or '').split(',') if ad else [] %}
+  <div class="days">
+    {% for d, lbl in [(0,'Mon'),(1,'Tue'),(2,'Wed'),(3,'Thu'),(4,'Fri'),(5,'Sat'),(6,'Sun')] %}
+    <label><input type="checkbox" name="weekly_days" value="{{ d }}" {% if (d|string) in wd %}checked{% endif %}> {{ lbl }}</label>
+    {% endfor %}
+  </div>
+
+  <label class="fld" for="f-mdays">Monthly — which days (e.g. 1, 15, 31)</label>
+  <input type="text" id="f-mdays" name="monthly_days" value="{{ ad.monthly_days|e if ad else '' }}" placeholder="1, 15">
+
+  <div class="grid2">
+    <div>
+      <label class="fld" for="f-hs">Start hour (0–24)</label>
+      <input type="number" id="f-hs" name="hour_start" min="0" max="24" value="{{ ad.hour_start if ad else 0 }}">
+    </div>
+    <div>
+      <label class="fld" for="f-he">End hour (0–24)</label>
+      <input type="number" id="f-he" name="hour_end" min="0" max="24" value="{{ ad.hour_end if ad else 24 }}">
+    </div>
+  </div>
+  <p class="hint">Hours run on Chicago time. 0 to 24 = all day.</p>
+
+  <label class="checkline"><input type="checkbox" name="smart_hours" value="1" {% if ad and ad.smart_hours %}checked{% endif %}> ⚡ Smart hours — push harder at peak times (11am–2pm, 7–11pm)</label>
+
+  <div class="grid2">
+    <div>
+      <label class="fld" for="f-start">Starts on (optional)</label>
+      <input type="date" id="f-start" name="starts_on" value="{{ ad.starts_on|e if ad and ad.starts_on else '' }}">
+    </div>
+    <div>
+      <label class="fld" for="f-end">Ends on (optional)</label>
+      <input type="date" id="f-end" name="ends_on" value="{{ ad.ends_on|e if ad and ad.ends_on else '' }}">
+    </div>
+  </div>
+
+  <button type="submit" class="btn">{% if ad %}Save ad{% else %}Create ad{% endif %}</button>
+  <a class="btn-ghost" href="/owner">Cancel</a>
+</form>
+
+</body>
+</html>

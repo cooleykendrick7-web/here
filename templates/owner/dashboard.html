@@ -85,6 +85,79 @@ table.admin tr:last-child td{border-bottom:none}
 </section>
 
 <section>
+  <h2>📣 Ads — house rotation + page ads</h2>
+  <p style="font-size:13.5px;margin-bottom:10px">{{ ads_totals.ads }} ads · {{ ads_totals.active }} running · {{ ads_totals.impressions }} impressions · {{ ads_totals.clicks }} clicks · CTR {{ ads_totals.ctr }}. House ads are yours; page ads are run free by page owners (phase 1) and you can pause or end any of them here.</p>
+  <p style="margin-bottom:12px"><a class="btn" href="/owner/ads/new">➕ New house ad</a></p>
+  {% if ads_house %}
+  <div class="table-wrap" style="margin-bottom:14px">
+    <table class="admin">
+      <thead><tr><th>House ad</th><th>Status</th><th>Schedule</th><th>Weight</th><th>Impressions</th><th>Clicks</th><th>CTR</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for ad in ads_house %}
+        <tr>
+          <td><strong>{{ ad.title|e }}</strong>{% if ad.body %}<br><span class="excerpt">{{ ad.body|truncate(90)|e }}</span>{% endif %}<br><span class="excerpt">{{ ad.link_url|e }}</span></td>
+          <td><span class="status-pill">{{ ad.status|e }}</span></td>
+          <td>{{ ad.schedule_label|e }}</td>
+          <td>{{ ad.weight }}</td>
+          <td>{{ ad.impressions }}</td>
+          <td>{{ ad.clicks }}</td>
+          <td>{{ ad.ctr|e }}</td>
+          <td style="white-space:nowrap">
+            <a class="btn-ghost" href="/owner/ads/{{ ad.id }}/edit">✏️ Edit</a>
+            {% if ad.status == 'active' %}
+            <form class="inline-form" action="/owner/ads/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="paused"><button class="btn-ghost" type="submit">⏸ Pause</button></form>
+            {% elif ad.status == 'paused' %}
+            <form class="inline-form" action="/owner/ads/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="active"><button class="btn-ghost" type="submit">▶ Resume</button></form>
+            {% endif %}
+            {% if ad.status != 'ended' %}
+            <form class="inline-form" action="/owner/ads/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="ended"><button class="btn-ghost" type="submit">⏹ End</button></form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No house ads yet. Create the first one — it goes straight into the home feed rotation.</p>
+  {% endif %}
+  {% if ads_user %}
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>Page ad (oversight)</th><th>Page</th><th>By</th><th>Status</th><th>Schedule</th><th>Impressions</th><th>Clicks</th><th>CTR</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for ad in ads_user %}
+        <tr>
+          <td><strong>{{ ad.title|e }}</strong>{% if ad.body %}<br><span class="excerpt">{{ ad.body|truncate(90)|e }}</span>{% endif %}<br><span class="excerpt">{{ ad.link_url|e }}</span></td>
+          <td>{% if ad.page_id %}<a href="/page/{{ ad.page_id }}">{{ ad.page_name|e }}</a>{% else %}—{% endif %}</td>
+          <td>{{ ad.creator_name|e }}</td>
+          <td><span class="status-pill">{{ ad.status|e }}</span></td>
+          <td>{{ ad.schedule_label|e }}</td>
+          <td>{{ ad.impressions }}</td>
+          <td>{{ ad.clicks }}</td>
+          <td>{{ ad.ctr|e }}</td>
+          <td style="white-space:nowrap">
+            <a class="btn-ghost" href="/owner/ads/{{ ad.id }}/edit">✏️ Edit</a>
+            {% if ad.status == 'active' %}
+            <form class="inline-form" action="/owner/ads/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="paused"><button class="btn-ghost" type="submit">⏸ Pause</button></form>
+            {% elif ad.status == 'paused' %}
+            <form class="inline-form" action="/owner/ads/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="active"><button class="btn-ghost" type="submit">▶ Resume</button></form>
+            {% endif %}
+            {% if ad.status != 'ended' %}
+            <form class="inline-form" action="/owner/ads/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="ended"><button class="btn-ghost" type="submit">⏹ End</button></form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No page ads yet. Page owners create them from their page's "📣 Run as ad" button.</p>
+  {% endif %}
+</section>
+
+<section>
   <h2>💰 Payouts (Live Tickets cash-outs)</h2>
   <p style="color:#9a9a9a;font-size:13px;margin-bottom:6px">Streamers cash out earned tickets at $0.005 each. Tickets are held the moment they ask. If a streamer finished <strong>bank setup</strong>, tap <strong>💸 Approve &amp; send via Stripe</strong> — Stripe sends it to their bank for you. Otherwise <strong>send the money yourself</strong> (Cash App / bank — their note says where), then tap <strong>Mark paid</strong>. Declining returns their tickets instantly.</p>
   <p style="font-size:13.5px;margin-bottom:10px">{% if connect_state.state == 'ready' %}🏦 Bank payouts: <strong>ON</strong> — Stripe payouts to streamer banks are live.{% elif connect_state.state == 'blocked' %}🏦 Bank payouts: <strong>waiting on Stripe verification (owner step)</strong>{% if connect_state.error %} — last word from Stripe: {{ connect_state.error|e }}{% endif %}. Hand payouts work meanwhile.{% else %}🏦 Bank payouts: not proven yet — the state flips ON the first time a streamer sets up bank payouts (or shows the Stripe blocker if verification is still owed). Hand payouts work meanwhile.{% endif %}</p>
