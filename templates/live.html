@@ -55,6 +55,51 @@
     aspect-ratio:3/4}
   .live-grid.has-panel .live-tile.stage-bg{width:100%;height:100%}
 }
+/* ===== Build X: TikTok-style panel GRID =====
+   While the panel is OPEN and the viewer keeps the grid layout,
+   the stage is an equal-tile grid (host included): 2 people sit
+   side by side, 3-4 go two-up, 5-9 go three-up — portrait tiles,
+   small gaps, rounded corners. Empty guest squares (.live-box)
+   fill the host's remaining boxes. Rail mode is the .has-panel
+   look above (host full-bleed + tile rail), one tap away and
+   per-viewer. Grid cells only ever RE-PARENT the existing tile
+   nodes — a <video> is never recreated for a layout change. */
+.live-grid.panel-grid{display:grid;gap:6px;padding:60px 6px 118px;
+  grid-template-columns:repeat(var(--pcols,2),1fr);
+  align-content:start;overflow-y:auto;overflow-x:hidden}
+.live-grid.panel-grid .live-tile{position:relative;width:100%;
+  height:auto;aspect-ratio:3/4;z-index:1}
+@media (orientation:landscape){
+  .live-grid.panel-grid{height:100%;padding:8px 8px 96px;
+    grid-template-rows:repeat(var(--prows,1),1fr);
+    align-content:stretch}
+  .live-grid.panel-grid .live-tile{height:100%;aspect-ratio:auto}
+}
+.live-stage.in-mini .live-grid.panel-grid{padding:4px;gap:3px}
+/* empty guest squares: a signed-in watcher gets the tappable
+   "+ / Request" face; everyone else sees a plain quiet square. */
+.live-box{position:relative;border-radius:10px;width:100%;
+  aspect-ratio:3/4;border:1px dashed rgba(255,255,255,.35);
+  background:var(--lg-bg);color:#fff;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;
+  gap:2px;backdrop-filter:var(--lg-blur-sm);
+  -webkit-backdrop-filter:var(--lg-blur-sm)}
+@media (orientation:landscape){
+  .live-grid.panel-grid .live-box{height:100%;aspect-ratio:auto}
+}
+.live-box .box-plus{font-size:34px;font-weight:300;line-height:1}
+.live-box .box-word{font-size:14px;font-weight:700}
+.live-box .box-sub{font-size:11.5px;font-weight:600;
+  color:rgba(255,255,255,.75)}
+.live-box.can-ask{cursor:pointer}
+.live-box.can-ask:active{background:var(--lg-bg-strong)}
+/* role chip (Host) at a tile's top-left, like the reference */
+.live-tile .tile-role{position:absolute;top:6px;left:6px;z-index:3;
+  background:var(--lg-bg-strong);border:var(--lg-border);
+  border-radius:999px;color:#fff;font-size:10.5px;font-weight:800;
+  padding:2px 8px;backdrop-filter:var(--lg-blur-sm);
+  -webkit-backdrop-filter:var(--lg-blur-sm)}
+.live-tile .tile-role[hidden]{display:none}
 .live-tile{position:relative;aspect-ratio:1/1;background:#181818;border-radius:10px;
   overflow:hidden}
 .live-tile video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
@@ -193,6 +238,27 @@
   border:1px solid rgba(255,217,122,.5);border-radius:999px;
   padding:1px 8px;margin-left:6px;vertical-align:2px;white-space:nowrap}
 .live-float{flex-direction:column;gap:6px}
+/* ===== Build X: movable comments box =====
+   The floating comments box carries a slim glass handle bar:
+   drag it anywhere over the stage by the ⠿ grip (pointer
+   events — mouse and touch), or tap 💬 to hide/show the comment
+   stream. Spot + hidden state persist per device in
+   localStorage; with nothing saved, the box keeps its
+   stylesheet home (the .live-float rule: left, bottom:25%). */
+.live-float .live-float-bar{pointer-events:auto;display:flex;
+  gap:2px;align-items:center;align-self:flex-start;
+  background:var(--lg-bg);border:var(--lg-border);
+  border-radius:999px;padding:2px 8px 2px 4px;
+  backdrop-filter:var(--lg-blur-sm);
+  -webkit-backdrop-filter:var(--lg-blur-sm)}
+.live-float-bar .float-grip{cursor:grab;touch-action:none;
+  color:#fff;font-size:14px;line-height:1;padding:4px;
+  user-select:none;-webkit-user-select:none}
+.live-float-bar .float-grip:active{cursor:grabbing}
+.live-float-bar .float-eye{background:none;border:none;
+  cursor:pointer;font-size:14px;line-height:1;padding:4px 2px;
+  color:#fff}
+.live-float.comments-hidden .live-comments{display:none}
 .live-shout{pointer-events:auto;background:rgba(212,31,46,.55);
   border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:7px 11px;
   color:#fff;font-size:13.5px;backdrop-filter:var(--lg-blur-sm);
@@ -399,7 +465,7 @@
     <img class="gt-img" id="live-gift-takeover-img" alt="">
     <div class="gt-text" id="live-gift-takeover-text"></div>
   </div>
-  <div class="live-float" id="live-float"><div class="live-shout" id="live-shout" hidden></div><div class="live-comments" id="live-comments"></div></div>
+  <div class="live-float" id="live-float"><div class="live-float-bar" id="live-float-bar"><span class="float-grip" id="live-float-grip" title="Drag to move comments">⠿</span><button type="button" class="float-eye" id="live-float-eye" title="Hide comments">💬</button></div><div class="live-shout" id="live-shout" hidden></div><div class="live-comments" id="live-comments"></div></div>
 </div>
 
  </div>
@@ -409,6 +475,7 @@
   <button type="button" class="live-like-btn" id="ctl-like">❤️ <span id="live-like-count">0</span></button>
   <button type="button" class="live-like-btn" id="ctl-share" data-copy-path="/l/{{ live.id }}" title="Share this live">🔗</button>
   <button type="button" class="live-ctl" id="ctl-comment-focus" title="Comment">💬</button>
+  <button type="button" class="live-ctl" id="ctl-layout" title="Panel layout: grid / rail" hidden>▦</button>
   <button type="button" class="live-ctl" id="ctl-poll" title="Poll / Trivia" hidden>📊</button>
   <button type="button" class="live-ctl" id="ctl-games" title="🎮 Games" hidden>🎮</button>
   <button type="button" class="live-ctl" id="ctl-battle" title="⚔️ Live Showdown" hidden>⚔️</button>
@@ -493,6 +560,18 @@
 <div class="live-panel" id="live-people-panel" hidden>
   <div style="font-weight:800;margin-bottom:4px">👥 In this live</div>
   <div id="live-watchers"></div>
+</div>
+
+<div class="live-panel" id="live-panelctl" hidden>
+  <div style="font-weight:800;margin-bottom:6px">👥 Panel</div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button type="button" class="live-ctl" id="ctl-panel-toggle">👥 Open panel</button>
+    <span style="font-size:13px">Guest boxes</span>
+    <button type="button" class="live-ctl" id="ctl-boxes-minus" title="Fewer boxes">−</button>
+    <strong id="live-boxes-n">5</strong>
+    <button type="button" class="live-ctl" id="ctl-boxes-plus" title="More boxes">+</button>
+  </div>
+  <div style="font-size:12.5px;color:rgba(255,255,255,.78);margin-top:6px">Open the panel to show the grid — viewers tap a + Request square to ask in. Boxes = how many guests can be on at once.</div>
 </div>
 
 <div class="live-panel">
@@ -631,6 +710,17 @@ function liveRoomDiff(prev, next){
   var battleSecondsLeft = null;   /* local countdown between polls */
   var battleDeclinedSeen = 0;     /* declined battle id already toasted */
   var battleDurPick = 300;        /* challenge length picker (W2) */
+  /* ---- Build X: panel grid state ---- */
+  var panelOpen = false;          /* state payload's panel_open */
+  var panelBoxes = 5;             /* state payload's panel_boxes */
+  var myJoin = null;              /* state payload's my_join */
+  var layoutPref = 'grid';        /* 'grid' | 'rail', per device */
+  try {
+    if (localStorage.getItem('here_live_layout') === 'rail')
+      layoutPref = 'rail';
+  } catch (e) {}
+  var boxEls = [];                /* rendered empty-square nodes */
+  var boxesSig = '';              /* count|face — rebuild on change */
   var activeGame = null;          /* state payload's active_game */
   var lastGame = null;            /* state payload's last_game */
   /* ---- Live Tickets state ---- */
@@ -743,6 +833,28 @@ function liveRoomDiff(prev, next){
     if (n <= 9) return 3;
     return 4;
   }
+  /* Build X stage modes: 'solo' (panel closed — the single
+     full-bleed host look), 'grid' (panel open — the equal-tile
+     grid with empty Request squares), 'rail' (panel open — the
+     host full-bleed with a tile rail, the pre-X panel look).
+     Grid vs rail is a per-viewer, per-device preference. */
+  function stageLayout(){
+    if (!panelOpen) return 'solo';
+    return layoutPref === 'rail' ? 'rail' : 'grid';
+  }
+  function emptySquareCount(){
+    return Math.max(0, panelBoxes - Math.max(0, panel.length - 1));
+  }
+  /* The face every empty square wears for THIS viewer: a
+     signed-in watcher who hasn't asked gets the tappable
+     "+ / Request"; a pending asker sees "⏳ Requested"; the
+     host, panel members and signed-out guests see a plain
+     quiet "Open" square. */
+  function boxFace(){
+    if (!B.me || amMember || iAmHost()) return 'open';
+    if (myJoin && myJoin.status === 'pending') return 'requested';
+    return 'request';
+  }
   function ensureTile(member){
     var uid = member.user_id;
     if (tiles[uid]){ updateTile(member); return tiles[uid]; }
@@ -846,15 +958,22 @@ function liveRoomDiff(prev, next){
         openManageSheet(targetId);
       });
     })(uid);
+    /* Build X: role chip at the tile's top-left — the host's
+       tile is labeled "Host", like the reference layout. */
+    var roleChip = document.createElement('span');
+    roleChip.className = 'tile-role';
+    roleChip.hidden = true;
     el.appendChild(ph);
     el.appendChild(video);
     el.appendChild(label);
     el.appendChild(menuBtn);
+    el.appendChild(roleChip);
     gridEl.appendChild(el);
     tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
                   badges: badges, srcTag: srcTag, menuBtn: menuBtn,
                   member: member, dot: dot, recon: recon,
-                  phStatus: phStatus, videoState: ''};
+                  phStatus: phStatus, videoState: '',
+                  roleChip: roleChip};
     updateTile(member);
     var P = peers[uid];
     if (P) P.videoEl = video;
@@ -881,7 +1000,16 @@ function liveRoomDiff(prev, next){
         : '';
       if (T.srcTag.textContent !== tag) T.srcTag.textContent = tag;
     }
-    T.el.classList.toggle('stage-bg', member.role === 'host');
+    /* Build X: the host tile is the full-bleed background ONLY
+       outside grid mode — in the grid every tile is an equal
+       cell, host included. The "Host" chip rides grid + rail. */
+    T.el.classList.toggle('stage-bg',
+      member.role === 'host' && stageLayout() !== 'grid');
+    if (T.roleChip){
+      var isH = member.role === 'host';
+      T.roleChip.hidden = !isH;
+      if (isH) T.roleChip.textContent = 'Host';
+    }
     T.menuBtn.hidden = !(canManage() && canActOn(member));
   }
   function removeTile(uid){
@@ -909,9 +1037,90 @@ function liveRoomDiff(prev, next){
     Object.keys(tiles).forEach(function(uid){
       if (!panelById[uid]) removeTile(+uid);
     });
-    var cls = 'live-grid cols-' + gridCols(panel.length)
-      + (panel.length > 1 ? ' has-panel' : '');
+    var mode = stageLayout(), cls, cells = panel.length;
+    if (mode === 'grid'){
+      /* Cells = people + the host's empty boxes, so filling a
+         square never re-flows the grid's shape mid-show. */
+      cells += emptySquareCount();
+      var cols = gridCols(cells);
+      cls = 'live-grid panel-grid cols-' + cols;
+      gridEl.style.setProperty('--pcols', cols);
+      gridEl.style.setProperty('--prows',
+        Math.max(1, Math.ceil(cells / cols)));
+    } else if (mode === 'rail'){
+      cls = 'live-grid cols-' + gridCols(panel.length) + ' has-panel';
+    } else {
+      cls = 'live-grid cols-' + gridCols(panel.length)
+        + (panel.length > 1 ? ' has-panel' : '');
+    }
     if (gridEl.className !== cls) gridEl.className = cls;
+    syncBoxes(mode === 'grid');
+    paintLayoutButton();
+  }
+  /* Empty guest squares (Build X): pure DOM — no media, no
+     peers. They trail the tiles inside the grid and are rebuilt
+     only when their count or face changes, so a state poll in
+     steady state never churns them. */
+  function syncBoxes(show){
+    var count = show ? emptySquareCount() : 0;
+    var sig = count + '|' + (show ? boxFace() : '');
+    if (sig === boxesSig && count === boxEls.length) return;
+    boxesSig = sig;
+    boxEls.forEach(function(el){
+      if (el.parentNode) el.parentNode.removeChild(el);
+    });
+    boxEls = [];
+    var face = show ? boxFace() : 'open';
+    for (var i = 0; i < count; i++){
+      var b = document.createElement('div');
+      if (face === 'request'){
+        b.className = 'live-box can-ask';
+        b.title = 'Ask to join the panel';
+        var plus = document.createElement('span');
+        plus.className = 'box-plus';
+        plus.textContent = '+';
+        var word = document.createElement('span');
+        word.className = 'box-word';
+        word.textContent = 'Request';
+        b.appendChild(plus);
+        b.appendChild(word);
+        b.addEventListener('click', askToJoinPanel);
+      } else if (face === 'requested'){
+        b.className = 'live-box plain';
+        var w2 = document.createElement('span');
+        w2.className = 'box-word';
+        w2.textContent = '⏳ Requested';
+        b.appendChild(w2);
+      } else {
+        b.className = 'live-box plain';
+        var w3 = document.createElement('span');
+        w3.className = 'box-sub';
+        w3.textContent = 'Open';
+        b.appendChild(w3);
+      }
+      gridEl.appendChild(b);
+      boxEls.push(b);
+    }
+  }
+  /* A tap on a "+ / Request" square IS the 🙋 ask: the same
+     join-request flow, the same host/admin approval. */
+  function askToJoinPanel(){
+    post('/join-request').then(function(d){
+      if (d && d.ok)
+        toast('✋ Request sent — the host or an admin can let you in.');
+      else
+        toast((d && d.error) || 'Could not send the request.');
+      pollState();
+    }).catch(function(){ toast('Could not send the request.'); });
+  }
+  function paintLayoutButton(){
+    var btn = $('ctl-layout');
+    if (!btn) return;
+    btn.hidden = !panelOpen;
+    btn.textContent = layoutPref === 'rail' ? '❚❚' : '▦';
+    btn.title = layoutPref === 'rail'
+      ? 'Panel layout: rail — tap for grid'
+      : 'Panel layout: grid — tap for rail';
   }
 
   /* ---------------- local media (panel members) ---------------- */
@@ -3920,6 +4129,21 @@ function liveRoomDiff(prev, next){
   paintTickets();
 
   /* ---------------- controls ---------------- */
+  /* Build X: the host's panel card — open/close the grid and
+     step the guest boxes. Server state is the truth; every tap
+     goes through act(), which toasts refusals (e.g. closing
+     with guests on) and re-polls. */
+  function paintPanelCtl(){
+    var card = $('live-panelctl');
+    if (!card) return;
+    card.hidden = !iAmHost();
+    if (!iAmHost()) return;
+    $('ctl-panel-toggle').textContent = panelOpen
+      ? '👥 Close panel' : '👥 Open panel';
+    $('live-boxes-n').textContent = panelBoxes;
+    $('ctl-boxes-minus').disabled = panelBoxes <= 1;
+    $('ctl-boxes-plus').disabled = panelBoxes >= 8;
+  }
   function updateControls(){
     var member = amMember;
     $('ctl-mute').hidden = !member;
@@ -3940,6 +4164,7 @@ function liveRoomDiff(prev, next){
     $('ctl-games').hidden = !canManage();
     /* ⚔️ Showdown is the HOST's button — only they can challenge. */
     $('ctl-battle').hidden = !iAmHost();
+    paintPanelCtl();
     /* Gifts are for everyone except the host (no gifting your
        own live — the server refuses it too). */
     $('ctl-gift').hidden = iAmHost();
@@ -4024,6 +4249,109 @@ function liveRoomDiff(prev, next){
     } catch (e) {}
     window.location.href = '/home';
   });
+  /* Build X: grid ⇄ rail — per viewer, per device. Switching
+     only re-parents tile nodes and flips a class (streams are
+     never touched), and the choice persists. */
+  $('ctl-layout').addEventListener('click', function(){
+    layoutPref = layoutPref === 'rail' ? 'grid' : 'rail';
+    try {
+      localStorage.setItem('here_live_layout', layoutPref);
+    } catch (e) {}
+    boxesSig = ''; /* squares belong to the new mode now */
+    renderTiles();
+  });
+  $('ctl-panel-toggle').addEventListener('click', function(){
+    act('/panel-open', {open: !panelOpen});
+  });
+  $('ctl-boxes-minus').addEventListener('click', function(){
+    if (panelBoxes > 1) act('/panel-boxes', {boxes: panelBoxes - 1});
+  });
+  $('ctl-boxes-plus').addEventListener('click', function(){
+    if (panelBoxes < 8) act('/panel-boxes', {boxes: panelBoxes + 1});
+  });
+
+  /* ---------------- Build X: movable comments box ----------------
+     Drag the floating comments box anywhere over the stage by
+     its ⠿ grip (pointer events — mouse + touch), or hide the
+     stream with its 💬 chip. Position and hidden state persist
+     per device; untouched, the box keeps its stylesheet home
+     (left, bottom:25%). The comment INPUT never moves — it
+     stays docked in the overlay stack. */
+  var floatEl = $('live-float'), commentsHidden = false;
+  try {
+    commentsHidden = localStorage
+      .getItem('here_live_comments_hidden') === '1';
+  } catch (e) {}
+  function applyCommentsHidden(){
+    floatEl.classList.toggle('comments-hidden', commentsHidden);
+    $('live-float-eye').title = commentsHidden
+      ? 'Show comments' : 'Hide comments';
+  }
+  function applyFloatPos(){
+    var raw = null;
+    try {
+      raw = localStorage.getItem('here_live_comments_pos');
+    } catch (e) {}
+    if (!raw) return;
+    try {
+      var p = JSON.parse(raw);
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number')
+        return;
+      var r = stageEl.getBoundingClientRect();
+      floatEl.style.left = Math.max(0, Math.min(p.x,
+        Math.max(0, r.width - 80))) + 'px';
+      floatEl.style.top = Math.max(0, Math.min(p.y,
+        Math.max(0, r.height - 60))) + 'px';
+      floatEl.style.bottom = 'auto';
+    } catch (e) {}
+  }
+  (function(){
+    var grip = $('live-float-grip');
+    if (!grip || !floatEl) return;
+    var drag = null;
+    grip.addEventListener('pointerdown', function(ev){
+      var fr = floatEl.getBoundingClientRect();
+      drag = {dx: ev.clientX - fr.left, dy: ev.clientY - fr.top,
+              sr: stageEl.getBoundingClientRect(), x: null, y: null};
+      try { grip.setPointerCapture(ev.pointerId); } catch (e) {}
+      ev.preventDefault();
+    });
+    grip.addEventListener('pointermove', function(ev){
+      if (!drag) return;
+      var x = ev.clientX - drag.sr.left - drag.dx;
+      var y = ev.clientY - drag.sr.top - drag.dy;
+      x = Math.max(0, Math.min(x, Math.max(0, drag.sr.width - 80)));
+      y = Math.max(0, Math.min(y, Math.max(0, drag.sr.height - 60)));
+      floatEl.style.left = x + 'px';
+      floatEl.style.top = y + 'px';
+      floatEl.style.bottom = 'auto';
+      drag.x = x;
+      drag.y = y;
+    });
+    function endDrag(){
+      if (!drag) return;
+      if (drag.x !== null && drag.y !== null){
+        try {
+          localStorage.setItem('here_live_comments_pos',
+            JSON.stringify({x: Math.round(drag.x),
+                            y: Math.round(drag.y)}));
+        } catch (e) {}
+      }
+      drag = null;
+    }
+    grip.addEventListener('pointerup', endDrag);
+    grip.addEventListener('pointercancel', endDrag);
+    $('live-float-eye').addEventListener('click', function(){
+      commentsHidden = !commentsHidden;
+      try {
+        localStorage.setItem('here_live_comments_hidden',
+          commentsHidden ? '1' : '0');
+      } catch (e) {}
+      applyCommentsHidden();
+    });
+    applyCommentsHidden();
+    applyFloatPos();
+  })();
 
   /* ---------------- state poll ---------------- */
   function fallbackPanel(d){
@@ -4112,6 +4440,13 @@ function liveRoomDiff(prev, next){
           !== JSON.stringify(activeShout);
         if (shoutChanged) renderShout(d.active_shout || null);
         else tickShout();
+        /* Build X: the panel grid's shared state rides the same
+           poll — open/closed, the host's boxes, my own standing
+           ask (it paints the empty squares' faces). */
+        panelOpen = !!d.panel_open;
+        if (typeof d.panel_boxes === 'number')
+          panelBoxes = d.panel_boxes;
+        myJoin = d.my_join || null;
         watchersList = d.watchers || [];
         inviteCandidates = d.invite_candidates || [];
         if (d.viewer_list)
@@ -4196,7 +4531,7 @@ function liveRoomDiff(prev, next){
     setStatus('📺 This live has ended.');
     $('live-comment-input').disabled = true;
     ['ctl-mute','ctl-cam','ctl-flip','ctl-connect','ctl-end','ctl-panel-leave',
-     'ctl-join','ctl-like','ctl-poll','ctl-games','ctl-gift','ctl-battle','live-requests-panel','live-people-panel',
+     'ctl-join','ctl-like','ctl-poll','ctl-games','ctl-gift','ctl-battle','ctl-layout','live-requests-panel','live-people-panel','live-panelctl',
      'live-invite-banner','live-member-banner','live-muted-note','live-cam-note','live-poll-card',
      'live-poll-closed','live-game-card','live-game-closed','live-battle-bar'].forEach(function(id){
       var el = $(id);
