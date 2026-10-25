@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0a">
+<title>{{ ad.title|e }} — HERE</title>
+<meta name="description" content="{{ excerpt|e }}">
+<meta property="og:type" content="{{ 'video.other' if og_video else 'website' }}">
+<meta property="og:site_name" content="HERE">
+<meta property="og:title" content="{{ ad.title|e }}">
+<meta property="og:description" content="{{ excerpt|e }}">
+{% if og_video %}<meta property="og:video" content="{{ og_video|e }}">
+{% endif %}
+{% if og_image %}<meta property="og:image" content="{{ og_image|e }}">
+{% else %}<meta property="og:image" content="https://joincomehere.com/static/og-share.jpg">
+<meta property="og:image:width" content="1320">
+<meta property="og:image:height" content="2417">
+<meta property="og:image:type" content="image/jpeg">{% endif %}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ ad.title|e }}">
+<meta name="twitter:description" content="{{ excerpt|e }}">
+<meta name="twitter:image" content="{{ og_image|e if og_image else 'https://joincomehere.com/static/og-share.jpg' }}">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 24px 110px}
+.brand{font-size:52px;font-weight:900;color:#d41f2e;letter-spacing:-2px;text-shadow:0 0 40px rgba(212,31,46,.45)}
+.card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:24px;width:100%;max-width:560px;box-shadow:0 8px 32px rgba(212,31,46,.15);margin-top:20px}
+.who{display:flex;gap:12px;align-items:center;margin-bottom:14px}
+.avatar{border-radius:50%;object-fit:cover;width:48px;height:48px;background:#ccc}
+.av-ph{border-radius:50%;background:#d41f2e;color:#fff;font-weight:800;width:48px;height:48px;display:flex;align-items:center;justify-content:center;font-size:20px}
+.nm{font-weight:800;font-size:17px}
+.meta{color:#9a9a9a;font-size:13px}
+.sp-chip{display:inline-block;border:1px solid #2a2a2a;border-radius:6px;padding:2px 8px;font-size:12px;color:#ccc;font-weight:700}
+.title{font-size:21px;font-weight:800;line-height:1.3;word-wrap:break-word}
+.body{white-space:pre-wrap;font-size:16px;line-height:1.55;word-wrap:break-word;margin-top:10px}
+.media{width:100%;border-radius:10px;margin-top:14px;display:block}
+.vwrap{position:relative;margin-top:14px}
+.vwrap .media{margin-top:0}
+.ad-vol-btn{position:absolute;right:10px;bottom:18px;width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.55);background:rgba(10,10,14,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:#fff;font-size:17px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;z-index:2}
+.ad-cta{display:block;text-align:center;margin-top:20px;background:#d41f2e;color:#fff;border:none;border-radius:8px;padding:13px;font-size:17px;font-weight:800;text-decoration:none}
+.ad-cta:hover{background:#a8151f}
+.cta{position:fixed;left:0;right:0;bottom:0;background:#111;border-top:1px solid #2a2a2a;padding:14px 20px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:8px;padding:12px 26px;font-size:16px;font-weight:800;text-decoration:none}
+.btn:hover{background:#a8151f}
+.cta a.login{color:#f0f0f0;font-weight:700}
+.back{margin-top:14px;font-size:14px}
+.back a{color:#f0f0f0;font-weight:600}
+</style>
+</head>
+<body>
+<div class="brand">HERE</div>
+<div class="card">
+  <div class="who">
+    {% if ad.sponsor_avatar %}<img class="avatar" src="{{ ad.sponsor_avatar|e }}" alt="">
+    {% else %}<span class="av-ph">{{ (ad.sponsor_name or 'H')[:1]|upper|e }}</span>{% endif %}
+    <div>
+      <div class="nm">{{ ad.sponsor_name|e }}</div>
+      <div class="meta"><span class="sp-chip">Sponsored</span> · 📣 Promotion</div>
+    </div>
+  </div>
+  <div class="title">{{ ad.title|e }}</div>
+  {% if ad.body %}<div class="body">{{ ad.body|e }}</div>{% endif %}
+  {% if ad.layout == 'media' and ad.media_path %}
+  <img class="media" src="/uploads/{{ ad.media_path|e }}" alt="">
+  {% elif ad.layout == 'video' and ad.media_path %}
+  <div class="vwrap">
+    <video class="media" autoplay muted loop playsinline preload="metadata" src="/uploads/{{ ad.media_path|e }}"></video>
+    <button type="button" class="ad-vol-btn" aria-label="Turn sound on" title="Sound on/off">🔇</button>
+  </div>
+  {% endif %}
+  <a class="ad-cta" href="{{ ad.click_url|e }}">{{ ad.cta_label|e }}</a>
+</div>
+{% if logged_in %}<div class="back"><a href="/home">← Back to HERE</a></div>{% endif %}
+<div class="cta">
+  <a class="btn" href="/signup">Join HERE</a>
+  <a class="login" href="/login">Log in</a>
+</div>
+{% if ad.layout == 'video' and ad.media_path %}
+<script>
+/* Build SHARE (same treatment as Build ADS-2, for this one video):
+   autoplay stays muted; the speaker chip toggles sound; a refused
+   autoplay is swallowed and tapping the video plays/pauses by hand. */
+(function () {
+  var v = document.querySelector(".vwrap video");
+  var btn = document.querySelector(".ad-vol-btn");
+  if (!v) { return; }
+  function tryPlay() {
+    var p = v.play();
+    if (p && p.catch) { p.catch(function () { /* refused: stay quiet */ }); }
+  }
+  function sync() {
+    if (!btn) { return; }
+    btn.textContent = v.muted ? "🔇" : "🔊";
+    btn.setAttribute("aria-label",
+                     v.muted ? "Turn sound on" : "Turn sound off");
+  }
+  if (btn) {
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      v.muted = !v.muted;
+      if (!v.muted) { tryPlay(); }
+      sync();
+    });
+    sync();
+  }
+  v.addEventListener("click", function () {
+    if (v.paused) { tryPlay(); } else { v.pause(); }
+  });
+})();
+</script>
+{% endif %}
+</body>
+</html>
