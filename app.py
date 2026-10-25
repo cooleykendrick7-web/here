@@ -747,6 +747,24 @@ def init_db():
               "ON live_bans(live_id, user_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_live_likes_room "
               "ON live_like_events(live_id, id)")
+    # --- Build W3: self-reported camera health (video_ok) ---
+    # A panel member's client verifies its own outgoing video
+    # track (exists + readyState 'live') and reports the result
+    # on its heartbeat; peers render video_ok=false members as an
+    # avatar tile ("📷 Camera off") instead of a black box. The
+    # host is never a live_members row, so the host's flag lives
+    # on live_sessions. NULL = never reported (a legacy client)
+    # and reads as True everywhere — old clients never look
+    # camera-off.
+    _lm_cols = [r["name"] for r in
+                c.execute("PRAGMA table_info(live_members)")
+                .fetchall()]
+    if "video_ok" not in _lm_cols:
+        c.execute("ALTER TABLE live_members ADD COLUMN video_ok "
+                  "INTEGER")
+    if "host_video_ok" not in _live_sess_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "host_video_ok INTEGER")
     c.execute("UPDATE live_sessions SET like_count=0 "
               "WHERE like_count IS NULL")
     # Backfill pre-upgrade rooms: an approved join request WAS the
@@ -8862,18 +8880,39 @@ async def live_heartbeat(request: Request, lid: int):
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
+    # Build W3: a panel member's client reports its own camera
+    # health (video_ok) on this heartbeat. An ABSENT key is a
+    # legacy client — the stored flag is left untouched (NULL
+    # reads as True in the state poll), never clobbered.
+    video_ok = None
+    try:
+        _hb = await request.json()
+        if isinstance(_hb, dict) and "video_ok" in _hb:
+            video_ok = 1 if _hb["video_ok"] else 0
+    except Exception:
+        video_ok = None
     conn = db()
     stamp = now_iso()
     if user["id"] == live["host_id"]:
         conn.execute(
             "UPDATE live_sessions SET host_seen_at=? WHERE id=?",
             (stamp, lid))
+        if video_ok is not None:
+            conn.execute(
+                "UPDATE live_sessions SET host_video_ok=? "
+                "WHERE id=?", (video_ok, lid))
     else:
         conn.execute(
             "INSERT INTO live_viewers(live_id, user_id, joined_at, "
             "last_seen_at) VALUES(?,?,?,?) ON CONFLICT(live_id, user_id) "
             "DO UPDATE SET last_seen_at=excluded.last_seen_at, "
             "left_at=NULL", (lid, user["id"], stamp, stamp))
+        if video_ok is not None and _live_member_row(
+                conn, lid, user["id"]):
+            conn.execute(
+                "UPDATE live_members SET video_ok=? WHERE "
+                "live_id=? AND user_id=?",
+                (video_ok, lid, user["id"]))
     count = _live_viewer_count(conn, lid)
     conn.commit()
     conn.close()
@@ -9237,12 +9276,21 @@ async def live_state(request: Request, lid: int):
     for pid in panel_ids:
         person = _live_person(pid)
         mrow = member_map.get(pid)
+        # Build W3: the member's self-reported camera health.
+        # NULL (host flag or member row) = never reported — a
+        # legacy client — and reads True: only an explicit report
+        # of a dead/missing video track turns this off.
+        if pid == live["host_id"]:
+            _vok = live.get("host_video_ok")
+        else:
+            _vok = mrow.get("video_ok") if mrow else None
         panel.append({
             "user_id": pid, "name": person["name"],
             "avatar": person["avatar"],
             "role": "host" if pid == live["host_id"] else "guest",
             "admin": pid in admin_ids,
-            "muted": bool(mrow["muted"]) if mrow else False})
+            "muted": bool(mrow["muted"]) if mrow else False,
+            "video_ok": True if _vok is None else bool(_vok)})
     # Compat: the single 'guest' of the old protocol is the first
     # non-host panelist.
     guest = _live_person(panel_ids[1]) if len(panel_ids) > 1 else None
