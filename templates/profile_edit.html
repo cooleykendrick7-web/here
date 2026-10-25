@@ -134,16 +134,16 @@
     <div class="field">
       <label>Scheme — how your boxes are built</label>
       <div class="look-schemes">
-        <label class="look-pill"><input type="radio" name="scheme" value="glass" {% if profile.look_scheme == 'glass' %}checked{% endif %}> 🪟 Glass<span class="look-pill-sub">see-through and clean — the classic HERE draw-in look, default for everybody</span></label>
+        <label class="look-pill"><input type="radio" name="scheme" value="glass" {% if profile.look_scheme == 'glass' %}checked{% endif %}> 🪟 Glass<span class="look-pill-sub">see-through and clean — the classic HERE draw-in look, default for everybody; set the transparency below, all the way to completely clear</span></label>
         <label class="look-pill"><input type="radio" name="scheme" value="solid" {% if profile.look_scheme == 'solid' %}checked{% endif %}> 🧱 Solid<span class="look-pill-sub">bold opaque cards in your surface color</span></label>
-        <label class="look-pill"><input type="radio" name="scheme" value="mix" {% if profile.look_scheme == 'mix' %}checked{% endif %}> 🎛 Mix<span class="look-pill-sub">your own blend — set the see-through yourself below</span></label>
+        <label class="look-pill"><input type="radio" name="scheme" value="mix" {% if profile.look_scheme == 'mix' %}checked{% endif %}> 🎛 Mix<span class="look-pill-sub">Cards solid · bubbles glass — bubbles use your Glass transparency (switch to Glass to change it).</span></label>
       </div>
     </div>
-    <div class="field" id="look-mix-row" {% if profile.look_scheme != 'mix' %}hidden{% endif %}>
+    <div class="field" id="look-glass-row" {% if profile.look_scheme != 'glass' %}hidden{% endif %}>
       <label for="box-opacity">🪟 Glass transparency — <span id="box-opacity-val">{{ profile.box_opacity if profile.box_opacity is not none else 82 }}%</span> solid</label>
-      <input type="range" id="box-opacity" name="box_opacity" min="30" max="100" step="1" value="{{ profile.box_opacity if profile.box_opacity is not none else 82 }}">
-      <div style="font-size:12px;color:var(--muted);margin-top:2px">More clear ⟷ More solid · 100% = solid boxes · 30% = most see-through</div>
-      <p style="margin-top:6px;color:var(--muted);font-size:13px">This is the old Box Transparency, folded in — in Mix it's your blend control, and it still drives your Your Spot bubbles too, so there's just one slider for see-through.</p>
+      <input type="range" id="box-opacity" name="box_opacity" min="0" max="100" step="1" value="{{ profile.box_opacity if profile.box_opacity is not none else 82 }}">
+      <div style="font-size:12px;color:var(--muted);margin-top:2px">Completely clear ⟷ More solid · 100% = solid boxes · 0% = completely clear</div>
+      <p style="margin-top:6px;color:var(--muted);font-size:13px">This is the old Box Transparency, folded in — and it lives in Glass only. At 0% the boxes go completely clear and read as frosted outlines. In Mix, your bubbles borrow this saved value while the cards stay solid; switch to Glass to change it.</p>
     </div>
     <div class="field">
       <label for="look-surface">Surface color — tints the glass; in Solid it IS the card color</label>
@@ -280,6 +280,7 @@
   // unified Glass slider below (the old spot-opacity input is gone);
   // fall back to the classic 0.55 tint when it isn't on the page.
   var glassIn = document.getElementById('box-opacity');
+  var schemeIns = document.querySelectorAll('#look-form input[name="scheme"]');
   var pTitle = document.getElementById('spot-preview-title');
   var pCard = document.getElementById('spot-preview-card');
   var pMeta = document.getElementById('spot-preview-meta');
@@ -289,11 +290,22 @@
     if (h.length !== 6) return [232,232,238];
     return [parseInt(h.substr(0,2),16), parseInt(h.substr(2,2),16), parseInt(h.substr(4,2),16)];
   }
+  function scheme(){
+    for (var i = 0; i < schemeIns.length; i++)
+      if (schemeIns[i].checked) return schemeIns[i].value;
+    return 'glass';
+  }
   function update(){
     var rgb = hexRgb(cardIn.value);
-    var bg = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (glassIn ? glassIn.value/100 : 0.55) + ')';
-    pCard.style.background = bg;
-    pBubble.style.background = bg;
+    // Build CLEAR: the Spot CARD follows the card alpha (Glass
+    // slider; solid slab in Solid/Mix) and the Spot BUBBLE the soft
+    // alpha (the Glass solidity in Glass AND Mix; solid in Solid).
+    var g = glassIn ? glassIn.value/100 : 0.55;
+    var sc = scheme();
+    var cardA = sc === 'glass' ? g : 1;
+    var bubA = sc === 'solid' ? 1 : g;
+    pCard.style.background = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + cardA + ')';
+    pBubble.style.background = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + bubA + ')';
     pCard.style.color = textIn.value;
     pMeta.style.color = textIn.value;
     pMeta.style.opacity = '.72';
@@ -308,6 +320,7 @@
     glassIn.addEventListener('input', update);
     glassIn.addEventListener('change', update);
   }
+  schemeIns.forEach(function(r){ r.addEventListener('change', update); });
   document.querySelectorAll('.spot-swatches').forEach(function(row){
     var target = document.getElementById(row.getAttribute('data-for'));
     row.querySelectorAll('.spot-swatch').forEach(function(btn){
@@ -322,10 +335,11 @@
 </script>
 <script>
 (function(){
-  // Build LOOKS: the 🎨 My Look live preview + Mix slider plumbing.
+  // Build LOOKS + CLEAR: the 🎨 My Look live preview; the
+  // transparency slider is Glass-only plumbing now.
   var slider = document.getElementById('box-opacity');
   var val = document.getElementById('box-opacity-val');
-  var mixRow = document.getElementById('look-mix-row');
+  var glassRow = document.getElementById('look-glass-row');
   var surfIn = document.getElementById('look-surface');
   var surfClear = document.getElementById('look-surface-clear');
   var surfHex = document.getElementById('look-surface-hex');
@@ -349,12 +363,14 @@
   }
   function update(){
     var sc = scheme();
-    if (mixRow) mixRow.hidden = sc !== 'mix';
+    if (glassRow) glassRow.hidden = sc !== 'glass';
     if (slider && val) val.textContent = slider.value + '%';
     if (surfHex) surfHex.textContent = surfClear && surfClear.checked ? 'default' : (surfIn ? surfIn.value : 'default');
     if (accHex) accHex.textContent = accClear && accClear.checked ? 'default' : (accIn ? accIn.value : 'default');
     var rgb = (surfClear && surfClear.checked) ? [255,255,255] : hexRgb(surfIn ? surfIn.value : '#ffffff');
-    var alpha = sc === 'solid' ? 1 : (sc === 'mix' ? (slider ? slider.value/100 : 0.82) : 0.82);
+    // The preview is a CARD: Glass wears the slider (0 = completely
+    // clear); Solid and Mix cards are both solid slabs (alpha 1).
+    var alpha = sc === 'glass' ? (slider ? slider.value/100 : 0.82) : 1;
     card.style.background = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + ')';
     // mirror of the server readability guardrail
     var lum = (0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]) / 255;
