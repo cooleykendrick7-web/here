@@ -16,14 +16,13 @@
       <div style="color:var(--muted);font-size:13px">Tickets to spend on gifts</div>
     </div>
     <div>
-      <div style="font-size:30px;font-weight:900">{{ earned }} 🎟️ <span style="font-size:18px;color:var(--muted)">≈ {{ earned_dollars|e }}</span></div>
+      <div style="font-size:30px;font-weight:900">{{ earned }} 🎟️</div>
       <div style="color:var(--muted);font-size:13px">Earned from your lives</div>
     </div>
   </div>
   <p style="color:var(--muted);font-size:13.5px;margin-top:12px">
-    Send character gifts on any live — the host earns your tickets.
-    Earned tickets cash out at $0.005 each (half the buy price —
-    the same split the big apps take; HERE keeps the rest).
+    Send character gifts on any live — the host earns your tickets,
+    and earned tickets cash out below.
   </p>
 </div>
 
@@ -118,7 +117,7 @@
     <button type="submit" class="btn">Cash out {{ earned_dollars|e }}</button>
   </form>
   {% else %}
-  <p style="font-size:14.5px;margin-top:8px">Cash-outs open at <strong>{{ cashout_min }} earned tickets ({{ cashout_min_dollars|e }})</strong>.
+  <p style="font-size:14.5px;margin-top:8px">Cash-outs open at <strong>{{ cashout_min }} earned tickets</strong>.
   {% if earned > 0 %}You have {{ earned }} — {{ cashout_min - earned }} to go. Host lives and earn gifts to get there!{% else %}Host a live and earn gifts to get there!{% endif %}</p>
   {% endif %}
   {% if payouts_history %}

@@ -67,7 +67,7 @@
     </div>
 
     <div id="fld-media" style="display:none">
-      <label class="fld" for="media-file">Upload <span id="media-kind-label">photo</span> <span id="media-kind-hint">(jpg, png, gif, webp · max 25MB)</span></label>
+      <label class="fld" for="media-file">Upload <span id="media-kind-label">photo</span> <span id="media-kind-hint">(jpg, png, gif, webp)</span></label>
       <input type="file" name="media" id="media-file" accept="image/*">
     </div>
 
@@ -189,8 +189,8 @@
     fFeeling.style.display = (kind === 'feeling') ? 'block' : 'none';
     fMedia.style.display = (kind === 'photo' || kind === 'video') ? 'block' : 'none';
     if (fPoll) fPoll.style.display = (kind === 'poll') ? 'block' : 'none';
-    if (kind === 'video') { mediaLbl.textContent = 'video'; mediaHint.textContent = '(mp4, mov, webm · max 200MB)'; mediaInput.accept = 'video/*,.mp4,.mov,.webm'; }
-    else { mediaLbl.textContent = 'photo'; mediaHint.textContent = '(jpg, png, gif, webp · max 25MB)'; mediaInput.accept = 'image/*'; }
+    if (kind === 'video') { mediaLbl.textContent = 'video'; mediaHint.textContent = '(mp4, mov, webm)'; mediaInput.accept = 'video/*,.mp4,.mov,.webm'; }
+    else { mediaLbl.textContent = 'photo'; mediaHint.textContent = '(jpg, png, gif, webp)'; mediaInput.accept = 'image/*'; }
   }
   tabs.forEach(function(t){ t.addEventListener('click', function(){ setKind(t.dataset.kind); }); });
   setKind('text');

@@ -7,7 +7,7 @@
   {% if flash %}<p style="color:var(--red);font-weight:600;margin-bottom:10px">{{ flash|e }}</p>{% endif %}
   <form action="/stories/new" method="post" enctype="multipart/form-data" id="story-form">
     <div style="margin-bottom:6px">
-      <label class="fld" for="story-media">Photo or video (jpg, png, gif, webp, mp4, mov, webm · max 25MB)</label>
+      <label class="fld" for="story-media">Photo or video (jpg, png, gif, webp, mp4, mov, webm)</label>
       <input type="file" name="media" id="story-media" accept="image/*,video/*" required>
     </div>
 
