@@ -15,7 +15,10 @@ EXISTING POST /tickets/cashout handler — same min / note / hold /
 one-pending rules — and paid history + bank state mirror the
 wallet. Dollars appear only as transactional figures (in-flight
 amount, exact cash-out amount, per-request history, paid total);
-no rate copy anywhere.
+no rate copy anywhere. Build RICH (Ken's order) amends the page:
+the earned figures also carry their dollar worth and the cash-out
+center states the exact shortfall to the minimum — asserted
+below at the old discipline check's slot, at greater strength.
 
 Run:  ./venv/bin/python tests/test_earnings.py
 Uses a throwaway DB/uploads dir; no network.
@@ -167,9 +170,14 @@ check("dashboard sums equal the ledger (155 earned / lifetime)",
       u["gift_earned"] == 155 and u["gift_lifetime"] == 155
       and html.count(">155 🎟️<") >= 2,
       f"db={u['gift_earned']}/{u['gift_lifetime']}")
-check("dollar discipline: no cents sign, no rate copy",
+check("Build RICH dollar clarity: worth + shortfall math show "
+      "(155 earned -> worth $0.77, 1845 more = $9.23 more, min "
+      "2,000 = $10.00), still no cents sign / no rate copy",
       "¢" not in html and "per ticket" not in html
-      and "$10" not in html)
+      and "worth $0.77" in html
+      and "1845 more earned tickets" in html
+      and "($9.23 more)" in html
+      and "minimum 2,000 tickets = $10.00" in html)
 check("paid-out total renders as an honest $0.00", "$0.00" in html)
 
 # entry points: own surfaces only
