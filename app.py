@@ -20,6 +20,7 @@ import os
 import re
 import secrets
 import shutil
+import smtplib
 import sqlite3
 import threading
 import time
@@ -30,6 +31,7 @@ import urllib.request
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import bcrypt
+from email.message import EmailMessage
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -1092,6 +1094,29 @@ def init_db():
     if "stripe_transfer_id" not in _pr_cols:
         c.execute("ALTER TABLE payout_requests ADD COLUMN "
                   "stripe_transfer_id TEXT")
+    # Build O: password recovery. token_hash is the ONLY credential
+    # copy (sha256 of the raw token); token_plain holds the raw token
+    # ONLY while delivery='queued' so the owner panel can show the
+    # link for a hand-send — it is cleared the moment the row is
+    # emailed, hand-sent, used or superseded (see ROUTE_CONTRACT.md).
+    # delivery: 'queued' (owner queue / hand-send) | 'emailed' |
+    # 'hand_sent'. Resets deliberately write NOTHING to
+    # moderation_flags or notifications — the flag-watch and bughunt
+    # tooling must never trip on recovery rows; this table + the
+    # owner panel queue are the whole admin surface.
+    c.execute("""CREATE TABLE IF NOT EXISTS password_resets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        token_plain TEXT,
+        delivery TEXT NOT NULL DEFAULT 'queued',
+        created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+        used_at TEXT, sent_at TEXT,
+        requester_ip TEXT DEFAULT '')""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pwresets_user "
+              "ON password_resets(user_id, id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pwresets_ip "
+              "ON password_resets(requester_ip, created_at)")
     conn.commit()
     conn.close()
 
@@ -2532,6 +2557,220 @@ async def logout(request: Request):
     resp = redir("/login")
     resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
+
+
+# ---------------- password recovery (Build O) ----------------
+# Forgot-password machinery, run day-to-day by Milli from the
+# support mailbox (SUPPORT_EMAIL) + the owner panel queue. The rules
+# that must never weaken:
+#  * a reset link is only EVER sent to the email already on the
+#    account — there is no "send it somewhere else" path, for anyone;
+#  * POST /forgot answers IDENTICALLY whether or not the email has
+#    an account (no enumeration), even when rate-limited;
+#  * tokens carry 32 random bytes, are stored only as a sha256 hash,
+#    work once, and die 1 hour after issue; a successful reset kills
+#    every other session the account has;
+#  * there is NO free-form AI anywhere in recovery — the on-page
+#    helper is a fixed, scripted set of steps.
+# Delivery: with HERE_SMTP_USER + HERE_SMTP_PASS set (a Gmail app
+# password for the support mailbox), the site emails the link
+# itself. Without SMTP — or when a send fails — the row waits in the
+# owner panel as delivery='queued' for a hand-send.
+
+SUPPORT_EMAIL = "wearehereyouarehere@gmail.com"
+RESET_TTL = timedelta(hours=1)
+RESET_MAX_PER_EMAIL_HOUR = 3
+RESET_MAX_PER_IP_HOUR = 10
+
+
+def _reset_token_hash(token):
+    return hashlib.sha256((token or "").encode()).hexdigest()
+
+
+def _smtp_cfg():
+    """SMTP settings from env, or None when email delivery is off.
+    HERE_SMTP_USER + HERE_SMTP_PASS are the required pair;
+    HERE_SMTP_HOST / HERE_SMTP_PORT default to Gmail submission."""
+    user = os.environ.get("HERE_SMTP_USER", "").strip()
+    pw = os.environ.get("HERE_SMTP_PASS", "").strip()
+    if not user or not pw:
+        return None
+    host = os.environ.get("HERE_SMTP_HOST", "").strip() \
+        or "smtp.gmail.com"
+    try:
+        port = int(os.environ.get("HERE_SMTP_PORT", "") or 587)
+    except ValueError:
+        port = 587
+    return {"user": user, "pass": pw, "host": host, "port": port}
+
+
+def _send_reset_email(cfg, to_email, link):
+    """Send the reset email to the ACCOUNT address. True/False —
+    NEVER raises: a mail failure queues the request for the owner
+    queue instead of erroring the visitor's page."""
+    try:
+        msg = EmailMessage()
+        msg["From"] = cfg["user"]
+        msg["To"] = to_email
+        msg["Subject"] = "HERE \u2014 reset your password"
+        msg.set_content(
+            "Hi,\n\n"
+            "You asked to reset your HERE password. Open this link "
+            "within 1 hour to choose a new one:\n\n"
+            f"{link}\n\n"
+            "If you didn't ask for this, ignore this email \u2014 your "
+            "password won't change.\n\n"
+            "\u2014 HERE support")
+        msg.add_alternative(
+            "<p>Hi,</p>"
+            "<p>You asked to reset your HERE password. "
+            f'<a href="{html.escape(link, quote=True)}">Tap here to '
+            "choose a new password</a> \u2014 the link works for "
+            "1 hour.</p>"
+            "<p>If you didn't ask for this, ignore this email \u2014 "
+            "your password won't change.</p>"
+            "<p>\u2014 HERE support</p>", subtype="html")
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=10) as s:
+            s.starttls()
+            s.login(cfg["user"], cfg["pass"])
+            s.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+
+def _reset_row_for_token(token):
+    """The password_resets row for a raw token IF it is still usable
+    (hash match, unused, unexpired) \u2014 else None."""
+    if not token:
+        return None
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM password_resets WHERE token_hash=?",
+        (_reset_token_hash(token),)).fetchone()
+    conn.close()
+    if not row or row["used_at"]:
+        return None
+    exp = _parse_ts(row["expires_at"])
+    if not exp or exp <= datetime.now(timezone.utc):
+        return None
+    return row
+
+
+@app.get("/forgot", response_class=HTMLResponse)
+async def forgot_page(request: Request):
+    if current_user(request):
+        return redir("/home")
+    return render(request, "auth/forgot.html", {"sent": False})
+
+
+@app.post("/forgot", response_class=HTMLResponse)
+async def forgot_submit(request: Request):
+    form = await request.form()
+    email = (form.get("email") or "").strip().lower()
+    ip = request.client.host if request.client else ""
+    if email:
+        conn = db()
+        u = conn.execute("SELECT * FROM users WHERE email=?",
+                         (email,)).fetchone()
+        if u:
+            now = datetime.now(timezone.utc)
+            since = (now - timedelta(hours=1)).isoformat()
+            n_email = conn.execute(
+                "SELECT COUNT(*) c FROM password_resets WHERE "
+                "user_id=? AND created_at>?",
+                (u["id"], since)).fetchone()["c"]
+            n_ip = 0
+            if ip:
+                n_ip = conn.execute(
+                    "SELECT COUNT(*) c FROM password_resets WHERE "
+                    "requester_ip=? AND created_at>?",
+                    (ip, since)).fetchone()["c"]
+            if (n_email < RESET_MAX_PER_EMAIL_HOUR
+                    and n_ip < RESET_MAX_PER_IP_HOUR):
+                token = secrets.token_urlsafe(32)
+                stamp = now.isoformat()
+                # One live token per account: every older unused
+                # token dies (and its queued raw copy is wiped) the
+                # moment a new one is minted.
+                conn.execute(
+                    "UPDATE password_resets SET used_at=?, "
+                    "token_plain=NULL WHERE user_id=? AND "
+                    "used_at IS NULL", (stamp, u["id"]))
+                cur = conn.execute(
+                    "INSERT INTO password_resets(user_id, token_hash, "
+                    "token_plain, delivery, created_at, expires_at, "
+                    "requester_ip) VALUES(?,?,?,'queued',?,?,?)",
+                    (u["id"], _reset_token_hash(token), token, stamp,
+                     (now + RESET_TTL).isoformat(), ip))
+                rid = cur.lastrowid
+                conn.commit()
+                cfg = _smtp_cfg()
+                if cfg and _send_reset_email(
+                        cfg, u["email"],
+                        _abs_url(request, f"/reset/{token}")):
+                    conn.execute(
+                        "UPDATE password_resets SET "
+                        "delivery='emailed', sent_at=?, "
+                        "token_plain=NULL WHERE id=?",
+                        (now_iso(), rid))
+                    conn.commit()
+        conn.close()
+    # The SAME page in every case \u2014 account found or not, emailed
+    # or queued, even rate-limited: nobody can probe which emails
+    # have accounts from this response.
+    return render(request, "auth/forgot.html", {"sent": True})
+
+
+@app.get("/reset/{token}", response_class=HTMLResponse)
+async def reset_page(request: Request, token: str):
+    if not _reset_row_for_token(token):
+        return render(request, "auth/reset.html", {"dead": True})
+    return render(request, "auth/reset.html",
+                  {"dead": False, "token": token, "error": ""})
+
+
+@app.post("/reset/{token}")
+async def reset_submit(request: Request, token: str):
+    row = _reset_row_for_token(token)
+    if not row:
+        return render(request, "auth/reset.html", {"dead": True})
+    form = await request.form()
+    pw1 = form.get("password") or ""
+    pw2 = form.get("confirm") or ""
+    # Signup's only strength rule is non-empty; the one extra rule
+    # here is that the two boxes must match. A refused attempt does
+    # NOT consume the token.
+    if not pw1:
+        return render(request, "auth/reset.html",
+                      {"dead": False, "token": token,
+                       "error": "Enter a new password."})
+    if pw1 != pw2:
+        return render(request, "auth/reset.html",
+                      {"dead": False, "token": token,
+                       "error": "Those passwords don't match \u2014 "
+                               "try again."})
+    pw_hash = bcrypt.hashpw(pw1.encode(), bcrypt.gensalt()).decode()
+    conn = db()
+    # Claim the token in the same breath: the guarded UPDATE only
+    # lands while the token is still unused, so a double-submit (or
+    # a race) can never set two passwords from one link.
+    cur = conn.execute(
+        "UPDATE password_resets SET used_at=?, token_plain=NULL "
+        "WHERE id=? AND used_at IS NULL", (now_iso(), row["id"]))
+    claimed = cur.rowcount
+    if claimed == 1:
+        conn.execute("UPDATE users SET pw_hash=? WHERE id=?",
+                     (pw_hash, row["user_id"]))
+        # A reset kills every session the account has, everywhere.
+        conn.execute("DELETE FROM sessions WHERE user_id=?",
+                     (row["user_id"],))
+    conn.commit()
+    conn.close()
+    if claimed != 1:
+        return render(request, "auth/reset.html", {"dead": True})
+    return redir("/login",
+                 "Password changed \u2014 log in with your new password.")
 
 
 # ---------------- public pages + invites (growth door) ----------------
@@ -12010,6 +12249,45 @@ async def owner_dashboard(request: Request):
         "payouts_pending": sum(1 for p in payouts
                                if p["status"] in ("pending", "sending"))}
 
+    # --- password help queue (Build O): queued resets first, then
+    # the recent history. State is derived, never stored: used /
+    # expired win over the delivery label.
+    _utcnow = datetime.now(timezone.utc)
+    pwrows = conn.execute(
+        "SELECT pr.*, u.name AS user_name, u.email AS user_email "
+        "FROM password_resets pr LEFT JOIN users u ON u.id=pr.user_id "
+        "ORDER BY CASE WHEN pr.delivery='queued' "
+        "AND pr.used_at IS NULL THEN 0 ELSE 1 END, "
+        "pr.id DESC LIMIT 50").fetchall()
+    pw_resets = []
+    for r in pwrows:
+        exp = _parse_ts(r["expires_at"])
+        expired = bool(exp and exp <= _utcnow)
+        if r["used_at"]:
+            state = "used"
+        elif expired:
+            state = "expired"
+        elif r["delivery"] == "queued":
+            state = "queued \u2014 needs hand-send"
+        elif r["delivery"] == "hand_sent":
+            state = "hand-sent"
+        else:
+            state = "emailed"
+        pw_resets.append({
+            "id": r["id"],
+            "user_name": r["user_name"] or "Deleted user",
+            "user_email": r["user_email"] or "",
+            "state": state,
+            "can_act": bool(r["delivery"] == "queued"
+                            and not r["used_at"] and not expired
+                            and r["token_plain"]),
+            "created_at": fancy_time(r["created_at"]),
+            "expires_at": fancy_time(r["expires_at"])})
+    pw_help_pending = conn.execute(
+        "SELECT COUNT(*) c FROM password_resets WHERE "
+        "delivery='queued' AND used_at IS NULL AND expires_at>?",
+        (_utcnow.isoformat(),)).fetchone()["c"]
+
     conn.close()
     return render(request, "owner/dashboard.html", {
         "users": users, "friend_activity": friend_activity,
@@ -12017,6 +12295,7 @@ async def owner_dashboard(request: Request):
         "verifications": verifications,
         "live_now": live_now, "live_recent": live_recent,
         "payouts": payouts, "money_stats": money_stats,
+        "pw_resets": pw_resets, "pw_help_pending": pw_help_pending,
         "connect_state": _connect_state()})
 
 
@@ -12345,6 +12624,52 @@ async def owner_payout_declined(request: Request, pid: int):
             "created_at) VALUES(?,?,?,?)",
             (pr["user_id"], "cashout_return", pr["tickets"], stamp))
         conn.commit()
+    conn.close()
+    return redir("/owner")
+
+
+@app.post("/owner/pwreset/{rid}/link", response_class=HTMLResponse)
+async def owner_pwreset_link(request: Request, rid: int):
+    """Owner-only: reveal the full reset URL for a QUEUED reset so
+    it can be hand-sent to the address on the account. The raw token
+    exists (token_plain) only while the row is queued; an emailed,
+    hand-sent, used or expired row has nothing to reveal."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    r = conn.execute(
+        "SELECT pr.*, u.email AS user_email FROM password_resets pr "
+        "LEFT JOIN users u ON u.id=pr.user_id WHERE pr.id=?",
+        (rid,)).fetchone()
+    conn.close()
+    if (not r or r["delivery"] != "queued" or r["used_at"]
+            or not r["token_plain"]):
+        return redir("/owner")
+    exp = _parse_ts(r["expires_at"])
+    if not exp or exp <= datetime.now(timezone.utc):
+        return redir("/owner")
+    return render(request, "owner/pwreset_link.html", {
+        "link": _abs_url(request, f"/reset/{r['token_plain']}"),
+        "user_email": r["user_email"] or "",
+        "expires_at": fancy_time(r["expires_at"])})
+
+
+@app.post("/owner/pwreset/{rid}/hand-sent")
+async def owner_pwreset_hand_sent(request: Request, rid: int):
+    """Mark a queued reset as hand-sent (the owner emailed the link
+    to the account address themselves). Flipping the state wipes
+    the stored raw token \u2014 the link itself keeps working, since
+    validation is by hash."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute(
+        "UPDATE password_resets SET delivery='hand_sent', sent_at=?, "
+        "token_plain=NULL WHERE id=? AND delivery='queued' "
+        "AND used_at IS NULL", (now_iso(), rid))
+    conn.commit()
     conn.close()
     return redir("/owner")
 
