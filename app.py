@@ -604,6 +604,14 @@ def init_db():
     # --- Box Transparency: per-viewer box solidity (safe on existing DBs) ---
     if "box_opacity" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN box_opacity INTEGER DEFAULT 100")
+    # --- Build GLASS: whether the viewer has ever saved the unified
+    # Glass transparency slider. box_opacity alone can't say (its
+    # column default backfills 100 for everyone), and 100 used to BE
+    # the untouched default — so "never chose" needs its own flag:
+    # glass_set=0 -> the default glass look; glass_set=1 -> the saved
+    # box_opacity drives (100 then means solid BY CHOICE). ---
+    if "glass_set" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN glass_set INTEGER DEFAULT 0")
     # --- hide-from-specific-people + post tags (safe on existing DBs) ---
     c.execute("""CREATE TABLE IF NOT EXISTS post_hidden_from (
         post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
@@ -1443,6 +1451,7 @@ def render(request: Request, name, ctx=None):
         ctx.setdefault("viewer_spot_style", v_style)
         ctx.setdefault("viewer_spot_classes", v_classes)
         ctx.setdefault("viewer_box_alpha", viewer_box_alpha_for(u))
+        ctx.setdefault("viewer_glass_alpha", glass_alpha_for(u))
         ctx.setdefault("viewer_gold", is_gold_inviter(u["id"]))
     else:
         ctx["user"] = None
@@ -1454,6 +1463,7 @@ def render(request: Request, name, ctx=None):
         ctx.setdefault("viewer_spot_style", "")
         ctx.setdefault("viewer_spot_classes", "")
         ctx.setdefault("viewer_box_alpha", "")
+        ctx.setdefault("viewer_glass_alpha", GLASS_DEFAULT_ALPHA)
     ctx.setdefault("flash", request.query_params.get("flash", ""))
     return templates.TemplateResponse(request, name, ctx)
 
@@ -6445,6 +6455,29 @@ def viewer_box_alpha_for(u):
     return "%g" % (op / 100.0)
 
 
+# --- Build GLASS: the ONE transparency preference -------------------
+# The slider in Settings ("Glass transparency") stores into the same
+# box_opacity column Box Transparency always used; glass_set records
+# that the value was CHOSEN. The rendered --glass-alpha var drives the
+# fills of the main surfaces site-wide (base.html) and multiplies the
+# Your Spot bubble tint, unifying both older systems:
+#   never saved (or logged out) -> the default clean glass, 0.82
+#   saved < 100                 -> that value (same as --box-alpha)
+#   saved 100                   -> "1": solid, by the viewer's choice
+GLASS_DEFAULT_SOLIDITY = 82
+GLASS_DEFAULT_ALPHA = "0.82"
+
+
+def glass_alpha_for(u):
+    """The viewer's unified Glass alpha string for --glass-alpha."""
+    if not u:
+        return GLASS_DEFAULT_ALPHA
+    if not _uget(u, "glass_set"):
+        return GLASS_DEFAULT_ALPHA
+    a = viewer_box_alpha_for(u)
+    return a if a else "1"
+
+
 def _album_photos(viewer, owner_id, owner_on=False, limit=None):
     """Visible photo album for owner_id: personal posts (page_id IS NULL)
     with image media, newest first, each gated by can_view_post."""
@@ -6706,7 +6739,14 @@ async def profile_edit_page(request: Request):
                     "spot_text_color": user.get("spot_text_color") or "",
                     "spot_card_color": user.get("spot_card_color") or "",
                     "spot_card_opacity": user.get("spot_card_opacity"),
-                    "box_opacity": user.get("box_opacity")}})
+                    # Build GLASS: the slider SHOWS the effective
+                    # solidity — the saved value once chosen, else
+                    # the default-glass 82% so the thumb sits where
+                    # the site actually looks.
+                    "box_opacity": (user.get("box_opacity")
+                                    if user.get("glass_set")
+                                    and user.get("box_opacity") is not None
+                                    else GLASS_DEFAULT_SOLIDITY)}})
 
 
 @app.post("/settings/status")
@@ -6783,6 +6823,12 @@ async def settings_spot(request: Request):
     if not _spot_hex_ok(card_color):
         card_color = None
     opacity = None
+    if "spot_card_opacity" not in form:
+        # Build GLASS: the Your Spot form no longer carries a bubble
+        # transparency field (the unified Glass slider owns see-
+        # through now) — keep the stored tint strength as-is instead
+        # of wiping it to NULL on every Spot save.
+        opacity = user.get("spot_card_opacity")
     raw_op = (form.get("spot_card_opacity") or "").strip()
     if raw_op:
         try:
@@ -6823,12 +6869,12 @@ async def settings_boxes(request: Request):
                      "Box transparency needs a number from 30 to 100.")
     op = max(BOX_OPACITY_MIN, min(BOX_OPACITY_MAX, op))
     conn = db()
-    conn.execute("UPDATE users SET box_opacity=? WHERE id=?",
+    conn.execute("UPDATE users SET box_opacity=?, glass_set=1 WHERE id=?",
                  (op, user["id"]))
     conn.commit()
     conn.close()
     return redir("/settings/profile",
-                 f"Boxes are now {op}% solid on your screen.")
+                 f"Glass is now {op}% solid on your screen.")
 
 
 def _delete_upload(rel_path):
@@ -8891,17 +8937,21 @@ async def live_page(request: Request, lid: int):
     host["live_level"] = _streamer_level(
         (get_user(live["host_id"]) or {}).get("gift_lifetime"))
     owner_on = is_owner(request)
+    # Build GLASS: ?embed=1 renders the chrome-less viewer used by
+    # the floating mini player (same watch gate, same viewer join —
+    # only the chrome differs).
+    embed = request.query_params.get("embed") == "1"
     if live["status"] != "live":
         conn.close()
         return render(request, "live.html", {
             "mode": "ended", "live": live, "host": host,
-            "hide_golive": True})
+            "embed": embed, "hide_golive": True})
     if not _live_can_watch(user, live, owner_on=owner_on):
         conn.close()
         # Same face as an ended live: nothing about the room leaks.
         return render(request, "live.html", {
             "mode": "unavailable", "live": live, "host": host,
-            "hide_golive": True})
+            "embed": embed, "hide_golive": True})
     panel_ids = _live_panel_ids(conn, live)
     conn.close()
     # Boot compat: 'guest' stays the first non-host panelist (or
@@ -8913,9 +8963,17 @@ async def live_page(request: Request, lid: int):
         role = "guest"
     else:
         role = "watcher"
+    if embed and role == "host":
+        # The mini player is a viewer feature: the host's own embed
+        # gets a static card instead of a second broadcast page (no
+        # live script at all — nothing that could end the real live
+        # when the tile closes).
+        return render(request, "live.html", {
+            "mode": "embed_host", "live": live, "host": host,
+            "embed": True, "hide_golive": True})
     boot = {"id": lid, "me": user["id"], "role": role,
             "host": host, "guest": guest, "title": live["title"],
-            "created_at": live["created_at"],
+            "created_at": live["created_at"], "embed": embed,
             # Live Tickets: my spendable balance for the chip/gift
             # sheet, and the gift catalog for the tray (prices are
             # still enforced server-side from GIFT_CATALOG).
@@ -8934,11 +8992,24 @@ async def live_page(request: Request, lid: int):
     more_lives = [r for r in live_now_for(user["id"], owner_on)
                   if r["id"] != lid]
     browse_posts = _home_posts(user, owner_on)[:10]
+    # Build GLASS Part C: the live's external share sheet mirrors the
+    # /l public gate exactly — a live shares off-platform freely
+    # while it is live and its host's profile is public; a private
+    # host's live exposes no external sheet to anyone here (the /l
+    # face itself shows the generic teaser for it).
+    host_private = bool(
+        (get_user(live["host_id"]) or {}).get("private_profile"))
+    live_share_text = ((live.get("title") or "").strip()
+                       or f"{host['name']} is live on HERE")
     return render(request, "live.html", {
         "mode": "live", "live": live, "host": host, "guest": guest,
         "role": role, "more_lives": more_lives,
         "browse_posts": browse_posts,
         "boot": json.dumps(boot).replace("</", "<\\/"),
+        "embed": embed,
+        "can_share_live": not host_private,
+        "live_share_url": f"https://joincomehere.com/l/{lid}",
+        "live_share_text": live_share_text,
         "hide_golive": True})
 
 
