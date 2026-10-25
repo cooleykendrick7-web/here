@@ -398,10 +398,38 @@
    while the live is minimized (the tile has no panel buttons). */
 .live-overlay-stack{position:absolute;left:10px;bottom:84px;z-index:8;
   width:min(94vw,430px);max-height:46%;overflow-y:auto;display:flex;
-  flex-direction:column;gap:8px;align-items:flex-start}
-.live-overlay-stack .live-panel{margin-bottom:0;max-width:min(86vw,340px);width:100%}
+  flex-direction:column;gap:5px;align-items:flex-start}
+/* Build X2: the stack's cards ride one step lighter + tighter —
+   the light glass token (not --lg-bg-strong), slimmer padding,
+   one font step down. Controls inside keep their own sizes. */
+.live-overlay-stack .live-panel{margin-bottom:0;max-width:min(86vw,340px);width:100%;
+  background:var(--lg-bg);padding:6px 9px;font-size:13px}
+.live-overlay-stack .live-comment-form{margin-top:6px}
 #live-join-msg{text-shadow:var(--lg-text-shadow)}
 .live-overlay-stack:empty{display:none}
+/* ===== Build X2: collapsible card stack =====
+   The stack's persistent cards (.stack-card: panel banner,
+   people, host panel controls, comment composer) collapse
+   behind one slim 🎛 Controls pill via the ⌄ chip. Event cards
+   (poll/game/battle/requests/notes) keep their own lifecycle
+   and are NOT part of the collapse. The stack lives outside
+   the auto-fading chrome wrapper, so the chip and the pill
+   stay visible and tappable at rest. */
+.live-overlay-stack.stack-collapsed .stack-card{display:none}
+.live-stack-toggle{align-self:flex-start;min-width:48px;height:32px;
+  padding:0 12px;border-radius:999px;border:var(--lg-border);
+  background:var(--lg-bg);color:#fff;font-size:16px;line-height:1;
+  cursor:pointer;backdrop-filter:var(--lg-blur-sm);
+  -webkit-backdrop-filter:var(--lg-blur-sm)}
+.live-stack-toggle[hidden]{display:none}
+.live-stack-pill{align-self:flex-start;display:inline-flex;
+  align-items:center;gap:6px;min-height:38px;padding:0 14px;
+  border-radius:999px;border:var(--lg-border);background:var(--lg-bg);
+  color:#fff;font-size:13px;font-weight:700;cursor:pointer;
+  text-shadow:var(--lg-text-shadow);
+  backdrop-filter:var(--lg-blur-sm);
+  -webkit-backdrop-filter:var(--lg-blur-sm)}
+.live-stack-pill[hidden]{display:none}
 /* ===== minimized live: floating tile + browse mode ===== */
 #live-mini{position:fixed;right:12px;bottom:12px;width:min(34vw,180px);
   aspect-ratio:3/4;z-index:1600;background:#000;
@@ -498,6 +526,8 @@
 </div>
  </div>
  <div class="live-overlay-stack" id="live-overlay-stack">
+<button type="button" class="live-stack-toggle" id="live-stack-chevron" title="Hide the cards" aria-label="Hide the cards">⌄</button>
+<button type="button" class="live-stack-pill" id="live-stack-pill" hidden>🎛 Controls ⌃</button>
 <div class="live-err" id="live-error" hidden>
   <div id="live-error-text"></div>
   <button type="button" class="live-ctl" id="live-error-retry" style="margin-top:8px">🔁 Try again</button>
@@ -548,7 +578,7 @@
 <div id="live-join-msg" style="font-size:13px;color:rgba(255,255,255,.88);margin:-6px 0 10px" hidden></div>
 <div id="live-muted-note" class="live-muted-note" hidden>🔇 You were muted by the host/admin — your mic is off for everyone until they unmute you.</div>
 <div id="live-cam-note" class="live-muted-note" hidden>📷 Your camera isn't sending — nobody can see you. <button type="button" class="live-ctl" id="live-cam-retry" style="margin-left:6px">Tap to retry camera</button></div>
-<div id="live-member-banner" class="live-panel" hidden style="border-color:rgba(255,150,160,.45)">
+<div id="live-member-banner" class="live-panel stack-card" hidden style="border-color:rgba(255,150,160,.45)">
   🎥 <strong>You're on the panel!</strong> Everyone watching can see and hear you.
 </div>
 
@@ -557,13 +587,13 @@
   <div id="live-requests"></div>
 </div>
 
-<div class="live-panel" id="live-people-panel" hidden>
-  <div style="font-weight:800;margin-bottom:4px">👥 In this live</div>
+<div class="live-panel stack-card" id="live-people-panel" hidden>
+  <div style="font-weight:800;margin-bottom:2px">👥 In this live</div>
   <div id="live-watchers"></div>
 </div>
 
-<div class="live-panel" id="live-panelctl" hidden>
-  <div style="font-weight:800;margin-bottom:6px">👥 Panel</div>
+<div class="live-panel stack-card" id="live-panelctl" hidden>
+  <div style="font-weight:800;margin-bottom:3px">👥 Panel</div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <button type="button" class="live-ctl" id="ctl-panel-toggle">👥 Open panel</button>
     <span style="font-size:13px">Guest boxes</span>
@@ -571,11 +601,11 @@
     <strong id="live-boxes-n">5</strong>
     <button type="button" class="live-ctl" id="ctl-boxes-plus" title="More boxes">+</button>
   </div>
-  <div style="font-size:12.5px;color:rgba(255,255,255,.78);margin-top:6px">Open the panel to show the grid — viewers tap a + Request square to ask in. Boxes = how many guests can be on at once.</div>
+  <div style="font-size:12px;color:rgba(255,255,255,.78);margin-top:4px">Open the panel for the grid. Boxes = guests at once.</div>
 </div>
 
-<div class="live-panel">
-  <div style="font-weight:800;margin-bottom:8px">💬 Live comments</div>
+<div class="live-panel stack-card">
+  <div style="font-weight:800;margin-bottom:4px">💬 Live comments</div>
   <form class="live-comment-form" id="live-comment-form">
     <input id="live-comment-input" maxlength="300" autocomplete="off"
       placeholder="Say something nice…">
@@ -2786,9 +2816,32 @@ function liveRoomDiff(prev, next){
   function teardownPeers(){
     Object.keys(peers).forEach(function(uid){ closePeer(+uid); });
   }
+  /* Build X2: the "You're on the panel!" banner is a one-shot
+     hello, not furniture — it appears when a membership stint
+     starts and slides away ~5s later. updateControls() runs on
+     every state poll and funnels through here, so polls can
+     never resurrect it; leaving the panel resets the stint. */
+  var memberBannerTimer = null, memberBannerArmed = false;
+  function showMemberBanner(){
+    if (memberBannerArmed) return;
+    memberBannerArmed = true;
+    $('live-member-banner').hidden = false;
+    if (memberBannerTimer) clearTimeout(memberBannerTimer);
+    memberBannerTimer = setTimeout(function(){
+      $('live-member-banner').hidden = true;
+    }, 5000);
+  }
+  function resetMemberBanner(){
+    memberBannerArmed = false;
+    if (memberBannerTimer){
+      clearTimeout(memberBannerTimer);
+      memberBannerTimer = null;
+    }
+    $('live-member-banner').hidden = true;
+  }
   function enterPanelMode(){
     teardownPeers();
-    $('live-member-banner').hidden = false;
+    showMemberBanner();
     post('/heartbeat').catch(function(){});
     setupLocalMedia();
     updateControls();
@@ -2804,7 +2857,7 @@ function liveRoomDiff(prev, next){
     forcedMuted = false;
     var myTile = tiles[B.me];
     if (myTile) myTile.el.classList.remove('has-video');
-    $('live-member-banner').hidden = true;
+    resetMemberBanner();
     $('live-muted-note').hidden = true;
     post('/heartbeat').catch(function(){});
     updateControls();
@@ -4168,7 +4221,10 @@ function liveRoomDiff(prev, next){
     /* Gifts are for everyone except the host (no gifting your
        own live — the server refuses it too). */
     $('ctl-gift').hidden = iAmHost();
-    $('live-member-banner').hidden = !member;
+    /* Build X2: the panel banner is transient — see
+       showMemberBanner/resetMemberBanner. */
+    if (member) showMemberBanner();
+    else resetMemberBanner();
   }
   function updateJoinButton(d){
     var btn = $('ctl-join'), msg = $('live-join-msg');
@@ -4352,6 +4408,66 @@ function liveRoomDiff(prev, next){
     applyCommentsHidden();
     applyFloatPos();
   })();
+
+  /* ---------------- Build X2: collapsible card stack --------
+     The stack's persistent cards (.stack-card — panel banner,
+     people, host panel controls, comment composer) can all be
+     tucked behind one slim 🎛 Controls pill: the ⌄ chip at the
+     top of the stack collapses them, the pill re-opens them.
+     The choice persists per device (here_live_stack_collapsed).
+     Idle behaviour: the stack starts expanded; after ~6s with
+     no interaction INSIDE the stack it tucks itself away for
+     this visit and stays tucked until the pill is tapped
+     (opening re-arms the idle timer). An auto-tuck never writes
+     the saved preference, so a fresh visit starts expanded
+     again unless the viewer collapsed it by hand. Event cards
+     (poll/game/battle/requests/notes) are not .stack-card and
+     keep their own show/hide lifecycle. */
+  var stackEl = $('live-overlay-stack'),
+      stackChevron = $('live-stack-chevron'),
+      stackPill = $('live-stack-pill'),
+      stackCollapsed = false, stackIdleTimer = null;
+  try {
+    stackCollapsed = localStorage
+      .getItem('here_live_stack_collapsed') === '1';
+  } catch (e) {}
+  function stackIdleArm(){
+    if (stackIdleTimer) clearTimeout(stackIdleTimer);
+    stackIdleTimer = null;
+    if (stackCollapsed) return;
+    stackIdleTimer = setTimeout(function(){
+      setStackCollapsed(true, false);
+    }, 6000);
+  }
+  function setStackCollapsed(collapsed, manual){
+    stackCollapsed = collapsed;
+    if (stackEl)
+      stackEl.classList.toggle('stack-collapsed', collapsed);
+    if (stackChevron) stackChevron.hidden = collapsed;
+    if (stackPill) stackPill.hidden = !collapsed;
+    if (manual){
+      try {
+        localStorage.setItem('here_live_stack_collapsed',
+          collapsed ? '1' : '0');
+      } catch (e) {}
+    }
+    stackIdleArm();
+  }
+  if (stackEl && stackChevron && stackPill){
+    stackChevron.addEventListener('click', function(){
+      setStackCollapsed(true, true);
+    });
+    stackPill.addEventListener('click', function(){
+      setStackCollapsed(false, true);
+    });
+    ['pointerdown', 'keydown', 'input', 'wheel'].forEach(
+      function(evt){
+        stackEl.addEventListener(evt, function(){
+          if (!stackCollapsed) stackIdleArm();
+        });
+      });
+    setStackCollapsed(stackCollapsed, false);
+  }
 
   /* ---------------- state poll ---------------- */
   function fallbackPanel(d){
