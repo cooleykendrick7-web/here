@@ -12,7 +12,7 @@
 {% block title %}{% if profile.spot_name %}{{ profile.spot_name|e }} · HERE{% else %}{{ profile.name|e }} — HERE{% endif %}{% endblock %}
 {% block content %}
 
-<div class="spot-scope{% if profile.spot_classes %} {{ profile.spot_classes }}{% endif %}"{% if profile.spot_style %} style="{{ profile.spot_style }}"{% endif %}>
+<div class="spot-scope{% if profile.spot_classes %} {{ profile.spot_classes }}{% endif %}{% if profile.look_classes %} {{ profile.look_classes }}{% endif %}" style="{{ profile.spot_style }}{% if profile.spot_style and profile.look_style %};{% endif %}{{ profile.look_style }}">
 <div class="card">
   <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
     {% if profile.avatar %}<img class="avatar av-100{% if profile.is_gold_inviter %} av-gold{% endif %}" src="{{ profile.avatar|e }}" alt="">
@@ -103,6 +103,11 @@
         </form>
         {% endif %}
         <a class="btn-ghost btn-sm" href="/messages/{{ profile.id }}">💬 Message</a>
+        {% if profile.can_steal_look %}
+        <form class="inline-form" action="/user/{{ profile.id }}/steal-look" method="post">
+          <button type="submit" class="btn-ghost btn-sm" title="Copy {{ profile.name|e }}'s look — scheme, colors and style — to your own HERE. Their background photo stays theirs.">🎨 Steal this look</button>
+        </form>
+        {% endif %}
         {% if profile.muted_by_viewer %}
         <form class="inline-form" action="/unmute/{{ profile.id }}" method="post">
           <button type="submit" class="btn-ghost btn-sm" title="Unsilence {{ profile.name|e }}">🔊 Unsilence</button>

@@ -46,6 +46,12 @@
      with rgba(..., var(--glass-alpha)) so ONE setting drives the
      whole site's glass. */
   --glass-alpha:0.82;
+  /* Build LOOKS: the viewer's surface triplet + accent. render()
+     overrides both per viewer on the <body> style; these :root
+     values are the unset defaults (white glass, HERE red accent —
+     the logo's --red is separate and NEVER follows the accent). */
+  --glass-rgb:255,255,255;
+  --look-accent:#d41f2e;
 }
 *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 body{background:var(--bg);color:#1c1e21}
@@ -96,7 +102,7 @@ img{max-width:100%}
 .bolt-label{font-size:13px;color:var(--muted);margin-left:3px;font-weight:500}
 
 /* ===== cards, avatars, buttons ===== */
-.card{background:rgba(255,255,255,var(--glass-alpha));border:1px solid rgba(255,255,255,.55);
+.card{background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid rgba(255,255,255,.55);
   border-radius:8px;box-shadow:0 4px 24px rgba(13,16,23,.08);
   padding:15px;margin-bottom:16px}
 .avatar{border-radius:50%;object-fit:cover;flex-shrink:0;background:#ccc;display:block}
@@ -106,7 +112,7 @@ img{max-width:100%}
 .av-40{width:40px;height:40px;font-size:16px}
 .av-32{width:32px;height:32px;font-size:13px}
 .av-100{width:100px;height:100px;font-size:40px}
-.btn{display:inline-block;background:var(--red);color:#fff;border:none;border-radius:6px;
+.btn{display:inline-block;background:var(--look-accent,var(--red));color:#fff;border:none;border-radius:6px;
   padding:9px 18px;font-size:15px;font-weight:700;cursor:pointer}
 .btn:hover{background:var(--red-dark)}
 .btn-ghost{display:inline-block;background:rgba(228,230,235,var(--glass-alpha));color:#1c1e21;border:none;border-radius:6px;
@@ -163,14 +169,14 @@ body.has-profile-bg .contact-item .sub{color:#cfcfcf}
    profile routes don't blank viewer_box_alpha): the generic boxes
    below still go glass there, while spot-scoped cards keep the
    owner's tint, likewise multiplied by --glass-alpha. */
-body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass table.admin{background:rgba(255,255,255,var(--box-alpha))}
-body.boxes-glass:not(.viewer-spot-card) .card{background:rgba(255,255,255,var(--box-alpha))}
+body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass table.admin{background:rgba(var(--glass-rgb,255,255,255),var(--box-alpha))}
+body.boxes-glass:not(.viewer-spot-card) .card{background:rgba(var(--glass-rgb,255,255,255),var(--box-alpha))}
 body.boxes-glass:not(.viewer-spot-card) .comment .cbub{background:rgba(240,242,245,var(--box-alpha))}
 body.boxes-glass .topbar, body.boxes-glass .mobmenu{background:rgba(17,17,17,var(--box-alpha))}
 body.boxes-glass .flashmsg div{background:rgba(253,238,240,var(--box-alpha))}
 body.boxes-glass .msg-theirs{background:rgba(228,230,235,var(--box-alpha))}
 body.boxes-glass .btn-ghost{background:rgba(228,230,235,var(--box-alpha))}
-body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet, body.boxes-glass .tag-suggest, body.boxes-glass .react-picker{background:rgba(255,255,255,var(--box-alpha))}
+body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet, body.boxes-glass .tag-suggest, body.boxes-glass .react-picker{background:rgba(var(--glass-rgb,255,255,255),var(--box-alpha))}
 body.boxes-glass #incoming-sheet, body.boxes-glass #request-sheet{background:rgba(17,17,17,var(--box-alpha))}
 body.boxes-glass .kind-tab, body.boxes-glass .picker-chip, body.boxes-glass .poll-opt-btn{background:rgba(245,246,247,var(--box-alpha))}
 body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
@@ -183,6 +189,30 @@ body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
    get NO backdrop blur: dozens of them on screen would jank a phone;
    their translucent fill alone reads as glass. */
 @supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ .card, .page-card, .stat-card, .topbar, .mobmenu, .aud-popup, #cmenu-sheet, #dmenu-sheet {backdrop-filter:blur(6px) saturate(1.15);-webkit-backdrop-filter:blur(6px) saturate(1.15)} }
+
+/* Build LOOKS readability guardrail: when a surface color is set,
+   the server computes its luminance and stamps look-on-dark /
+   look-on-light on the scope (<body> for the viewer; .spot-scope on
+   profiles for the owner). A DARK surface flips the text riding on
+   the look surfaces to light, so words never drown in a dark card;
+   a LIGHT surface keeps the classic dark text. With no surface set
+   neither class is emitted and nothing here applies. An explicit
+   Your Spot text color still wins inside profiles (its rules are
+   more specific and come later). */
+body.look-on-dark .card, body.look-on-dark .page-card, body.look-on-dark .stat-card,
+body.look-on-dark table.admin, body.look-on-dark .aud-popup, body.look-on-dark #cmenu-sheet,
+body.look-on-dark #dmenu-sheet, body.look-on-dark .tag-suggest, body.look-on-dark .react-picker,
+.spot-scope.look-on-dark .card, .spot-scope.look-on-dark .page-card,
+.spot-scope.look-on-dark .stat-card{color:#f4f4f6}
+body.look-on-dark .card .post-meta, body.look-on-dark .card .sub,
+body.look-on-dark .card .comment .cmeta, body.look-on-dark .stat-card .post-meta,
+.spot-scope.look-on-dark .card .post-meta, .spot-scope.look-on-dark .card .sub,
+.spot-scope.look-on-dark .card .comment .cmeta{color:#c3c7d1}
+body.look-on-light .card, body.look-on-light .page-card, body.look-on-light .stat-card,
+body.look-on-light table.admin, body.look-on-light .aud-popup, body.look-on-light #cmenu-sheet,
+body.look-on-light #dmenu-sheet, body.look-on-light .tag-suggest, body.look-on-light .react-picker,
+.spot-scope.look-on-light .card, .spot-scope.look-on-light .page-card,
+.spot-scope.look-on-light .stat-card{color:#1c1e21}
 
 /* Box Transparency settings preview (Settings → Box Transparency) */
 .box-preview{border-radius:10px;padding:14px;margin-top:6px;background:linear-gradient(135deg,#d41f2e,#7a0f18 45%,#141419)}
@@ -235,7 +265,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .spot-swatch:hover{border-color:var(--red)}
 .field input[type=color]{width:72px;height:42px;padding:2px;border:1px solid var(--border);
   border-radius:8px;background:#fff;cursor:pointer;vertical-align:middle}
-.field input[type=range]{width:100%;max-width:340px;accent-color:var(--red);vertical-align:middle}
+.field input[type=range]{width:100%;max-width:340px;accent-color:var(--look-accent,var(--red));vertical-align:middle}
 .spot-preview{border-radius:10px;padding:14px;margin-top:6px;background-size:cover;
   background-position:center;background-color:#141419}
 .spot-preview .card{margin-bottom:0}
@@ -251,7 +281,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .kind-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
 .kind-tab{border:1px solid var(--border);background:rgba(245,246,247,var(--glass-alpha));border-radius:20px;padding:7px 13px;
   font-size:13px;font-weight:600;cursor:pointer;color:var(--muted)}
-.kind-tab.active{background:var(--red);border-color:var(--red);color:#fff}
+.kind-tab.active{background:var(--look-accent,var(--red));border-color:var(--look-accent,var(--red));color:#fff}
 .composer textarea{width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;
   font-size:15px;min-height:70px;resize:vertical;outline:none}
 .composer textarea:focus{border-color:var(--red)}
@@ -267,17 +297,17 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
   font-weight:600;cursor:pointer;color:#333}
 .picker-chip input{accent-color:var(--red)}
 .with-line{font-size:13px;color:var(--muted);margin-bottom:8px}
-.with-line a{color:var(--red);font-weight:600}
+.with-line a{color:var(--look-accent,var(--red));font-weight:600}
 /* ===== @ tag autocomplete (composer) ===== */
 .composer-body-wrap{position:relative}
-.tag-suggest{position:absolute;top:100%;left:0;right:0;background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);
+.tag-suggest{position:absolute;top:100%;left:0;right:0;background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid var(--border);
   border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.2);z-index:70;max-height:280px;overflow-y:auto;margin-top:4px}
 .tag-suggest[hidden]{display:none}
 .tag-item{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;min-height:48px}
 .tag-item:hover,.tag-item.sel{background:var(--red-soft)}
 .tag-item-name{font-weight:600;font-size:15px}
 .tag-hint{font-size:12px;color:var(--muted);margin-top:4px}
-.tag-link{color:var(--red);font-weight:600}
+.tag-link{color:var(--look-accent,var(--red));font-weight:600}
 /* ===== eyeball audience popup (on your own posts + composer) =====
    Rendered as a fixed sheet over a dim backdrop, portaled to <body> by JS
    (see openAudPopup) — it used to be position:absolute inside the card,
@@ -286,7 +316,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .aud-wrap{position:relative;display:inline-block}
 .aud-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
 .aud-popup{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,340px);
-  max-height:82vh;background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);
+  max-height:82vh;background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid var(--border);
   border-radius:12px;padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left;
   display:flex;flex-direction:column}
 .aud-popup[hidden]{display:none}
@@ -448,11 +478,11 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .kind-tag{display:inline-block;background:var(--red-soft);color:var(--red-dark);font-size:11px;
   font-weight:700;border-radius:10px;padding:2px 8px;margin-left:6px;vertical-align:middle}
 .page-tag{font-size:12px;color:var(--muted)}
-.page-tag a{color:var(--red);font-weight:600}
+.page-tag a{color:var(--look-accent,var(--red));font-weight:600}
 .feeling-line{font-size:14px;color:#333;margin-bottom:8px}
 .post-body{font-size:15px;line-height:1.45;margin-bottom:10px;white-space:pre-wrap;word-wrap:break-word}
 .post-link{margin-bottom:10px;word-break:break-all}
-.post-link a{color:var(--red);font-weight:600}
+.post-link a{color:var(--look-accent,var(--red));font-weight:600}
 .post-img{width:100%;border-radius:8px;margin-bottom:10px;display:block}
 .post-audio{width:100%;margin-bottom:10px}
 .post-video{position:relative;width:100%;padding-bottom:56.25%;margin-bottom:10px}
@@ -482,7 +512,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .share-banner a{color:var(--red);text-decoration:underline}
 .like-btn{background:none;border:none;color:var(--muted);font-weight:700;font-size:14px;cursor:pointer;padding:6px 8px;border-radius:6px}
 .like-btn:hover{background:#f0f2f5}
-.like-btn.liked{color:var(--red)}
+.like-btn.liked{color:var(--look-accent,var(--red))}
 /* ===== stories tray ===== */
 .stories-tray{display:flex;gap:12px;overflow-x:auto;padding:12px 4px;margin-bottom:6px}
 .story-item{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:64px;text-decoration:none;flex-shrink:0}
@@ -602,7 +632,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .chiprow{display:flex;flex-wrap:wrap;gap:7px}
 .chip{border:1.5px solid var(--border);background:#fff;color:#222;border-radius:999px;
   padding:6px 13px;font-size:13.5px;font-weight:600;cursor:pointer}
-.chip.on{border-color:var(--red);background:var(--red);color:#fff}
+.chip.on{border-color:var(--look-accent,var(--red));background:var(--look-accent,var(--red));color:#fff}
 .swatch{width:30px;height:30px;border-radius:50%;border:2px solid #fff;cursor:pointer;
   box-shadow:0 0 0 1px rgba(0,0,0,.25);padding:0}
 .swatch.on{box-shadow:0 0 0 2.5px var(--red)}
@@ -650,7 +680,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 .post-music-player iframe{width:100%;height:200px;display:block;border:0}
 /* ===== reaction picker ===== */
 .react-wrap{position:relative;display:inline-block}
-.react-picker{position:absolute;bottom:135%;left:0;background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);
+.react-picker{position:absolute;bottom:135%;left:0;background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid var(--border);
   border-radius:24px;padding:6px 10px;display:flex;gap:4px;box-shadow:0 4px 14px rgba(0,0,0,.18);z-index:60}
 .react-picker[hidden]{display:none}
 .react-picker button{background:none;border:none;font-size:24px;cursor:pointer;padding:2px 4px}
@@ -690,7 +720,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 #cmenu-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
 #cmenu-backdrop[hidden]{display:none}
 #cmenu-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:min(92vw,340px);background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);border-radius:12px;
+  width:min(92vw,340px);background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid var(--border);border-radius:12px;
   padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left}
 #cmenu-sheet[hidden]{display:none}
 #cmenu-confirm[hidden]{display:none}
@@ -708,7 +738,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 #dmenu-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
 #dmenu-backdrop[hidden]{display:none}
 #dmenu-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:min(92vw,340px);background:rgba(255,255,255,var(--glass-alpha));border:1px solid var(--border);border-radius:12px;
+  width:min(92vw,340px);background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid var(--border);border-radius:12px;
   padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);z-index:2000;text-align:left}
 #dmenu-sheet[hidden]{display:none}
 #dmenu-confirm[hidden]{display:none}
@@ -743,7 +773,7 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 
 /* ===== pages ===== */
 .pages-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
-.page-card{background:rgba(255,255,255,var(--glass-alpha));border:1px solid rgba(255,255,255,.55);border-radius:8px;box-shadow:0 4px 24px rgba(13,16,23,.08);overflow:hidden}
+.page-card{background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid rgba(255,255,255,.55);border-radius:8px;box-shadow:0 4px 24px rgba(13,16,23,.08);overflow:hidden}
 .page-card .cover{height:110px;background:var(--red-soft);display:flex;align-items:center;justify-content:center;
   color:var(--red);font-size:36px;font-weight:900}
 .page-card .cover img{width:100%;height:100%;object-fit:cover}
@@ -759,10 +789,10 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 
 /* ===== owner dashboard ===== */
 .stat-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:18px}
-.stat-card{background:rgba(255,255,255,var(--glass-alpha));border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.1);padding:14px;text-align:center}
+.stat-card{background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.1);padding:14px;text-align:center}
 .stat-card .num{font-size:28px;font-weight:900;color:var(--red)}
 .stat-card .lbl{font-size:13px;color:var(--muted);font-weight:600}
-table.admin{width:100%;border-collapse:collapse;font-size:13px;background:rgba(255,255,255,var(--glass-alpha));border-radius:8px;overflow:hidden}
+table.admin{width:100%;border-collapse:collapse;font-size:13px;background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border-radius:8px;overflow:hidden}
 table.admin th{background:var(--black);color:#fff;text-align:left;padding:9px 10px;font-size:12px}
 table.admin td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
 .flag-reasons{color:var(--red-dark);font-weight:600}
@@ -823,7 +853,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 </style>
 {% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
+<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_look_classes %} {{ viewer_look_classes }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }};--glass-rgb:{{ viewer_glass_rgb or '255,255,255' }};--look-accent:{{ viewer_look_accent or '#d41f2e' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
 
 <header class="topbar">
   <a class="logo" href="/home">HERE</a>

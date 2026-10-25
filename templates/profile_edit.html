@@ -1,5 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Edit Profile — HERE{% endblock %}
+{% block head_extra %}
+<style>
+.look-presets{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.look-preset-form{margin:0}
+.look-preset{display:flex;align-items:center;gap:8px;border:1px solid var(--border);background:#fff;border-radius:999px;padding:5px 12px 5px 5px;cursor:pointer;font-size:13.5px;font-weight:600;color:#1c1e21}
+.look-preset:hover{border-color:var(--look-accent,var(--red))}
+.look-swatch{width:26px;height:26px;border-radius:50%;border:1px solid rgba(0,0,0,.18);display:inline-flex;align-items:flex-end;justify-content:flex-end;flex-shrink:0}
+.look-swatch-dot{width:11px;height:11px;border-radius:50%;border:1.5px solid #fff;display:block}
+.look-schemes{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.look-pill{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--border);border-radius:10px;padding:9px 12px;cursor:pointer;font-weight:600}
+.look-pill input{margin-top:3px;accent-color:var(--look-accent,var(--red))}
+.look-pill-sub{display:block;font-weight:400;font-size:12.5px;color:var(--muted)}
+.look-hex{font-size:13px;color:var(--muted);margin-left:6px;font-variant-numeric:tabular-nums}
+</style>
+{% endblock %}
 {% block content %}
 
 <div class="card">
@@ -96,30 +111,71 @@
   </form>
 </div>
 
-<div class="card" id="boxes">
-  <div class="section-title">🪟 Glass transparency</div>
-  <p style="margin-top:8px;color:var(--muted)">This one is just for YOUR eyes — it sets how see-through the glass boxes and bubbles are on your screen, on every page of HERE: cards, posts, messages, menus, everything. It does not change what anybody else sees.</p>
-  <p style="margin-top:8px;color:var(--muted)">This is the old Box Transparency, widened — it now drives your Your Spot bubbles too, so there's just one slider for see-through. Until you save it, HERE uses the clean default glass.</p>
-  <form action="/settings/boxes" method="post" style="margin-top:12px">
+<div class="card" id="look">
+  <div class="section-title">🎨 My Look</div>
+  <p style="margin-top:8px;color:var(--muted)">Your look is how HERE feels on YOUR screen — and how your profile looks to everybody who visits it. Pick a scheme, make the colors yours. Every color works in every scheme, and your words stay readable automatically: pick a dark surface and the app flips your text light for you.</p>
+
+  <div class="field" style="margin-top:12px">
+    <label>Preset looks — one tap and you're dressed</label>
+    <div class="look-presets">
+      {% for p in profile.look_presets %}
+      <form action="/settings/look" method="post" class="look-preset-form">
+        <input type="hidden" name="preset" value="{{ p.key }}">
+        <button type="submit" class="look-preset" title="Apply the {{ p.name|e }} look">
+          <span class="look-swatch" style="background:{{ p.surface or 'linear-gradient(135deg,#ffffff,#dfe5ee)' }}"><span class="look-swatch-dot" style="background:{{ p.accent }}"></span></span>
+          <span class="look-preset-name">{{ p.name|e }}</span>
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+  </div>
+
+  <form action="/settings/look" method="post" style="margin-top:12px" id="look-form">
     <div class="field">
-      <label for="box-opacity">Glass transparency — <span id="box-opacity-val">{{ profile.box_opacity if profile.box_opacity is not none else 82 }}%</span> solid</label>
+      <label>Scheme — how your boxes are built</label>
+      <div class="look-schemes">
+        <label class="look-pill"><input type="radio" name="scheme" value="glass" {% if profile.look_scheme == 'glass' %}checked{% endif %}> 🪟 Glass<span class="look-pill-sub">see-through and clean — the classic HERE draw-in look, default for everybody</span></label>
+        <label class="look-pill"><input type="radio" name="scheme" value="solid" {% if profile.look_scheme == 'solid' %}checked{% endif %}> 🧱 Solid<span class="look-pill-sub">bold opaque cards in your surface color</span></label>
+        <label class="look-pill"><input type="radio" name="scheme" value="mix" {% if profile.look_scheme == 'mix' %}checked{% endif %}> 🎛 Mix<span class="look-pill-sub">your own blend — set the see-through yourself below</span></label>
+      </div>
+    </div>
+    <div class="field" id="look-mix-row" {% if profile.look_scheme != 'mix' %}hidden{% endif %}>
+      <label for="box-opacity">🪟 Glass transparency — <span id="box-opacity-val">{{ profile.box_opacity if profile.box_opacity is not none else 82 }}%</span> solid</label>
       <input type="range" id="box-opacity" name="box_opacity" min="30" max="100" step="1" value="{{ profile.box_opacity if profile.box_opacity is not none else 82 }}">
       <div style="font-size:12px;color:var(--muted);margin-top:2px">More clear ⟷ More solid · 100% = solid boxes · 30% = most see-through</div>
+      <p style="margin-top:6px;color:var(--muted);font-size:13px">This is the old Box Transparency, folded in — in Mix it's your blend control, and it still drives your Your Spot bubbles too, so there's just one slider for see-through.</p>
     </div>
     <div class="field">
-      <label>Preview — this is how boxes look on your screen</label>
+      <label for="look-surface">Surface color — tints the glass; in Solid it IS the card color</label>
+      <input type="color" id="look-surface" name="surface" value="{{ profile.look_surface or '#ffffff' }}">
+      <span class="look-hex" id="look-surface-hex">{{ profile.look_surface or 'default' }}</span>
+      <label style="font-weight:500;margin-left:10px"><input type="checkbox" name="surface_clear" id="look-surface-clear" value="1" {% if not profile.look_surface %}checked{% endif %}> No surface color (classic)</label>
+    </div>
+    <div class="field">
+      <label for="look-accent-in">Accent color — your buttons, active tabs and links</label>
+      <input type="color" id="look-accent-in" name="accent" value="{{ profile.look_accent or '#d41f2e' }}">
+      <span class="look-hex" id="look-accent-hex">{{ profile.look_accent or 'default' }}</span>
+      <label style="font-weight:500;margin-left:10px"><input type="checkbox" name="accent_clear" id="look-accent-clear" value="1" {% if not profile.look_accent %}checked{% endif %}> HERE red (classic)</label>
+    </div>
+    <div class="field">
+      <label>Preview — this is how your look feels</label>
       <div class="box-preview">
-        <div class="box-preview-card" id="box-preview-card">
-          <div style="font-weight:700">A sample box</div>
-          <p style="margin-top:6px">This is how a box looks at the see-through level you picked.</p>
-          <div style="background:#f0f2f5;border-radius:8px;padding:8px 10px;margin-top:8px">
-            <div style="font-weight:700;font-size:13px">{{ profile.name|e }}</div>
-            <div style="font-size:13px">…and this is a sample comment bubble.</div>
+        <div class="box-preview-card" id="look-preview-card">
+          <div style="font-weight:800;font-size:16px">{{ profile.name|e }}</div>
+          <div style="font-size:12px;opacity:.72">your look on HERE · just now</div>
+          <p style="margin-top:6px">This is a post card wearing your look. The words stay readable on their own — you just pick the colors.</p>
+          <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+            <button type="button" class="btn" id="look-preview-btn">A button</button>
+            <a href="#" onclick="return false" id="look-preview-link" style="font-weight:700">and a link</a>
           </div>
         </div>
       </div>
     </div>
-    <button type="submit" class="btn">Save Transparency</button>
+    <button type="submit" class="btn">Save My Look</button>
+  </form>
+  <form action="/settings/look" method="post" style="margin-top:10px">
+    <input type="hidden" name="reset" value="1">
+    <button type="submit" class="btn-ghost" onclick="return confirm('Reset your look to the classic HERE glass?');">Reset to classic</button>
   </form>
 </div>
 
@@ -266,17 +322,54 @@
 </script>
 <script>
 (function(){
+  // Build LOOKS: the 🎨 My Look live preview + Mix slider plumbing.
   var slider = document.getElementById('box-opacity');
-  if (!slider) return;
   var val = document.getElementById('box-opacity-val');
-  var preview = document.getElementById('box-preview-card');
-  function update(){
-    var v = slider.value;
-    if (val) val.textContent = v + '%';
-    if (preview) preview.style.background = 'rgba(255,255,255,' + (v/100) + ')';
+  var mixRow = document.getElementById('look-mix-row');
+  var surfIn = document.getElementById('look-surface');
+  var surfClear = document.getElementById('look-surface-clear');
+  var surfHex = document.getElementById('look-surface-hex');
+  var accIn = document.getElementById('look-accent-in');
+  var accClear = document.getElementById('look-accent-clear');
+  var accHex = document.getElementById('look-accent-hex');
+  var card = document.getElementById('look-preview-card');
+  var btn = document.getElementById('look-preview-btn');
+  var link = document.getElementById('look-preview-link');
+  var radios = document.querySelectorAll('#look-form input[name="scheme"]');
+  if (!card) return;
+  function scheme(){
+    for (var i = 0; i < radios.length; i++)
+      if (radios[i].checked) return radios[i].value;
+    return 'glass';
   }
-  slider.addEventListener('input', update);
-  slider.addEventListener('change', update);
+  function hexRgb(h){
+    h = (h || '').replace('#','');
+    if (h.length !== 6) return [255,255,255];
+    return [parseInt(h.substr(0,2),16), parseInt(h.substr(2,2),16), parseInt(h.substr(4,2),16)];
+  }
+  function update(){
+    var sc = scheme();
+    if (mixRow) mixRow.hidden = sc !== 'mix';
+    if (slider && val) val.textContent = slider.value + '%';
+    if (surfHex) surfHex.textContent = surfClear && surfClear.checked ? 'default' : (surfIn ? surfIn.value : 'default');
+    if (accHex) accHex.textContent = accClear && accClear.checked ? 'default' : (accIn ? accIn.value : 'default');
+    var rgb = (surfClear && surfClear.checked) ? [255,255,255] : hexRgb(surfIn ? surfIn.value : '#ffffff');
+    var alpha = sc === 'solid' ? 1 : (sc === 'mix' ? (slider ? slider.value/100 : 0.82) : 0.82);
+    card.style.background = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + ')';
+    // mirror of the server readability guardrail
+    var lum = (0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]) / 255;
+    var hasSurf = !(surfClear && surfClear.checked);
+    card.style.color = (hasSurf && lum < 0.5) ? '#f4f4f6' : '#1c1e21';
+    var acc = (accClear && accClear.checked) ? '#d41f2e' : (accIn ? accIn.value : '#d41f2e');
+    if (btn) btn.style.background = acc;
+    if (link) link.style.color = acc;
+  }
+  radios.forEach(function(r){ r.addEventListener('change', update); });
+  [slider, surfIn, surfClear, accIn, accClear].forEach(function(el){
+    if (el){ el.addEventListener('input', update); el.addEventListener('change', update); }
+  });
+  if (surfIn) surfIn.addEventListener('input', function(){ if (surfClear) surfClear.checked = false; update(); });
+  if (accIn) accIn.addEventListener('input', function(){ if (accClear) accClear.checked = false; update(); });
   update();
 })();
 </script>

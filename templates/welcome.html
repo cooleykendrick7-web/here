@@ -9,7 +9,7 @@
       <button type="submit" class="btn">Start exploring →</button>
     </form>
   </div>
-  <p style="color:var(--muted);margin-top:6px">Three quick steps and your feed is already yours.</p>
+  <p style="color:var(--muted);margin-top:6px">Four quick steps and your feed is already yours.</p>
 </div>
 
 <div class="card">
@@ -46,7 +46,24 @@
 </div>
 
 <div class="card">
-  <div class="section-title">Step 3 · Trending on My Views</div>
+  <div class="section-title">Step 3 · 🎨 Pick your vibe</div>
+  <p style="color:var(--muted);font-size:14px;margin-top:6px">HERE wears what YOU pick. One tap dresses the whole app — and your profile — in a look. Change it anytime in Settings → 🎨 My Look, or steal a look you like off anybody's profile.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+    {% for p in look_presets %}
+    <form action="/welcome/look" method="post" style="margin:0">
+      <input type="hidden" name="preset" value="{{ p.key }}">
+      <button type="submit" class="vibe-card" title="Apply the {{ p.name|e }} look" style="display:flex;align-items:center;gap:8px;border:2px solid {% if look_scheme == p.scheme and p.key == 'classic' %}var(--red){% else %}var(--border){% endif %};background:#fff;border-radius:999px;padding:5px 14px 5px 5px;cursor:pointer;font-size:14.5px;font-weight:700;color:#1c1e21">
+        <span style="width:28px;height:28px;border-radius:50%;border:1px solid rgba(0,0,0,.18);display:inline-flex;align-items:flex-end;justify-content:flex-end;background:{{ p.surface or 'linear-gradient(135deg,#ffffff,#dfe5ee)' }}"><span style="width:12px;height:12px;border-radius:50%;border:1.5px solid #fff;display:block;background:{{ p.accent }}"></span></span>
+        {{ p.name|e }}
+      </button>
+    </form>
+    {% endfor %}
+  </div>
+  <p style="color:var(--muted);font-size:13.5px;margin-top:10px">Keeping the classic? You're already wearing it — the 🪟 Classic HERE Glass is the default look. Skip this step and nothing changes.</p>
+</div>
+
+<div class="card">
+  <div class="section-title">Step 4 · Trending on My Views</div>
   {% if trending %}
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px">
     {% for v in trending %}
