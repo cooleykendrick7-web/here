@@ -1128,6 +1128,17 @@ def init_db():
         live_id INTEGER, gift_key TEXT,
         stripe_session TEXT, note TEXT DEFAULT '',
         created_at TEXT NOT NULL)""")
+    # Build MONEY: per-stream earnings attribution rides on
+    # ticket_txns.live_id — the gift-send and shout-out writers set
+    # it on every credit, but a DB created before the column joined
+    # the CREATE TABLE above gets it here. Credits whose live_id
+    # stays NULL (written before attribution existed) are honest
+    # history: the /earnings dashboard shows them as one
+    # "Earlier streams" bucket.
+    if "live_id" not in [r["name"] for r in
+                         c.execute("PRAGMA table_info(ticket_txns)")
+                         .fetchall()]:
+        c.execute("ALTER TABLE ticket_txns ADD COLUMN live_id INTEGER")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ticket_txns_user "
               "ON ticket_txns(user_id, id)")
     # Idempotent purchase crediting: one buy txn per Stripe checkout
@@ -12523,6 +12534,97 @@ async def tickets_cashout(request: Request):
                  "and marks it paid.")
 
 
+@app.get("/earnings", response_class=HTMLResponse)
+async def earnings_page(request: Request):
+    """Build MONEY: the streamer's private earnings dashboard —
+    what they earned, stream by stream, plus the cash-out center.
+
+    Pure presentation over the existing ledgers: per-stream sums
+    group ticket_txns 'gift_receive' credits by their live_id
+    (the gift + shout writers have always set it); credits with a
+    NULL live_id predate attribution and aggregate into one honest
+    "Earlier streams" bucket. NOTHING here moves money — the
+    cash-out form posts to the same POST /tickets/cashout handler
+    as the wallet page (same min, same hold, one pending at a
+    time), and bank setup/update are the existing /payouts routes.
+
+    Money display discipline (Build V): tickets are the unit
+    everywhere; dollars appear ONLY inside the cash-out area —
+    the exact amount of a request being made or in flight, the
+    per-request history amounts, and the total actually paid
+    out. No conversion-rate copy anywhere on this page."""
+    user, err = require_login(request)
+    if err:
+        return err
+    me = get_user(user["id"]) or {}
+    earned = me.get("gift_earned") or 0
+    lifetime = me.get("gift_lifetime") or 0
+    conn = db()
+    stream_rows = conn.execute(
+        "SELECT t.live_id AS live_id, "
+        "SUM(CASE WHEN COALESCE(t.note,'')='shout' THEN 0 ELSE 1 "
+        "END) AS gifts, COALESCE(SUM(t.tickets),0) AS tickets, "
+        "MAX(t.created_at) AS last_at, s.title AS live_title, "
+        "s.created_at AS live_created FROM ticket_txns t "
+        "LEFT JOIN live_sessions s ON s.id = t.live_id "
+        "WHERE t.user_id=? AND t.kind='gift_receive' "
+        "AND t.live_id IS NOT NULL GROUP BY t.live_id "
+        "ORDER BY COALESCE(s.created_at, MAX(t.created_at)) DESC",
+        (user["id"],)).fetchall()
+    streams = [{
+        "title": (r["live_title"] or "").strip()
+                 or f"Live #{r['live_id']}",
+        "when": fancy_time(r["live_created"] or r["last_at"]),
+        "gifts": r["gifts"] or 0,
+        "tickets": r["tickets"] or 0}
+        for r in stream_rows]
+    legacy = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s, "
+        "SUM(CASE WHEN COALESCE(note,'')='shout' THEN 0 ELSE 1 "
+        "END) g FROM ticket_txns WHERE user_id=? AND "
+        "kind='gift_receive' AND live_id IS NULL",
+        (user["id"],)).fetchone()
+    earlier = ({"gifts": (legacy["g"] or 0) if legacy else 0,
+                "tickets": (legacy["s"] or 0) if legacy else 0}
+               if legacy and legacy["c"] else None)
+    pending = conn.execute(
+        "SELECT * FROM payout_requests WHERE user_id=? AND "
+        "status IN ('pending','sending') ORDER BY id DESC LIMIT 1",
+        (user["id"],)).fetchone()
+    my_payouts = conn.execute(
+        "SELECT * FROM payout_requests WHERE user_id=? ORDER BY id "
+        "DESC LIMIT 20", (user["id"],)).fetchall()
+    paid_total = conn.execute(
+        "SELECT COALESCE(SUM(dollars_cents),0) s FROM "
+        "payout_requests WHERE user_id=? AND status='paid'",
+        (user["id"],)).fetchone()["s"]
+    conn.close()
+    payouts_history = [{
+        "tickets": p["tickets"],
+        "dollars": _money2(p["dollars_cents"]),
+        "when": fancy_time(p["created_at"]),
+        "status_text": _payout_status_text(dict(p)),
+        "decided": (fancy_time(p["decided_at"])
+                    if p["decided_at"] else "")}
+        for p in my_payouts]
+    bank_state = ("ready" if me.get("payout_ready")
+                  else "started" if me.get("stripe_acct_id")
+                  else "none")
+    return render(request, "earnings.html", {
+        "lifetime": lifetime, "earned": earned,
+        "streams": streams, "earlier": earlier,
+        "pending": ({"tickets": pending["tickets"],
+                     "dollars": _money2(pending["dollars_cents"]),
+                     "when": fancy_time(pending["created_at"])}
+                    if pending else None),
+        "can_cashout": earned >= CASHOUT_MIN_TICKETS and not pending,
+        "cashout_min": CASHOUT_MIN_TICKETS,
+        "cashout_dollars": _money2(_earned_dollars(earned)),
+        "paid_total": _money2(paid_total),
+        "payouts_history": payouts_history,
+        "bank_state": bank_state})
+
+
 # ---------------- Build R: automatic bank payouts (Stripe Connect) ----
 # A streamer can link a Stripe Express account ONCE (POST
 # /payouts/setup — Stripe hosts the onboarding and holds the bank
@@ -13647,6 +13749,39 @@ async def owner_ad_status(request: Request, aid: int):
         conn.commit()
         conn.close()
     return redir("/owner")
+
+
+@app.post("/owner/ads/{aid}/delete")
+async def owner_ad_delete(request: Request, aid: int):
+    """Build MONEY: REMOVE an ad completely (owner only) — the row
+    and its ad_events go away, so an active ad leaves the rotation
+    at once (this is not a pause). The ad's media file is deleted
+    best-effort through the storage layer ONLY when the path lives
+    under the ads/ uploads prefix and no other ad still references
+    the same path — media borrowed from a post/listing/page (or
+    shared by another ad) is never touched."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    ad = conn.execute("SELECT * FROM ads WHERE id=?", (aid,)).fetchone()
+    media_path = ""
+    if ad:
+        media_path = ad["media_path"] or ""
+        conn.execute("DELETE FROM ad_events WHERE ad_id=?", (aid,))
+        conn.execute("DELETE FROM ads WHERE id=?", (aid,))
+        conn.commit()
+        if not media_path.startswith("ads/"):
+            media_path = ""
+        elif conn.execute(
+                "SELECT 1 FROM ads WHERE media_path=? LIMIT 1",
+                (media_path,)).fetchone():
+            media_path = ""
+    conn.close()
+    if media_path:
+        _delete_upload(media_path)
+    return redir("/owner", "🗑 Ad removed completely."
+                 if ad else "Ad not found.")
 
 
 def _owner_ads_ctx(conn):
