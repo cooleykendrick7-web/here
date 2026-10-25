@@ -68,6 +68,11 @@
 .live-tile .tile-ph .ph-init{width:64px;height:64px;border-radius:50%;background:#3a3b3d;
   display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800}
 .live-tile .tile-ph .ph-name{font-size:13px;color:#ddd;font-weight:600}
+.live-tile .tile-ph .ph-status{font-size:12px;color:#ffd76e;font-weight:700;
+  background:var(--lg-bg-strong);border:var(--lg-border);border-radius:999px;
+  padding:3px 10px;backdrop-filter:var(--lg-blur-sm);
+  -webkit-backdrop-filter:var(--lg-blur-sm)}
+.live-tile .tile-ph .ph-status[hidden]{display:none}
 .live-tile.has-video .tile-ph{display:none}
 .live-tile .tile-label{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;
   align-items:center;gap:5px;padding:2px 6px;color:#fff;font-size:11px;
@@ -475,6 +480,7 @@
 </div>
 <div id="live-join-msg" style="font-size:13px;color:rgba(255,255,255,.88);margin:-6px 0 10px" hidden></div>
 <div id="live-muted-note" class="live-muted-note" hidden>🔇 You were muted by the host/admin — your mic is off for everyone until they unmute you.</div>
+<div id="live-cam-note" class="live-muted-note" hidden>📷 Your camera isn't sending — nobody can see you. <button type="button" class="live-ctl" id="live-cam-retry" style="margin-left:6px">Tap to retry camera</button></div>
 <div id="live-member-banner" class="live-panel" hidden style="border-color:rgba(255,150,160,.45)">
   🎥 <strong>You're on the panel!</strong> Everyone watching can see and hear you.
 </div>
@@ -758,6 +764,13 @@ function liveRoomDiff(prev, next){
     phName.className = 'ph-name';
     phName.textContent = member.name || '';
     ph.appendChild(phName);
+    /* Build W3: the tile's honest video state line — "📷 Camera
+       off" / "📶 Connecting video…" / "📶 Reconnecting video…" —
+       driven by updateTileVideoState; empty while video flows. */
+    var phStatus = document.createElement('span');
+    phStatus.className = 'ph-status';
+    phStatus.hidden = true;
+    ph.appendChild(phStatus);
     var video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
@@ -840,7 +853,8 @@ function liveRoomDiff(prev, next){
     gridEl.appendChild(el);
     tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
                   badges: badges, srcTag: srcTag, menuBtn: menuBtn,
-                  member: member, dot: dot, recon: recon};
+                  member: member, dot: dot, recon: recon,
+                  phStatus: phStatus, videoState: ''};
     updateTile(member);
     var P = peers[uid];
     if (P) P.videoEl = video;
@@ -1025,6 +1039,8 @@ function liveRoomDiff(prev, next){
     }).catch(function(){
       mediaReady = false;
       showMediaError();
+      checkMyVideo(); /* an acquire that produced no live video
+        track means I am not sending — say so, on the record */
       if (iAmHost())
         setStatus('Your live is on air, but HERE can\u2019t reach your camera yet.');
     });
@@ -1032,6 +1048,135 @@ function liveRoomDiff(prev, next){
   $('live-error-retry').addEventListener('click', function(){
     errBox.hidden = true;
     setupLocalMedia();
+  });
+
+  /* ---------------- Build W3: my camera truth ----------------
+     The sender half of the audio-yes/video-no failure: a client
+     can hold a stream whose VIDEO track is missing or dead
+     (OS-level camera grab, a capture device that vanished) while
+     its audio sails on — and until now nobody knew: not the
+     sender (their own tile looked "on"), not the peers (a black
+     box). Now the sender VERIFIES its outgoing video track —
+     exists + readyState 'live' — at every acquire and every
+     source change (checkMyVideo runs at the end of
+     lcAfterSourceChange, the funnel for all of them), and again
+     whenever the track itself fires 'ended'/'mute'. The verdict
+     rides the heartbeat (myVideoOk + an immediate heartbeat on
+     every change) into the state poll's panel rows as video_ok,
+     so peers can render the truth. A dead camera gets a
+     persistent in-room prompt with a one-tap retry. The 📷
+     on/off toggle is NOT this: it sets enabled=false, the track
+     stays 'live', video_ok stays true, and peers see the
+     receiver-side muted track — a deliberate camera-off, not a
+     broken one. */
+  var myVideoOk = true;
+  var myVideoBoundTrack = null;
+  var myVideoRecheckTimer = null;
+  function currentVideoTrack(){
+    if (!myStream) return null;
+    var vts = myStream.getVideoTracks();
+    return vts.length ? vts[0] : null;
+  }
+  function publishVideoOk(){
+    if (!amMember || ended) return;
+    post('/heartbeat', {video_ok: myVideoOk}).catch(function(){});
+  }
+  function setMyVideoOk(ok){
+    ok = !!ok;
+    if (ok !== myVideoOk){
+      myVideoOk = ok;
+      publishVideoOk();
+    }
+    updateCamNote();
+  }
+  function checkMyVideo(){
+    if (!amMember || ended) return;
+    var tr = currentVideoTrack();
+    if (tr && tr !== myVideoBoundTrack){
+      myVideoBoundTrack = tr;
+      try {
+        tr.addEventListener('ended', scheduleVideoRecheck);
+        tr.addEventListener('mute', scheduleVideoRecheck);
+        tr.addEventListener('unmute', function(){ checkMyVideo(); });
+      } catch (e) {}
+    }
+    setMyVideoOk(!!(tr && tr.readyState === 'live'));
+  }
+  function scheduleVideoRecheck(){
+    /* 'ended'/'mute' also fire on the OLD track while a source
+       switch is mid-flight — judge the CURRENT track once the
+       dust settles, never the corpse. */
+    if (myVideoRecheckTimer) return;
+    myVideoRecheckTimer = setTimeout(function(){
+      myVideoRecheckTimer = null;
+      checkMyVideo();
+    }, 1200);
+  }
+  function updateCamNote(){
+    var note = $('live-cam-note');
+    /* The join-time error box already owns the "no camera at
+       all" case (with its own Try again) — this note is for a
+       camera that died or never verified while the room runs. */
+    if (note)
+      note.hidden = !(amMember && !myVideoOk && errBox.hidden);
+    var T = tiles[B.me];
+    if (T){
+      if (!myVideoOk) T.el.classList.remove('has-video');
+      else if (myStream && currentVideoTrack())
+        T.el.classList.add('has-video');
+    }
+  }
+  function retryCamera(){
+    if (!amMember || ended) return Promise.resolve();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      toast('Camera is not available in this browser.');
+      return Promise.resolve();
+    }
+    if (!myStream){ setupLocalMedia(); return Promise.resolve(); }
+    return navigator.mediaDevices.getUserMedia({
+      video: {facingMode: facing}, audio: false})
+      .then(function(stream){
+        var tr = stream.getVideoTracks()[0];
+        if (!tr){
+          stream.getTracks().forEach(function(t){
+            try { t.stop(); } catch (e) {}
+          });
+          toast('That camera gave no picture — try again.');
+          return null;
+        }
+        if (lcVideoKind === 'screen') lcDetachScreenState();
+        lcVideoKind = 'camera';
+        return lcSwapTrack('video', tr).then(function(){
+          /* Peers built while my camera was dead may hold NO
+             video sender for me at all — a replaceTrack has
+             nothing to land on there. Add the track and
+             renegotiate, the same landing pattern as a fresh
+             acquire: pairs I drive get an offer, pairs driven
+             at me get a hello so the track rides the answer. */
+          Object.keys(peers).forEach(function(uid){
+            var P = peers[uid], hasV = false;
+            try {
+              P.pc.getSenders().forEach(function(s){
+                if (s.track && s.track.kind === 'video') hasV = true;
+              });
+            } catch (e) {}
+            if (!hasV){
+              addLocalTracks(P);
+              if (P.offered) makeOffer(+uid);
+              else sayHelloTo(+uid);
+            }
+          });
+          lcAfterSourceChange(); /* re-verifies + republishes */
+          toast('📷 Camera is sending again.');
+        });
+      })
+      .catch(function(){
+        toast('Camera is still blocked — allow it in the browser '
+              + 'prompt, then tap retry.');
+      });
+  }
+  $('live-cam-retry').addEventListener('click', function(){
+    retryCamera();
   });
 
   /* ---------------- Live Connect (Build L) ----------------
@@ -1085,6 +1230,10 @@ function liveRoomDiff(prev, next){
   function lcAfterSourceChange(){
     applyLocalTrackStates();
     lcApplyMirror();
+    checkMyVideo(); /* Build W3: EVERY source change (acquire,
+       device switch, screen start/stop, camera fallback) lands
+       here — the one funnel where the new outgoing video track
+       gets verified + reported. */
     var me = panelById[B.me];
     if (me && tiles[B.me]) updateTile(me);
     if (lcSheetOpen && !sheetEl.hidden
@@ -1540,6 +1689,11 @@ function liveRoomDiff(prev, next){
      the owner's two-phone test reads these to prove see + hear. */
   window.__liveDiag = {peers: {}};
   var restartCounts = {};   /* uid -> ICE restarts this failure episode */
+  /* Build W3 receiver state, keyed by uid like restartCounts (it
+     must survive the peer rebuilds it describes): the moment
+     until which a just-fired zero-frame rebuild reads as
+     "reconnecting" on that person's tile. */
+  var videoReconnectUntil = {};
   function peerHasRemoteTrack(P){
     try {
       return P.pc.getReceivers().some(function(r){
@@ -1601,12 +1755,24 @@ function liveRoomDiff(prev, next){
         audioLive: peerTrackLive(P, 'audio'),
         videoLive: peerTrackLive(P, 'video'),
         framesDecoded: (P.lastFrames == null ? null : P.lastFrames),
+        videoFrames: (P.videoFramesSeen == null
+                      ? null : P.videoFramesSeen),
+        videoState: peerVideoState(+uid, P, panelById[+uid]),
         stalls: P.stallCount || 0,
         stalled: !!P.stalled
       };
       updateDot(+uid);
     });
     window.__liveDiag = {peers: out};
+    /* Build W3: tile faces follow the same truth (avatar +
+       status line instead of a black box) — refreshed here on
+       the 1s diag tick so state-poll changes (video_ok) and
+       sampler changes (frames) both land within a second. */
+    panel.forEach(function(m){ updateTileVideoState(m.user_id); });
+    Object.keys(videoReconnectUntil).forEach(function(uid){
+      if (!peers[uid] && !panelById[uid])
+        delete videoReconnectUntil[uid];
+    });
   }
   function updateDot(uid){
     var T = tiles[uid], P = peers[uid];
@@ -1654,42 +1820,234 @@ function liveRoomDiff(prev, next){
     if (ended) return;
     Object.keys(peers).forEach(function(uidStr){
       var uid = +uidStr, P = peers[uidStr];
-      if (!P || !P.pc.getStats || !peerShouldHaveVideo(P)) return;
+      /* Build W3: sample peers carrying a live AUDIO track too —
+         the zero-frame rule needs the audio flow counters of a
+         peer whose video never decoded a frame. */
+      if (!P || !P.pc.getStats
+          || (!peerShouldHaveVideo(P) && !peerTrackLive(P, 'audio')))
+        return;
       P.pc.getStats().then(function(report){
         if (peers[uid] !== P) return;
-        var frames = null;
+        var frames = null, aFrames = null;
         report.forEach(function(st){
-          if (st.type === 'inbound-rtp'
-              && (st.kind === 'video' || st.mediaType === 'video')
-              && typeof st.framesDecoded === 'number')
-            frames = st.framesDecoded;
+          if (st.type !== 'inbound-rtp'
+              || typeof st.framesDecoded !== 'number') return;
+          var kind = st.kind || st.mediaType;
+          if (kind === 'video') frames = st.framesDecoded;
+          else if (kind === 'audio') aFrames = st.framesDecoded;
         });
-        if (frames === null) return;
         var now = Date.now();
-        if (P.lastFrames === null || frames > P.lastFrames){
-          /* Frames moved (or first sample): healthy. Start (or
-             keep) the continuous-flow clock — the episode budget
-             re-arms off SUSTAINED flow in maybeResetEpisode, not
-             off this single sample — and clear any stall flag. */
-          P.lastFrames = frames;
-          P.lastAdvanceAt = now;
-          if (!P.flowSince) P.flowSince = now;
-          if (P.stalled){ P.stalled = false; refreshDiag(); }
-        } else {
-          P.flowSince = 0;
-          if (!P.lastAdvanceAt) P.lastAdvanceAt = now;
-          if (now - P.lastAdvanceAt >= STALL_MS && !P.stalled){
-            P.stalled = true;
-            P.stallCount = (P.stallCount || 0) + 1;
-            if (!P.stallRestarted){
-              P.stallRestarted = true;
-              tryAutoRestart(uid);
-            }
-            refreshDiag();
-          }
+        /* --- audio flow (Build W3): the "their voice works"
+           half of the audio-yes/video-no signature. Not every
+           browser reports audio framesDecoded; where absent,
+           peerAudioFlowing falls back to the track's own
+           live/unmuted state. */
+        if (aFrames !== null){
+          P.audioStatsSeen = true;
+          if (P.audioLastFrames === null || aFrames > P.audioLastFrames)
+            P.audioAdvanceAt = now;
+          P.audioLastFrames = aFrames;
         }
+        /* --- video frames: the Build N stall logic, verbatim
+           in effect for frames that flowed, plus Build W3's
+           videoFramesSeen record. One refinement, matching the
+           stall comment's own definition ("frames WERE flowing
+           and froze"): a peer that has NEVER decoded a frame is
+           not "stalled" — it is the zero-frame case below, and
+           its first sample must not start the flow clocks (a 0
+           sample previously set lastAdvanceAt/flowSince, letting
+           a never-flowed peer pose as flowed-then-froze and
+           burn a stall restart). */
+        if (frames !== null){
+          P.videoFramesSeen = frames;
+          if (frames > 0
+              && (P.lastFrames === null || frames > P.lastFrames)){
+            /* Frames moved (or first real sample): healthy.
+               Start (or keep) the continuous-flow clock — the
+               episode budget re-arms off SUSTAINED flow in
+               maybeResetEpisode, not off this single sample —
+               and clear any stall flag + zero-frame rebuild
+               window. */
+            P.lastFrames = frames;
+            P.lastAdvanceAt = now;
+            if (!P.flowSince) P.flowSince = now;
+            if (P.stalled){ P.stalled = false; refreshDiag(); }
+            delete videoReconnectUntil[uid];
+          } else {
+            if (P.lastFrames === null) P.lastFrames = frames;
+            P.flowSince = 0;
+            if (!P.lastAdvanceAt) P.lastAdvanceAt = now;
+            if (P.lastFrames > 0
+                && now - P.lastAdvanceAt >= STALL_MS && !P.stalled){
+              P.stalled = true;
+              P.stallCount = (P.stallCount || 0) + 1;
+              if (!P.stallRestarted){
+                P.stallRestarted = true;
+                tryAutoRestart(uid);
+              }
+              refreshDiag();
+            }
+          }
+        } else if (peerShouldHaveVideo(P)){
+          /* A live video transceiver with NO inbound-rtp entry
+             has decoded exactly nothing — record the honest 0 so
+             the zero-frame rule and __liveDiag can see it. */
+          P.videoFramesSeen = 0;
+        }
+        evaluateZeroFrame(uid, P);
       }).catch(function(){});
     });
+  }
+  /* ---------------- Build W3: the zero-frame rule ------------
+     Ken's field report (2026-10-24): "I can't see the person
+     I'm on live with — I'm only getting audio, no video." The
+     stall detector above cannot see that case: it watches a
+     stream that flowed and froze. This rule watches the stream
+     that NEVER flowed: connection up, the peer's AUDIO provably
+     flowing, and the video track — live, unmuted, wanted — has
+     decoded ZERO frames past a grace window from connect / the
+     last rebuild. That is a video-path failure, and the answer
+     is the strongest tool W1 built: a FRESH peer connection,
+     charged against the SAME episode budget + backoff as every
+     other automatic restart (restartCounts / AUTO_RESTART_MAX /
+     autoRestartDelay), reset only by the same sustained health.
+     Camera-off peers are excluded three ways: the member's own
+     video_ok=false report, a receiver-side muted video track
+     (the sender disabled it — no RTP is not a failure), and no
+     live video track at all. */
+  var ZERO_FRAME_GRACE_MS = 8000;
+  function peerReceiverTrack(P, kind){
+    try {
+      var found = null;
+      P.pc.getReceivers().forEach(function(r){
+        if (r.track && r.track.kind === kind) found = r.track;
+      });
+      return found;
+    } catch (e) { return null; }
+  }
+  function peerAudioFlowing(P){
+    var tr = peerReceiverTrack(P, 'audio');
+    if (!tr || tr.readyState !== 'live' || tr.muted) return false;
+    if (P.audioStatsSeen)
+      return !!P.audioAdvanceAt
+        && (Date.now() - P.audioAdvanceAt < 9000);
+    /* No audio frame counters in this browser: an unmuted live
+       audio track is itself the flow signal (a receiver track
+       mutes when its RTP stops arriving). */
+    return true;
+  }
+  function evaluateZeroFrame(uid, P){
+    if (ended || !P || P.remoteKind !== 'panelist') return;
+    if (P.pc.connectionState !== 'connected') return;
+    var m = panelById[uid];
+    if (m && m.video_ok === false) return;    /* they SAY it's off */
+    if (P.videoFramesSeen !== 0) return;      /* only never-decoded */
+    var vt = peerReceiverTrack(P, 'video');
+    if (!vt || vt.readyState !== 'live' || vt.muted) return;
+    if (!peerAudioFlowing(P)) return;
+    var since = Math.max(P.bornAt || 0, P.lastRestartAt || 0);
+    if (Date.now() - since < ZERO_FRAME_GRACE_MS) return;
+    fireVideoRebuild(uid, P);
+  }
+  function fireVideoRebuild(uid, P){
+    /* manualRestart's fresh-peer rebuild, minus the budget
+       reset: a human tap forgives the episode; the automatic
+       rule pays for its attempts like everyone else. */
+    var count = restartCounts[uid] || 0;
+    if (count >= AUTO_RESTART_MAX) return false;
+    var now = Date.now();
+    if (P.lastRestartAt
+        && now - P.lastRestartAt < autoRestartDelay(count))
+      return false;
+    restartCounts[uid] = count + 1;
+    videoReconnectUntil[uid] = now + 12000;
+    closePeer(uid);
+    reconcilePeers();
+    var P2 = peers[uid];
+    if (P2){
+      P2.lastRestartAt = now;
+      if (!P2.offered && !P2.helloSent) sayHelloTo(uid);
+    }
+    refreshDiag();
+    return true;
+  }
+  /* The one honest label for a peer's video right now:
+       flowing      — frames decoded and advancing
+       camera-off   — the member reports no camera (video_ok
+                      false), or their video track is muted at
+                      the receiver (sender disabled it)
+       reconnecting — a zero-frame rebuild just fired, or the
+                      zero-frame signature is present and the
+                      auto budget still has attempts to spend
+       zero-frames  — the signature is present and the budget
+                      is spent: only a human 🔄 remains
+       connecting   — everything else (handshakes, grace window)
+     __liveDiag exposes it per peer; tiles render from it. */
+  function peerVideoState(uid, P, m){
+    if (m && m.video_ok === false) return 'camera-off';
+    if (!P) return 'connecting';
+    var now = Date.now();
+    if (videoReconnectUntil[uid] && now < videoReconnectUntil[uid])
+      return 'reconnecting';
+    if ((P.videoFramesSeen || 0) > 0 && P.lastAdvanceAt
+        && now - P.lastAdvanceAt < 3500)
+      return 'flowing';
+    var vt = peerReceiverTrack(P, 'video');
+    var since = Math.max(P.bornAt || 0, P.lastRestartAt || 0);
+    var pastGrace = now - since >= ZERO_FRAME_GRACE_MS;
+    if (P.pc.connectionState === 'connected'
+        && P.videoFramesSeen === 0 && vt && !vt.muted
+        && pastGrace && peerAudioFlowing(P))
+      return (restartCounts[uid] || 0) >= AUTO_RESTART_MAX
+        ? 'zero-frames' : 'reconnecting';
+    /* A receiver track starts MUTED until its first packet —
+       that is just "connecting". Muted + connected + past the
+       grace window is different: their side is sending us
+       nothing on a track that exists (camera toggled off, OS
+       muted it, capture died) while the connection itself is
+       up — the honest face for that is the camera-off tile. */
+    if (vt && vt.muted && P.pc.connectionState === 'connected'
+        && pastGrace)
+      return 'camera-off';
+    if (P.stalled) return 'zero-frames';
+    return 'connecting';
+  }
+  /* Tile faces for remote panelists: whenever the truth is "no
+     picture", the tile shows the member's AVATAR + a status line
+     — never a black video box. The <video> element itself is
+     untouched (it also carries their audio; hiding the tile
+     face must never mute them). A tile whose frames DID flow
+     keeps its (possibly frozen) picture — the amber dot already
+     tells that story — so has-video is only pulled when no frame
+     was ever decoded. */
+  function updateTileVideoState(uid){
+    var T = tiles[uid];
+    if (!T || uid === B.me || !T.phStatus) return;
+    var P = peers[uid];
+    var st = peerVideoState(uid, P, panelById[uid]);
+    var txt = '', showPh = false;
+    var noFrames = !P || !P.videoFramesSeen;
+    if (st === 'camera-off'){ txt = '📷 Camera off'; showPh = true; }
+    else if (st === 'reconnecting'){
+      txt = '📶 Reconnecting video…'; showPh = noFrames;
+    } else if (st === 'zero-frames'){
+      txt = '📶 No video — tap 🔄 to retry'; showPh = noFrames;
+    } else if (st === 'connecting'){
+      txt = '📶 Connecting video…'; showPh = noFrames;
+    }
+    /* The has-video CLASS is enforced on every tick, not only
+       on state changes: attachRemote adds it whenever a track
+       (re)attaches — including a re-attach racing a camera-off
+       verdict — and a state-string cache alone would leave the
+       black box up under the avatar's status line. classList
+       add/remove of an already-correct class is a no-op. */
+    if (showPh) T.el.classList.remove('has-video');
+    else if (st === 'flowing' && T.video.srcObject)
+      T.el.classList.add('has-video');
+    if (T.videoState === st) return;
+    T.videoState = st;
+    T.phStatus.textContent = txt;
+    T.phStatus.hidden = !txt;
   }
   /* Diagnostics / test surface for the media layer (same
      precedent as __liveDiag / __liveConnect). */
@@ -1699,6 +2057,12 @@ function liveRoomDiff(prev, next){
     sampleStats: samplePeerStats,
     manualRestart: manualRestart,
     guardPlay: guardPlayVideo,
+    videoOk: function(){ return myVideoOk; },
+    checkMyVideo: checkMyVideo,
+    retryCamera: retryCamera,
+    localVideoTrack: currentVideoTrack,
+    peerVideoState: peerVideoState,
+    zeroFrameGraceMs: ZERO_FRAME_GRACE_MS,
     unlockAudio: function(){ unlockAudio(); },
     soundNeeded: function(){
       var need = false;
@@ -1809,6 +2173,10 @@ function liveRoomDiff(prev, next){
              chain: Promise.resolve(), discBad: false, discTimer: null,
              remoteStream: null,
              lastFrames: null, lastAdvanceAt: 0, lastRestartAt: 0,
+             bornAt: Date.now(),
+             videoFramesSeen: null,
+             audioLastFrames: null, audioAdvanceAt: 0,
+             audioStatsSeen: false,
              lastIceState: 'new', healthySince: 0, flowSince: 0,
              stalled: false, stallCount: 0, stallRestarted: false,
              remoteKind: isPanelist(uid) ? 'panelist' : 'watcher',
@@ -1839,6 +2207,20 @@ function liveRoomDiff(prev, next){
            any dropped attach from this record. */
         P.remoteStream = ev.streams[0];
         attachRemote(uid, ev.streams[0]);
+      }
+      if (ev.track && ev.track.kind === 'video'){
+        /* Build W3: a video track landing LATE or being REPLACED
+           (far-side source switch / camera retry) must re-attach
+           + re-play: a replaced track can leave the tile's
+           element paused on a black frame even though the peer's
+           stream is healthy. attachRemote is a no-op when the
+           tile already shows this exact stream. */
+        var T3 = tiles[uid];
+        if (T3){
+          if (P.remoteStream && T3.video.srcObject !== P.remoteStream)
+            attachRemote(uid, P.remoteStream);
+          guardPlayVideo(T3.video);
+        }
       }
       refreshDiag();
     };
@@ -3770,7 +4152,15 @@ function liveRoomDiff(prev, next){
   }
 
   document.addEventListener('visibilitychange', function(){
-    if (!document.hidden && !ended) pollState();
+    if (document.hidden || ended) return;
+    pollState();
+    /* Build W3: iOS pauses <video> elements while the page is
+       backgrounded or their tile scrolls off — on return, the
+       play-guard re-plays every remote tile and the sound
+       prompt re-tells the truth, instead of leaving frozen
+       black tiles until the next state poll happens by. */
+    eachRemoteVideo(function(v){ guardPlayVideo(v); });
+    updateSoundButton();
   });
 
   /* ---------------- lifecycle ---------------- */
@@ -3807,7 +4197,7 @@ function liveRoomDiff(prev, next){
     $('live-comment-input').disabled = true;
     ['ctl-mute','ctl-cam','ctl-flip','ctl-connect','ctl-end','ctl-panel-leave',
      'ctl-join','ctl-like','ctl-poll','ctl-games','ctl-gift','ctl-battle','live-requests-panel','live-people-panel',
-     'live-invite-banner','live-member-banner','live-poll-card',
+     'live-invite-banner','live-member-banner','live-muted-note','live-cam-note','live-poll-card',
      'live-poll-closed','live-game-card','live-game-closed','live-battle-bar'].forEach(function(id){
       var el = $(id);
       if (el) el.hidden = true;
@@ -3968,7 +4358,16 @@ function liveRoomDiff(prev, next){
   every(2000, pollSignals);
   every(3000, pollState);
   every(1000, refreshDiag);
-  every(10000, function(){ post('/heartbeat').catch(function(){}); });
+  /* Build W3: the heartbeat is also the member-state channel —
+     a panel member's camera verdict (video_ok) rides it so the
+     room's picture of who's really sending video never waits
+     for more than one heartbeat, and publishVideoOk fires an
+     extra one the moment the verdict changes. Watchers send no
+     body (they publish nothing). */
+  every(10000, function(){
+    post('/heartbeat', amMember ? {video_ok: myVideoOk} : undefined)
+      .catch(function(){});
+  });
   pollState();
   pollSignals();
 })();
