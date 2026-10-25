@@ -8515,6 +8515,19 @@ def _lives_page_list(viewer, owner_on=False):
     following = following_ids(viewer_id)
     for r in rows:
         r["following"] = False if r.get("is_self") else bool(r["host_id"] in following)
+    # Build W1: my pending panel ask per room, so /lives cards can
+    # show "🙋 Ask to join panel" vs "⏳ Asked — waiting" truthfully
+    # (one query for the whole page, not one per card).
+    pend_ids = set()
+    if rows:
+        conn = db()
+        pend_ids = {r2["live_id"] for r2 in conn.execute(
+            "SELECT live_id FROM live_join_requests WHERE user_id=? "
+            "AND status='pending' AND kind='request'",
+            (viewer_id,)).fetchall()}
+        conn.close()
+    for r in rows:
+        r["my_join_pending"] = r["id"] in pend_ids
     # Python stable sorts compose the keys: apply in reverse priority order.
     rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     rows.sort(key=lambda r: r.get("viewers") or 0, reverse=True)
@@ -8534,11 +8547,19 @@ def _lives_page_list(viewer, owner_on=False):
 DEFAULT_ICE_SERVERS = [
     {"urls": "stun:stun.l.google.com:19302"},
     {"urls": "stun:stun1.l.google.com:19302"},
+    {"urls": "stun:openrelay.metered.ca:80"},
     {"urls": "turn:openrelay.metered.ca:80",
+     "username": "openrelayproject", "credential": "openrelayproject"},
+    {"urls": "turn:openrelay.metered.ca:3478",
      "username": "openrelayproject", "credential": "openrelayproject"},
     {"urls": "turn:openrelay.metered.ca:443",
      "username": "openrelayproject", "credential": "openrelayproject"},
     {"urls": "turn:openrelay.metered.ca:443?transport=tcp",
+     "username": "openrelayproject", "credential": "openrelayproject"},
+    # TLS TURN (Build W1): the variant that survives strict phone /
+    # captive networks that block plain UDP and plain TCP alike —
+    # port 443 over TLS looks like ordinary HTTPS to the network.
+    {"urls": "turns:openrelay.metered.ca:443?transport=tcp",
      "username": "openrelayproject", "credential": "openrelayproject"},
 ]
 
@@ -8609,6 +8630,7 @@ async def lives_json(request: Request):
          "host_name": r["name"], "host_avatar": r["avatar"],
          "title": r["title"], "viewers": r["viewers"],
          "panel_count": r["panel_count"], "following": r["following"],
+         "my_join_pending": bool(r.get("my_join_pending")),
          "host_level": r.get("host_level") or 1,
          "host_level_label": r.get("host_level_label") or "",
          "is_self": r["is_self"]} for r in rows]})
