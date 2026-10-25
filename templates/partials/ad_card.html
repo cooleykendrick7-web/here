@@ -1,0 +1,36 @@
+{# Sponsored card (Build ADS) — composed server-side by ads.compose_card.
+   The "Sponsored" label is structural: it renders for every ad, always.
+   Clicks route through /ads/{id}/click (logged, then 302 to the ad's
+   link); the ✕ posts to /ads/{id}/hide and the ad never returns for
+   this viewer. #}
+<div class="card post ad-card" style="border-left:3px solid var(--red)">
+  <div class="post-header">
+    {% if ad.sponsor_avatar %}<img class="avatar av-40" src="{{ ad.sponsor_avatar|e }}" alt="">
+    {% else %}<span class="av-ph av-40">{{ (ad.sponsor_name or 'H')[:1]|upper|e }}</span>{% endif %}
+    <div class="post-who">
+      <div class="nm">
+        <a href="{{ ad.click_url|e }}">{{ ad.sponsor_name|e }}</a>
+        <span class="kind-tag" title="Paid promotion">Sponsored</span>
+      </div>
+      <div class="post-meta">Sponsored · 📣 Promotion</div>
+    </div>
+    <form class="inline-form" action="{{ ad.hide_url|e }}" method="post" style="margin-left:auto">
+      <button type="submit" class="btn-ghost btn-sm" title="Hide this ad" aria-label="Hide this ad">✕</button>
+    </form>
+  </div>
+
+  <div class="post-body" style="font-weight:700;font-size:16px">
+    <a href="{{ ad.click_url|e }}" style="color:inherit;text-decoration:none">{{ ad.title|e }}</a>
+  </div>
+  {% if ad.body %}<div class="post-body">{{ ad.body|e }}</div>{% endif %}
+
+  {% if ad.layout == 'media' and ad.media_path %}
+  <a href="{{ ad.click_url|e }}"><img class="post-img" src="/uploads/{{ ad.media_path|e }}" alt=""></a>
+  {% elif ad.layout == 'video' and ad.media_path %}
+  <video class="post-video-file" controls muted playsinline preload="metadata" src="/uploads/{{ ad.media_path|e }}"></video>
+  {% endif %}
+
+  <div class="post-row" style="margin-top:10px">
+    <a class="btn" href="{{ ad.click_url|e }}">{{ ad.cta_label|e }}</a>
+  </div>
+</div>
