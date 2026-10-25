@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0a0a0a">
+<title>HERE — Forgot Password</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+.brand{font-size:72px;font-weight:900;color:#d41f2e;letter-spacing:-3px;text-shadow:0 0 40px rgba(212,31,46,.45)}
+.tagline{color:#9a9a9a;margin:6px 0 28px;font-size:16px}
+.auth-card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:28px;width:100%;max-width:400px;box-shadow:0 8px 32px rgba(212,31,46,.15)}
+.auth-card h2{margin-bottom:14px;font-size:22px}
+.ok{background:rgba(46,160,67,.15);border:1px solid #2ea043;color:#7ee2a0;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:14px;line-height:1.5}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:13px;font-weight:600;color:#bbb;margin-bottom:5px}
+.field input{width:100%;background:#1f1f1f;border:1px solid #333;border-radius:8px;padding:11px 13px;color:#f0f0f0;font-size:15px;outline:none}
+.field input:focus{border-color:#d41f2e}
+.btn{width:100%;background:#d41f2e;color:#fff;border:none;border-radius:8px;padding:12px;font-size:16px;font-weight:800;cursor:pointer}
+.btn:hover{background:#a8151f}
+.switch{margin-top:16px;text-align:center;font-size:14px;color:#9a9a9a}
+.switch a{color:#d41f2e;font-weight:700}
+.steps{font-size:14px;color:#ccc;line-height:1.6;margin-bottom:16px;padding-left:18px}
+.steps li{margin-bottom:6px}
+.help{margin-top:18px;background:#1f1f1f;border:1px solid #333;border-radius:8px;padding:12px 14px}
+.help summary{cursor:pointer;font-weight:700;font-size:14px;color:#f0f0f0}
+.help ol{margin:10px 0 0 18px;font-size:13.5px;color:#ccc;line-height:1.6}
+.help li{margin-bottom:7px}
+.help li:last-child{margin-bottom:0}
+</style>
+</head>
+<body>
+<div class="brand">HERE</div>
+<div class="tagline">Your people. Your pages. Your world.</div>
+<div class="auth-card">
+  <h2>Forgot your password?</h2>
+  {% if sent %}
+  <div class="ok" id="forgot-status">If that email has an account, a reset link is on its way. It works for 1 hour.</div>
+  <p style="font-size:14px;color:#ccc;line-height:1.6">Tap the link in that email and pick a new password. Didn't get it after a few minutes? Ask for a fresh link below — asking again is always safe.</p>
+  <form action="/forgot" method="post" style="margin-top:16px">
+    <div class="field">
+      <label for="fg-email">Email on your account</label>
+      <input type="email" id="fg-email" name="email" required autocomplete="email">
+    </div>
+    <button type="submit" class="btn">Send me a fresh link</button>
+  </form>
+  {% else %}
+  <ol class="steps">
+    <li>Type the email that's on your account below.</li>
+    <li>We send a reset link to that email — and only that email. Ever.</li>
+    <li>Tap the link within 1 hour and pick a new password.</li>
+  </ol>
+  <form action="/forgot" method="post">
+    <div class="field">
+      <label for="fg-email">Email on your account</label>
+      <input type="email" id="fg-email" name="email" required autocomplete="email">
+    </div>
+    <button type="submit" class="btn">Send my reset link</button>
+  </form>
+  {% endif %}
+  <details class="help">
+    <summary>Need help?</summary>
+    <ol>
+      <li>Check the email you typed is the one on your account — the link only ever goes to that address.</li>
+      <li>Check your spam/promotions folders for an email from wearehereyouarehere@gmail.com.</li>
+      <li>Links expire in 1 hour — ask for a fresh one above if yours died.</li>
+      <li>Still stuck? Email wearehereyouarehere@gmail.com from the address on your account and a human (Milli) will walk you through it.</li>
+    </ol>
+  </details>
+  <div class="switch">Remembered it? <a href="/login">Back to log in</a></div>
+</div>
+</body>
+</html>

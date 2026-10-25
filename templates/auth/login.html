@@ -20,6 +20,7 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 .auth-card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:28px;width:100%;max-width:400px;box-shadow:0 8px 32px rgba(212,31,46,.15)}
 .auth-card h2{margin-bottom:18px;font-size:22px}
 .err{background:rgba(212,31,46,.15);border:1px solid #d41f2e;color:#ff8f98;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:14px}
+.ok{background:rgba(46,160,67,.15);border:1px solid #2ea043;color:#7ee2a0;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:14px}
 .field{margin-bottom:14px}
 .field label{display:block;font-size:13px;font-weight:600;color:#bbb;margin-bottom:5px}
 .field input{width:100%;background:#1f1f1f;border:1px solid #333;border-radius:8px;padding:11px 13px;color:#f0f0f0;font-size:15px;outline:none}
@@ -56,6 +57,7 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 <div class="tagline">Your people. Your pages. Your world.</div>
 <div class="auth-card">
   <h2>Log In</h2>
+  {% if flash %}<div class="ok">{{ flash|e }}</div>{% endif %}
   {% if error %}<div class="err">{{ error|e }}</div>{% endif %}
   <form action="/login" method="post">
     <div class="field">
@@ -68,6 +70,7 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
     </div>
     <button type="submit" class="btn">Log In</button>
   </form>
+  <div class="switch"><a href="/forgot">Forgot password?</a></div>
   <div class="switch">New to HERE? <a href="/signup">Create an account</a></div>
 </div>
 <div class="app-card" id="app-card">
