@@ -33,8 +33,26 @@
   </div>
   {% endif %}
 
-  <div class="post-row" style="margin-top:10px">
+  <div class="post-row" style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <a class="btn" href="{{ ad.click_url|e }}">{{ ad.cta_label|e }}</a>
+    <div class="aud-wrap">
+      <button type="button" class="btn-ghost share-toggle" data-sheet="share-sheet-ad-{{ ad.id }}">↗ Share</button>
+      <div class="aud-popup share-sheet" id="share-sheet-ad-{{ ad.id }}" hidden>
+        <div class="aud-title">↗ Share this ad</div>
+        <p class="aud-hint">Anyone with this link can see this ad.</p>
+        <input type="text" class="share-url" readonly value="{{ ad.share_url|e }}" onclick="this.select()">
+        <div class="share-row">
+          <button type="button" class="btn btn-sm share-copy" data-share-url="{{ ad.share_url|e }}">Copy link</button>
+          <button type="button" class="btn-ghost btn-sm share-native" data-share-url="{{ ad.share_url|e }}" data-share-text="{{ ad.share_text|e }}" hidden>📤 Share…</button>
+        </div>
+        <div class="share-row">
+          <a class="btn-ghost btn-sm" target="_blank" rel="noopener" href="https://www.facebook.com/sharer/sharer.php?u={{ ad.share_url|urlencode }}">Facebook</a>
+          <a class="btn-ghost btn-sm" target="_blank" rel="noopener" href="https://twitter.com/intent/tweet?url={{ ad.share_url|urlencode }}&amp;text={{ ad.share_text|urlencode }}">Post to X</a>
+          <a class="btn-ghost btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text={{ (ad.share_text ~ ' ' ~ ad.share_url)|urlencode }}">WhatsApp</a>
+        </div>
+        <button type="button" class="btn btn-sm share-close" style="margin-top:8px">Done</button>
+      </div>
+    </div>
   </div>
 </div>
 {% if ad.layout == 'video' and ad.media_path %}

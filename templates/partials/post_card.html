@@ -109,6 +109,26 @@
     </div>
     <a class="action-link" href="/post/{{ post.id }}">💬 Comment</a>
     <button type="button" class="action-link" data-copy-path="/p/{{ post.id }}" style="background:none;border:none;cursor:pointer;font-size:14px">🔗 Copy share link</button>
+    {% if post.can_share_external %}
+    <div class="aud-wrap">
+      <button type="button" class="action-link share-toggle" data-sheet="share-sheet-{{ post.id }}" style="background:none;border:none;cursor:pointer;font-size:14px">↗ Share</button>
+      <div class="aud-popup share-sheet" id="share-sheet-{{ post.id }}" hidden>
+        <div class="aud-title">↗ Share this post</div>
+        <p class="aud-hint">Anyone with this link can see this post.</p>
+        <input type="text" class="share-url" readonly value="{{ post.share_url|e }}" onclick="this.select()">
+        <div class="share-row">
+          <button type="button" class="btn btn-sm share-copy" data-share-url="{{ post.share_url|e }}">Copy link</button>
+          <button type="button" class="btn-ghost btn-sm share-native" data-share-url="{{ post.share_url|e }}" data-share-text="{{ post.share_text|e }}" hidden>📤 Share…</button>
+        </div>
+        <div class="share-row">
+          <a class="btn-ghost btn-sm" target="_blank" rel="noopener" href="https://www.facebook.com/sharer/sharer.php?u={{ post.share_url|urlencode }}">Facebook</a>
+          <a class="btn-ghost btn-sm" target="_blank" rel="noopener" href="https://twitter.com/intent/tweet?url={{ post.share_url|urlencode }}&amp;text={{ post.share_text|urlencode }}">Post to X</a>
+          <a class="btn-ghost btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text={{ (post.share_text ~ ' ' ~ post.share_url)|urlencode }}">WhatsApp</a>
+        </div>
+        <button type="button" class="btn btn-sm share-close" style="margin-top:8px">Done</button>
+      </div>
+    </div>
+    {% endif %}
     {% if post.can_edit_audience %}
     <div class="aud-wrap">
       <button type="button" class="action-link aud-toggle" data-pid="{{ post.id }}" title="Hide this post from…" style="background:none;border:none;cursor:pointer">👁</button>
