@@ -8,10 +8,12 @@
     <div>
       <div style="font-size:30px;font-weight:900;color:var(--red)">{{ lifetime }} 🎟️</div>
       <div style="color:var(--muted);font-size:13px">Lifetime tickets earned</div>
+      <div style="font-size:13.5px;font-weight:700">worth {{ lifetime_worth|e }}</div>
     </div>
     <div>
       <div style="font-size:30px;font-weight:900">{{ earned }} 🎟️</div>
       <div style="color:var(--muted);font-size:13px">Available to cash out</div>
+      <div style="font-size:13.5px;font-weight:700">worth {{ earned_worth|e }}</div>
     </div>
     <div>
       {% if pending %}
@@ -61,7 +63,9 @@
   <div class="section-title">💰 Cash out</div>
   {% if pending %}
   <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and is waiting for the owner's approval. You'll see it marked paid right here.</p>
+  <p class="cashout-status" style="font-size:14.5px;margin-top:8px">Cash-out status: waiting for the owner's approval — once it's approved, {{ pending.dollars|e }} is on its way to you.</p>
   {% elif can_cashout %}
+  <p class="cashout-status" style="font-size:15px;margin-top:8px;font-weight:800">✅ You're ready — you can cash out {{ cashout_dollars|e }} now</p>
   <p style="font-size:14.5px;margin-top:8px">You can cash out <strong>all {{ earned }} earned tickets = {{ cashout_dollars|e }}</strong>. Tell us exactly where to send it — the owner sends payouts by hand and marks them paid.</p>
   <form method="post" action="/tickets/cashout" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
     <input type="text" name="payout_note" required maxlength="300" placeholder="e.g. Cash App $YourHandle, or bank name"
@@ -69,8 +73,8 @@
     <button type="submit" class="btn">Cash out {{ cashout_dollars|e }}</button>
   </form>
   {% else %}
-  <p style="font-size:14.5px;margin-top:8px">Cash-outs open at <strong>{{ cashout_min }} earned tickets</strong>.
-  {% if earned > 0 %}You have {{ earned }} — {{ cashout_min - earned }} to go. Host lives and earn gifts to get there!{% else %}Host a live and earn gifts to get there!{% endif %}</p>
+  <p class="cashout-status" style="font-size:14.5px;margin-top:8px">You need <strong>{{ cashout_remaining }} more earned tickets ({{ cashout_remaining_dollars|e }} more)</strong> before you can cash out (minimum {{ "{:,}".format(cashout_min) }} tickets = {{ cashout_min_dollars|e }}).</p>
+  <p style="font-size:14.5px;margin-top:8px">{% if earned > 0 %}You have {{ earned }} so far. Host lives and earn gifts to get there!{% else %}Host a live and earn gifts to get there!{% endif %}</p>
   {% endif %}
   {% if payouts_history %}
   <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">

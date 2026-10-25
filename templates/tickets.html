@@ -20,6 +20,9 @@
       <div style="color:var(--muted);font-size:13px">Earned from your lives</div>
     </div>
   </div>
+  <p style="font-size:13.5px;margin-top:12px">
+    <a href="/earnings" style="font-weight:700">Earned tickets: {{ earned }} — worth {{ earned_worth|e }}{% if can_cashout %} — ready to cash out →{% else %} · cash out at {{ "{:,}".format(cashout_min) }} 🎟️{% endif %}</a>
+  </p>
   <p style="color:var(--muted);font-size:13.5px;margin-top:12px">
     Send character gifts on any live — the host earns your tickets,
     and earned tickets cash out below.

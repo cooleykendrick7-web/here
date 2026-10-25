@@ -297,6 +297,74 @@
 .gift-cell .g-cost{font-size:11.5px;color:#ffd97a;font-weight:800;margin-top:2px}
 .gift-cell .g-cost.free{color:#7dff9a}
 .gift-cell.armed{background:rgba(212,31,46,.75)}
+/* ===== Build RICH: per-gift animations + Boost chip =====
+   Every gift in the catalog carries its own animation name
+   (GIFT_CATALOG anim, app.py); the state poll's recent_gifts carry
+   it as anim_name and the sender's tray copy carries it as anim.
+   The engine applies giftfx-<name> keyframes to the gift's art:
+   float/pop gifts ride .gift-fx nodes in the hearts layer (capped
+   concurrent, removed on animationend + timeout backstop);
+   banner/takeover art gets the same keyframes inline. Particles
+   (burst) and rain pieces (shower) are children of the fx node. */
+.gift-fx{position:absolute;pointer-events:none;z-index:7}
+.gift-fx .gift-art-wrap{display:inline-block;will-change:transform,opacity}
+.gift-particle{position:absolute;left:50%;top:50%;width:9px;height:9px;
+  border-radius:50%;background:#ffd97a;pointer-events:none;
+  box-shadow:0 0 8px rgba(255,215,130,.9);
+  animation:giftfx-particle .95s ease-out forwards}
+.gift-rain-piece{position:absolute;top:0;pointer-events:none;
+  animation:giftfx-rain 3.4s ease-in forwards}
+@keyframes giftfx-rise{0%{opacity:0;transform:translate(0,12px) scale(.55)}
+  12%{opacity:1}100%{opacity:0;transform:translate(var(--dx,0px),-46vh) scale(1.12)}}
+@keyframes giftfx-burst{0%{opacity:0;transform:scale(.25) rotate(-14deg)}
+  22%{opacity:1;transform:scale(1.35) rotate(6deg)}
+  45%{transform:scale(1.02) rotate(-3deg)}
+  70%{opacity:1;transform:scale(1.18) rotate(2deg)}
+  100%{opacity:0;transform:scale(1.45) rotate(0deg)}}
+@keyframes giftfx-flyby{0%{opacity:0;transform:translateX(-24vw) translateY(0) scale(.8)}
+  10%{opacity:1}50%{transform:translateX(42vw) translateY(-26px) scale(1.05)}
+  90%{opacity:1}100%{opacity:0;transform:translateX(112vw) translateY(6px) scale(.95)}}
+@keyframes giftfx-spin{0%{opacity:0;transform:translateY(16px) scale(.4) rotate(0deg)}
+  25%{opacity:1}100%{opacity:0;transform:translateY(-34vh) scale(1.08) rotate(660deg)}}
+@keyframes giftfx-shower{0%{opacity:0;transform:translateY(-8vh) scale(.7) rotate(-6deg)}
+  12%{opacity:1}85%{opacity:1}
+  100%{opacity:0;transform:translateY(58vh) scale(1.05) rotate(8deg)}}
+@keyframes giftfx-zoomin{0%{opacity:0;transform:scale(.18)}
+  30%{opacity:1;transform:scale(1.22)}
+  55%{transform:scale(.96)}78%{opacity:1;transform:scale(1.06)}
+  100%{opacity:0;transform:scale(1.3)}}
+@keyframes giftfx-bounce{0%{opacity:0;transform:translateX(-14vw) translateY(0) scale(.8)}
+  8%{opacity:1}25%{transform:translateX(14vw) translateY(-64px) scale(1)}
+  45%{transform:translateX(38vw) translateY(0) scale(.96)}
+  65%{transform:translateX(62vw) translateY(-48px) scale(1.02)}
+  85%{opacity:1;transform:translateX(88vw) translateY(0) scale(1)}
+  100%{opacity:0;transform:translateX(112vw) translateY(-18px) scale(.95)}}
+@keyframes giftfx-pulse{0%{opacity:0;transform:scale(.6)}
+  18%{opacity:1;transform:scale(1.18)}36%{transform:scale(.94)}
+  54%{transform:scale(1.22)}72%{opacity:1;transform:scale(1)}
+  100%{opacity:0;transform:scale(1.28) translateY(-12vh)}}
+@keyframes giftfx-particle{0%{opacity:1;transform:translate(0,0) scale(1)}
+  100%{opacity:0;transform:translate(var(--px,0px),var(--py,0px)) scale(.3)}}
+@keyframes giftfx-rain{0%{opacity:0;transform:translateY(-6vh) rotate(-8deg)}
+  15%{opacity:.95}100%{opacity:0;transform:translateY(56vh) rotate(10deg)}}
+@keyframes giftfx-fade{0%{opacity:0}20%{opacity:1}80%{opacity:1}100%{opacity:0}}
+@media (prefers-reduced-motion: reduce){
+  .gift-fx .gift-art-wrap,.gift-anim{animation:giftfx-fade 1.2s ease-out forwards !important}
+  .gift-particle,.gift-rain-piece{display:none}
+}
+/* Boost chip: floats over the gift sheet (z under the toast),
+   glass on the --lg tokens like everything else on this page. */
+#gift-boost{position:fixed;left:50%;transform:translateX(-50%);bottom:20px;
+  z-index:2050;display:flex;align-items:center;gap:8px;cursor:pointer;
+  background:var(--lg-bg-strong);border:var(--lg-border);border-radius:999px;
+  color:#fff;padding:8px 16px 8px 10px;font-size:15px;font-weight:900;
+  backdrop-filter:var(--lg-blur);-webkit-backdrop-filter:var(--lg-blur);
+  box-shadow:0 8px 26px rgba(0,0,0,.5);text-shadow:var(--lg-text-shadow)}
+#gift-boost[hidden]{display:none}
+#gift-boost:disabled{opacity:.55;cursor:default}
+#gift-boost .gb-art{display:flex;align-items:center}
+#gift-boost .gb-art img{width:32px;height:32px;object-fit:contain}
+#gift-boost-count{color:#ffd97a}
 /* ===== controls / action bar ===== */
 .live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
 .live-ctl{background:var(--lg-bg);color:#fff;border:var(--lg-border);border-radius:999px;
@@ -715,6 +783,11 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="cmenu-item" id="live-sheet-cancel">Cancel</button>
 </div>
 <div id="live-toast" hidden></div>
+<button type="button" id="gift-boost" hidden>
+  <span class="gb-art" id="gift-boost-art"></span>
+  <span>🔥 Boost</span>
+  <span id="gift-boost-count">×1</span>
+</button>
 
 <script>
 var LIVE_BOOT = {{ boot|safe }};
@@ -819,6 +892,12 @@ function liveRoomDiff(prev, next){
   /* ---- Live Tickets state ---- */
   var myTickets = B.tickets || 0; /* my spendable balance */
   var lastGiftId = 0;             /* recent_gifts cursor (anim dedupe) */
+  var seenGiftIds = {};           /* Build RICH: per-send dedupe set —
+                                     the sender renders their gift locally
+                                     and the poll echo of the SAME gift id
+                                     is suppressed here, never the cursor */
+  var boostGift = null, boostCount = 0, boostTimer = null,
+      boostBusy = false, boostLastAt = 0;   /* Build RICH Boost chip */
   var giftSheetOpen = false;
   var armedGiftKey = null, armedGiftAt = 0;   /* ≥500 two-tap confirm */
   var giftBannerTimer = null;
@@ -3047,6 +3126,7 @@ function liveRoomDiff(prev, next){
     sheetEl.hidden = true; sheetBd.hidden = true; manageTarget = null;
     lcSheetOpen = false;
     giftSheetOpen = false;
+    hideBoostChip();
     $('live-sheet-cancel').textContent = 'Cancel';
   }
   sheetBd.addEventListener('click', closeSheet);
@@ -3963,8 +4043,10 @@ function liveRoomDiff(prev, next){
      Prices live ONLY server-side (GIFT_CATALOG in app.py); this
      sheet renders B.gifts (boot copy) and the endpoints re-price
      every send. Animations are driven by the state poll's
-     recent_gifts — the sender's own gift id is returned by the
-     POST and marked seen, so nobody sees their own gift twice. */
+     recent_gifts — and (Build RICH) by the sender's own POST
+     response, rendered locally at once; the poll echo of the same
+     gift id is deduped by seenGiftIds, so the sender sees their
+     gift exactly once, immediately, like everyone else. */
   function paintTickets(){
     var chip = $('live-tickets');
     if (chip) chip.textContent = myTickets;
@@ -3991,44 +4073,130 @@ function liveRoomDiff(prev, next){
     s.style.fontSize = Math.round(px * 0.8) + 'px';
     return s;
   }
-  function spawnGiftFloat(g){
-    var h = document.createElement('span');
-    h.className = 'live-heart';
-    h.appendChild(giftArtEl(g, 46));
-    h.style.left = (58 + Math.random() * 34) + '%';
-    h.style.bottom = '14px';
-    h.style.setProperty('--dx', (Math.random() * 90 - 45) + 'px');
-    h.style.animationDuration = '3.6s';
-    heartsEl.appendChild(h);
-    h.addEventListener('animationend', function(){
-      if (h.parentNode) h.parentNode.removeChild(h);
-    });
-    setTimeout(function(){
-      if (h.parentNode) h.parentNode.removeChild(h);
-    }, 3700);
+  /* ---- Build RICH: per-gift animation engine ----
+     Each gift name (rise/burst/flyby/spin/shower/zoomin/bounce/
+     pulse) has giftfx-<name> keyframes in the stylesheet. The
+     catalog copy in B.gifts carries the name as `anim`; the state
+     poll's events carry it as `anim_name` (their `anim` stays the
+     legacy tier int). Size routing keeps the tier shape (float <
+     pop < banner < takeover), with >=100 gifts promoted to the
+     center-stage banner so the showpiece anims play big. */
+  var GIFT_ANIMS = ['rise', 'burst', 'flyby', 'spin', 'shower',
+                    'zoomin', 'bounce', 'pulse'];
+  var GIFT_ANIM_MS = {rise: 3600, burst: 2600, flyby: 3200,
+                      spin: 3000, shower: 3800, zoomin: 3000,
+                      bounce: 3400, pulse: 2800};
+  var GIFT_FX_CAP = 12;   /* concurrent float-layer gift nodes */
+  var REDUCED_MOTION = !!(window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  var GIFT_BY_KEY = {};
+  (B.gifts || []).forEach(function(cg){
+    if (cg && cg.key) GIFT_BY_KEY[cg.key] = cg;
+  });
+  function giftTierOf(t){
+    t = t || 0;
+    return t >= 5000 ? 4 : t >= 500 ? 3 : t >= 50 ? 2 : 1;
   }
-  function spawnGiftPop(g){
-    var h = document.createElement('span');
-    h.className = 'gift-pop';
-    h.appendChild(giftArtEl(g, 74));
-    h.style.left = (52 + Math.random() * 30) + '%';
-    h.style.bottom = '16%';
-    heartsEl.appendChild(h);
-    h.addEventListener('animationend', function(){
-      if (h.parentNode) h.parentNode.removeChild(h);
-    });
-    setTimeout(function(){
-      if (h.parentNode) h.parentNode.removeChild(h);
-    }, 2900);
+  function giftAnimDefault(t){
+    t = t || 0;
+    if (t >= 5000) return 'shower';
+    if (t >= 500) return 'burst';
+    if (t >= 100) return 'zoomin';
+    if (t >= 50) return 'spin';
+    return 'rise';
   }
+  function giftAnimName(g){
+    if (!g) return 'rise';
+    var cand = [g.anim_name,
+                (typeof g.anim === 'string' ? g.anim : null)];
+    var cat = GIFT_BY_KEY[g.key || g.gift_key];
+    if (cat) cand.push(cat.anim);
+    for (var i = 0; i < cand.length; i++)
+      if (cand[i] && GIFT_ANIMS.indexOf(cand[i]) !== -1) return cand[i];
+    return giftAnimDefault(g.tickets);
+  }
+  function applyGiftAnim(el, g, ms){
+    var name = giftAnimName(g);
+    el.classList.add('gift-anim', 'gift-anim-' + name);
+    el.setAttribute('data-anim', name);
+    if (!REDUCED_MOTION)
+      el.style.animation = 'giftfx-' + name + ' '
+        + (ms || GIFT_ANIM_MS[name] || 3000) + 'ms ease-out forwards';
+    return name;
+  }
+  function giftBurstParticles(parent){
+    if (REDUCED_MOTION) return;
+    for (var i = 0; i < 8; i++){
+      var p = document.createElement('span');
+      p.className = 'gift-particle';
+      var ang = (Math.PI * 2 * i) / 8 + Math.random() * 0.5;
+      var dist = 62 + Math.random() * 46;
+      p.style.setProperty('--px', Math.round(Math.cos(ang) * dist) + 'px');
+      p.style.setProperty('--py', Math.round(Math.sin(ang) * dist) + 'px');
+      parent.appendChild(p);
+    }
+  }
+  function spawnGiftFx(g, px){
+    if (heartsEl.querySelectorAll('.gift-fx').length >= GIFT_FX_CAP)
+      return false;
+    var name = giftAnimName(g);
+    var h = document.createElement('span');
+    h.className = 'gift-fx';
+    if (name === 'flyby' || name === 'bounce'){
+      h.style.left = '-12%'; h.style.bottom = '30%';
+    } else if (name === 'shower'){
+      h.style.left = (38 + Math.random() * 24) + '%'; h.style.top = '-10%';
+    } else if (name === 'burst'){
+      h.style.left = (30 + Math.random() * 34) + '%'; h.style.bottom = '34%';
+    } else if (name === 'zoomin' || name === 'pulse'){
+      h.style.left = (40 + Math.random() * 16) + '%'; h.style.bottom = '36%';
+    } else {
+      h.style.left = (52 + Math.random() * 34) + '%'; h.style.bottom = '14%';
+    }
+    var wrap = document.createElement('span');
+    wrap.className = 'gift-art-wrap';
+    wrap.appendChild(giftArtEl(g, px));
+    applyGiftAnim(wrap, g);
+    h.appendChild(wrap);
+    if (name === 'burst') giftBurstParticles(h);
+    if (name === 'shower' && !REDUCED_MOTION){
+      for (var i = 0; i < 5; i++){
+        var rp = document.createElement('span');
+        rp.className = 'gift-rain-piece';
+        rp.style.left = (-46 + i * 26 + Math.random() * 10) + 'px';
+        rp.style.animationDelay = (i * 190) + 'ms';
+        rp.appendChild(giftArtEl(g, 26));
+        h.appendChild(rp);
+      }
+    }
+    heartsEl.appendChild(h);
+    var kill = function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    };
+    wrap.addEventListener('animationend', kill);
+    setTimeout(kill, (GIFT_ANIM_MS[name] || 3000) + 200);
+    return true;
+  }
+  function spawnGiftFloat(g){ return spawnGiftFx(g, 46); }
+  function spawnGiftPop(g){ return spawnGiftFx(g, 74); }
   function showGiftBanner(g){
     var b = $('live-gift-banner');
     var im = $('live-gift-banner-img'), em = $('live-gift-banner-emoji');
+    var art = g.img ? im : em;
     if (g.img){ im.src = g.img; im.hidden = false; em.hidden = true; }
     else {
       im.hidden = true; em.hidden = false;
       em.textContent = g.emoji || '🎁';
     }
+    [im, em].forEach(function(el){
+      el.classList.remove('gift-anim');
+      el.style.animation = '';
+    });
+    b.querySelectorAll('.gift-particle').forEach(function(p){
+      p.parentNode.removeChild(p);
+    });
+    applyGiftAnim(art, g, 3000);
+    if (giftAnimName(g) === 'burst') giftBurstParticles(b);
     $('live-gift-banner-text').textContent =
       giftSenderLabel(g) + ' sent ' + g.name + '!';
     b.hidden = false;
@@ -4040,24 +4208,112 @@ function liveRoomDiff(prev, next){
     var im = $('live-gift-takeover-img');
     if (g.img) im.src = g.img;
     im.alt = g.name || '';
+    im.classList.remove('gift-anim');
+    im.style.animation = '';
+    applyGiftAnim(im, g, 3200);
+    if (giftAnimName(g) === 'burst') giftBurstParticles(t);
     $('live-gift-takeover-text').textContent =
       giftSenderLabel(g) + ' sent ' + g.name + '!';
     t.hidden = false;
     if (giftTakeoverTimer) clearTimeout(giftTakeoverTimer);
-    giftTakeoverTimer = setTimeout(function(){ t.hidden = true; },
-                                     3200);
+    giftTakeoverTimer = setTimeout(function(){
+      t.hidden = true;
+      t.querySelectorAll('.gift-particle').forEach(function(p){
+        p.parentNode.removeChild(p);
+      });
+    }, 3200);
   }
   function handleGiftEvent(g){
-    if (!g || g.id <= lastGiftId) return;
-    lastGiftId = g.id;
-    var tier = g.anim || (g.tickets >= 5000 ? 4
-      : g.tickets >= 500 ? 3 : g.tickets >= 50 ? 2 : 1);
+    if (!g || !g.id || seenGiftIds[g.id]) return;
+    seenGiftIds[g.id] = 1;
+    lastGiftId = Math.max(lastGiftId, g.id);
+    var tier = (typeof g.anim === 'number') ? g.anim
+      : giftTierOf(g.tickets);
     if (tier >= 4) showGiftTakeover(g);
-    else if (tier === 3) showGiftBanner(g);
+    else if (tier === 3 || (g.tickets || 0) >= 100) showGiftBanner(g);
     else if (tier === 2) spawnGiftPop(g);
     else spawnGiftFloat(g);
     addNotice('🎁 ' + giftSenderLabel(g) + ' sent ' + g.name);
   }
+  /* Sender parity (Build RICH): my own gift plays on MY screen the
+     moment the send lands — rendered locally from the POST's gift
+     id, and the state-poll echo of that same id is suppressed by
+     seenGiftIds in handleGiftEvent (dedupe by per-send id). */
+  function renderLocalGift(g, giftId){
+    if (!giftId) return;
+    handleGiftEvent({
+      id: giftId, sender_id: B.me, sender_name: 'You',
+      sender_rank: null, gift_key: g.key, key: g.key,
+      name: g.name, tickets: g.tickets, category: g.category,
+      img: g.img, emoji: g.emoji || '',
+      anim: giftTierOf(g.tickets), anim_name: giftAnimName(g)});
+  }
+  /* ---- 🔥 Boost (Build RICH): after a send, a floating chip lets
+     the sender re-send the SAME gift with fast taps — every tap is
+     a real send through the normal /gift path (real debit, real
+     host credit, real animation, Showdown points included). The
+     chip follows the LAST sent gift, lives ~6s refreshed per tap,
+     and dies on expiry, on insufficient balance, on sheet close
+     (closeSheet calls hideBoostChip), and when the live ends. */
+  function armBoostTimer(){
+    if (boostTimer) clearTimeout(boostTimer);
+    boostTimer = setTimeout(hideBoostChip, 6000);
+  }
+  function showBoostChip(g, count){
+    boostGift = g;
+    boostCount = count;
+    var chip = $('gift-boost');
+    var art = $('gift-boost-art');
+    art.innerHTML = '';
+    art.appendChild(giftArtEl(g, 32));
+    $('gift-boost-count').textContent = '×' + boostCount;
+    chip.hidden = false;
+    armBoostTimer();
+  }
+  function hideBoostChip(){
+    boostGift = null;
+    boostCount = 0;
+    if (boostTimer){ clearTimeout(boostTimer); boostTimer = null; }
+    var chip = $('gift-boost');
+    if (chip) chip.hidden = true;
+  }
+  function boostSend(){
+    var g = boostGift;
+    if (!g || ended || boostBusy) return;
+    var now = Date.now();
+    if (now - boostLastAt < 150) return;   /* double-tap lockout */
+    boostLastAt = now;
+    if (myTickets < g.tickets){
+      toast('Not enough tickets — grab a pack 🎟️');
+      hideBoostChip();
+      return;
+    }
+    boostBusy = true;
+    $('gift-boost').disabled = true;
+    post('/gift', {gift_key: g.key}).then(function(d){
+      boostBusy = false;
+      var chip = $('gift-boost');
+      if (chip) chip.disabled = false;
+      if (d && d.ok){
+        myTickets = d.balance;
+        paintTickets();
+        renderLocalGift(g, d.gift_id);
+        showBoostChip(g, boostCount + 1);
+        renderGiftSheet();
+      } else {
+        toast((d && d.error) || 'Could not send that gift.');
+        if (d && d.error && d.error.indexOf('Not enough') === 0)
+          hideBoostChip();
+        else if (boostGift) armBoostTimer();
+      }
+    }).catch(function(){
+      boostBusy = false;
+      var chip = $('gift-boost');
+      if (chip) chip.disabled = false;
+      toast('Could not send that gift.');
+    });
+  }
+  $('gift-boost').addEventListener('click', boostSend);
   function renderTopGifters(list){
     var el = $('live-top-gifters');
     if (!list || !list.length){ el.hidden = true; el.textContent = ''; return; }
@@ -4114,8 +4370,9 @@ function liveRoomDiff(prev, next){
       if (d && d.ok){
         myTickets = d.balance;
         paintTickets();
-        if (d.gift_id) lastGiftId = Math.max(lastGiftId, d.gift_id);
+        renderLocalGift(g, d.gift_id);
         toast('Sent ' + g.name + '!');
+        showBoostChip(g, 1);
         renderGiftSheet();
       } else {
         toast((d && d.error) || 'Could not send that gift.');
