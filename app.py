@@ -1055,6 +1055,11 @@ def init_db():
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
               "idx_ticket_txns_session ON ticket_txns(stripe_session) "
               "WHERE stripe_session IS NOT NULL")
+    # Build T: the owner money panel aggregates 'buy' rows inside
+    # created_at windows — keep those range lookups index-served.
+    c.execute("CREATE INDEX IF NOT EXISTS "
+              "idx_ticket_txns_kind_created "
+              "ON ticket_txns(kind, created_at)")
     if _lifetime_backfill:
         c.execute(
             "UPDATE users SET gift_lifetime = COALESCE((SELECT "
@@ -10903,6 +10908,81 @@ def _earned_dollars(tickets):
     return int(tickets or 0) // 2
 
 
+# ---------------- HERE Money (Build T): owner profit panel ---------
+# A 'buy' ledger row stores TICKETS, not dollars (credit_purchase
+# records the ticket delta + the Stripe session id; the charged
+# amount itself lives only in Stripe). Gross is reconstructed
+# from the SAME price sources the charge used: TICKET_PACKS for
+# pack buys, the custom rate (CUSTOM_CENTS_PER_TICKET per ticket)
+# for every other count. A custom buy of exactly a pack size is
+# indistinguishable in the ledger and prices as the pack — the
+# widest possible gap is $1.01 (a 1500-ticket custom buy) — the
+# accepted tradeoff, documented in ROUTE_CONTRACT.md. Stripe's
+# cut is an ESTIMATE (Stripe reports no per-charge fee to this
+# app): the standard card rate, 2.9% + 30¢ per purchase, rounded
+# per purchase the way Stripe rounds. All figures are read-only
+# SQL aggregates — see _buy_aggregates / owner_dashboard.
+
+
+def _money2(cents):
+    """Ledger money format: always $X,XXX.XX, honest negatives.
+    (_money() is listing-display sugar — it drops .00 and calls
+    0 'FREE'; neither is true on a ledger.)"""
+    cents = int(cents or 0)
+    sign = "-" if cents < 0 else ""
+    cents = abs(cents)
+    return f"{sign}${cents // 100:,}.{cents % 100:02d}"
+
+
+def _buy_amount_sql():
+    """SQL expression: cents charged for one 'buy' row, from its
+    ticket count (see the Build T note above). Generated from
+    TICKET_PACKS so the pack prices live in exactly one place."""
+    whens = " ".join(
+        f"WHEN {p['tickets']} THEN {p['price_cents']}"
+        for p in TICKET_PACKS.values())
+    return (f"CASE tickets {whens} "
+            f"ELSE tickets * {CUSTOM_CENTS_PER_TICKET} END")
+
+
+def _buy_aggregates(conn, start=None, end=None):
+    """(count, gross_cents, stripe_fee_est_cents) over 'buy' rows,
+    optionally inside a [start, end) created_at window. One
+    aggregate SQL pass — no per-row Python at any ledger size."""
+    amt = _buy_amount_sql()
+    sql = ("SELECT COUNT(*) c, COALESCE(SUM(" + amt + "),0) gross, "
+           "COALESCE(SUM(CAST(ROUND((" + amt + ") * 0.029 + 30) "
+           "AS INTEGER)),0) fee FROM ticket_txns WHERE kind='buy'")
+    args = []
+    if start is not None:
+        sql += " AND created_at>=?"
+        args.append(start)
+    if end is not None:
+        sql += " AND created_at<?"
+        args.append(end)
+    r = conn.execute(sql, args).fetchone()
+    return r["c"], r["gross"], r["fee"]
+
+
+def _chicago_day_start_utc(day):
+    """UTC ISO instant the Chicago calendar day `day` begins —
+    the range bound for created_at filters. zoneinfo is exact
+    (CDT/CST); the fallback applies _chicago_now's DST rule as a
+    fixed offset for that date (Chicago transitions happen at
+    2am, never at midnight, so a per-day offset is exact too)."""
+    if CHICAGO_TZ is not None:
+        local = datetime(day.year, day.month, day.day,
+                         tzinfo=CHICAGO_TZ)
+    else:
+        dst_start = _nth_weekday(day.year, 3, 6, 2)
+        dst_end = _nth_weekday(day.year, 11, 6, 1)
+        off = timedelta(hours=-5 if dst_start <= day < dst_end
+                        else -6)
+        local = datetime(day.year, day.month, day.day,
+                         tzinfo=timezone(off))
+    return local.astimezone(timezone.utc).isoformat()
+
+
 def stripe_enabled():
     return bool(os.environ.get("STRIPE_SECRET_KEY", "").strip())
 
@@ -12249,6 +12329,60 @@ async def owner_dashboard(request: Request):
         "payouts_pending": sum(1 for p in payouts
                                if p["status"] in ("pending", "sending"))}
 
+    # --- HERE Money (Build T): what the site itself has made ---
+    # Profit = gross ticket sales - Stripe's estimated cut -
+    # paid out to streamers - still owed to streamers. "Still
+    # owed" counts held cash-outs at the dollars locked in when
+    # the streamer asked (payout_requests.dollars_cents — the
+    # exact amount that will leave), so an earned ticket is owed
+    # exactly once at every stage: earnings -> request (hold)
+    # -> paid. Definitions spelled out in ROUTE_CONTRACT.md.
+    mp_today = _today_chicago()
+    mp_d0 = _chicago_day_start_utc(mp_today)
+    mp_d1 = _chicago_day_start_utc(mp_today + timedelta(days=1))
+    mp_sales, gross_all, fee_est = _buy_aggregates(conn)
+    _tc, gross_today_c, _tf = _buy_aggregates(conn, mp_d0, mp_d1)
+    mp_m0 = _chicago_day_start_utc(mp_today.replace(day=1))
+    mp_next = (mp_today.replace(day=28)
+               + timedelta(days=4)).replace(day=1)
+    mp_m1 = _chicago_day_start_utc(mp_next)
+    _mc, gross_month_c, _mf = _buy_aggregates(conn, mp_m0, mp_m1)
+    prow_paid = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(dollars_cents),0) s "
+        "FROM payout_requests WHERE status='paid'").fetchone()
+    held_dollars = conn.execute(
+        "SELECT COALESCE(SUM(dollars_cents),0) s FROM "
+        "payout_requests WHERE status IN ('pending','sending')"
+    ).fetchone()["s"]
+    owed_earned_c = _earned_dollars(earned_out)
+    owed_c = owed_earned_c + held_dollars
+    floating = conn.execute(
+        "SELECT COALESCE(SUM(tickets_balance),0) s FROM users"
+    ).fetchone()["s"]
+    profit_c = (gross_all - fee_est - prow_paid["s"] - owed_c)
+    mp_days = []
+    for back in range(6, -1, -1):
+        d = mp_today - timedelta(days=back)
+        dc, dg, _df = _buy_aggregates(
+            conn, _chicago_day_start_utc(d),
+            _chicago_day_start_utc(d + timedelta(days=1)))
+        mp_days.append({"label": f"{d.strftime('%a %b')} {d.day}",
+                        "today": back == 0, "count": dc,
+                        "gross": _money2(dg)})
+    money_panel = {
+        "profit": _money2(profit_c), "sales": mp_sales,
+        "gross": _money2(gross_all),
+        "gross_today": _money2(gross_today_c),
+        "gross_month": _money2(gross_month_c),
+        "fee_est": _money2(fee_est),
+        "paid_out": _money2(prow_paid["s"]),
+        "paid_count": prow_paid["c"],
+        "owed": _money2(owed_c),
+        "owed_earned": _money2(owed_earned_c),
+        "owed_held": _money2(held_dollars),
+        "floating": floating, "sold": tickets_sold,
+        "days": mp_days}
+
     # --- password help queue (Build O): queued resets first, then
     # the recent history. State is derived, never stored: used /
     # expired win over the delivery label.
@@ -12295,6 +12429,7 @@ async def owner_dashboard(request: Request):
         "verifications": verifications,
         "live_now": live_now, "live_recent": live_recent,
         "payouts": payouts, "money_stats": money_stats,
+        "money_panel": money_panel,
         "pw_resets": pw_resets, "pw_help_pending": pw_help_pending,
         "connect_state": _connect_state()})
 
