@@ -20,6 +20,9 @@
 <div class="card">
   <h2 style="font-size:24px">🔴 Lives</h2>
   <p style="color:var(--muted);margin-top:6px">Watch people who are live right now — friends and people you follow come first.</p>
+  <div id="lives-random-slot" style="margin-top:12px">
+    {% if lives %}<button type="button" class="btn" id="lives-random">🎲 Random live</button>{% endif %}
+  </div>
 </div>
 
 <div id="lives-sections">
@@ -39,6 +42,11 @@
     <div class="live-actions">
       <a class="btn" href="/live/{{ l.id }}">▶ Watch</a>
       {% if not l.is_self %}
+      {% if l.my_join_pending %}
+      <button type="button" class="btn-ghost btn-sm" disabled>⏳ Asked — waiting for host</button>
+      {% else %}
+      <button type="button" class="btn-ghost btn-sm js-ask-join" data-live="{{ l.id }}">🙋 Ask to join panel</button>
+      {% endif %}
       {% if l.following %}
       <span class="kind-tag">Following ✓</span>
       {% else %}
@@ -114,6 +122,20 @@
     watch.textContent = '▶ Watch';
     actions.appendChild(watch);
     if (!live.is_self){
+      var ask = document.createElement('button');
+      ask.type = 'button';
+      ask.className = 'btn-ghost btn-sm';
+      if (live.my_join_pending){
+        ask.disabled = true;
+        ask.textContent = '⏳ Asked — waiting for host';
+      } else {
+        ask.className += ' js-ask-join';
+        ask.setAttribute('data-live', live.id);
+        ask.textContent = '🙋 Ask to join panel';
+      }
+      actions.appendChild(ask);
+    }
+    if (!live.is_self){
       if (live.following){
         var tag = document.createElement('span');
         tag.className = 'kind-tag';
@@ -159,7 +181,81 @@
     });
     var empty = document.getElementById('lives-empty');
     if (empty) empty.hidden = list.length > 0;
+    syncRandom(list);
   }
+  /* ---- 🎲 Random live (Build W1) --------------------------------
+     Jumps to a random currently-live room. The button exists only
+     while at least one room is live: server-rendered when the
+     page paints with lives, kept in sync by every poll render. */
+  var currentLives = [];
+  function syncRandom(list){
+    currentLives = list || [];
+    var slot = document.getElementById('lives-random-slot');
+    if (!slot) return;
+    var btn = document.getElementById('lives-random');
+    if (currentLives.length && !btn){
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn';
+      btn.id = 'lives-random';
+      btn.textContent = '🎲 Random live';
+      slot.appendChild(btn);
+    } else if (!currentLives.length && btn){
+      slot.removeChild(btn);
+    }
+  }
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    if (t && t.id === 'lives-random' && currentLives.length){
+      var pick = currentLives[Math.floor(
+        Math.random() * currentLives.length)];
+      if (pick) window.location.href = '/live/' + pick.id;
+    }
+  });
+  /* ---- 🙋 Ask to join panel from a card (Build W1) --------------
+     Same flow as asking inside the room: register presence with a
+     heartbeat first (you join the room as a viewer), then file
+     the join request — any signed-in user may ask, the HOST (or
+     an admin) approves; the ask shows up in their room panel on
+     the next state poll. */
+  function askJoin(btn){
+    var id = btn.getAttribute('data-live');
+    if (!id) return;
+    btn.disabled = true;
+    btn.textContent = '⏳ Asking…';
+    fetch('/live/' + id + '/heartbeat', {method: 'POST',
+        credentials: 'same-origin'})
+      .then(function(){
+        return fetch('/live/' + id + '/join-request', {
+          method: 'POST', credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json'}, body: '{}'});
+      })
+      .then(function(r){
+        return r.json().catch(function(){ return {}; });
+      })
+      .then(function(d){
+        if (d && d.ok && d.already_guest){
+          btn.textContent = '🎥 You are on the panel';
+        } else if (d && d.ok){
+          btn.textContent = '⏳ Asked — waiting for host';
+        } else {
+          btn.disabled = false;
+          btn.className = 'btn-ghost btn-sm js-ask-join';
+          btn.textContent = '🙋 Ask to join panel';
+          if (d && d.error) btn.title = d.error;
+        }
+      })
+      .catch(function(){
+        btn.disabled = false;
+        btn.className = 'btn-ghost btn-sm js-ask-join';
+        btn.textContent = '🙋 Ask to join panel';
+      });
+  }
+  document.addEventListener('click', function(e){
+    var b = e.target && e.target.closest
+      ? e.target.closest('.js-ask-join') : null;
+    if (b) askJoin(b);
+  });
   function pollLives(){
     fetch('/lives.json', {credentials: 'same-origin'})
       .then(function(r){ return r.json(); })
@@ -168,6 +264,7 @@
       })
       .catch(function(){});
   }
+  pollLives();
   setInterval(pollLives, 30000);
 })();
 </script>

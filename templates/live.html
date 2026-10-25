@@ -80,6 +80,9 @@
 .live-conn-dot.ok{background:#31a24c}
 .live-conn-dot.bad{background:#e02b20}
 .live-conn-dot.stall{background:#f5a623}
+.live-reconnect-btn{flex:none;background:none;border:none;cursor:pointer;
+  font-size:11px;line-height:1;padding:1px 2px;color:#fff;
+  text-shadow:0 1px 4px rgba(0,0,0,.9)}
 .live-tile .tile-menu{position:absolute;top:6px;right:6px;z-index:3;width:30px;height:30px;
   border-radius:50%;border:var(--lg-border);background:var(--lg-bg);color:#fff;font-size:16px;
   font-weight:800;cursor:pointer;line-height:1;
@@ -398,7 +401,7 @@
   <!-- watcher -->
   <button type="button" class="live-ctl" id="ctl-gift" hidden>🎁 Gift</button>
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
-  <button type="button" class="live-ctl" id="ctl-join" hidden>✋ Ask to join</button>
+  <button type="button" class="live-ctl" id="ctl-join" hidden>🙋 Ask to join panel</button>
   <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
   <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
 </div>
@@ -545,9 +548,12 @@ function liveRoomDiff(prev, next){
   var ICE_CONFIG = {iceServers: [
     {urls: 'stun:stun.l.google.com:19302'},
     {urls: 'stun:stun1.l.google.com:19302'},
+    {urls: 'stun:openrelay.metered.ca:80'},
     {urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject'},
+    {urls: 'turn:openrelay.metered.ca:3478', username: 'openrelayproject', credential: 'openrelayproject'},
     {urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject'},
-    {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'}
+    {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'},
+    {urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'}
   ]};
   var _iceConfigPromise = null;
   function getIceConfig(){
@@ -745,21 +751,36 @@ function liveRoomDiff(prev, next){
     }
     var label = document.createElement('div');
     label.className = 'tile-label';
-    var dot = null;
+    var dot = null, recon = null;
     if (uid !== B.me){
       dot = document.createElement('button');
       dot.type = 'button';
       dot.className = 'live-conn-dot';
-      dot.title = 'Connection status';
+      dot.title = 'Connection status — tap to reconnect';
       dot.dataset.state = 'new';
       (function(targetId){
         dot.addEventListener('click', function(ev){
           ev.stopPropagation();
-          if (dot.dataset.state === 'bad'
-              || dot.dataset.state === 'stall') manualRestart(targetId);
+          manualRestart(targetId);
         });
       })(uid);
       label.appendChild(dot);
+      /* Build W1: a visible per-tile 🔄 Reconnect — forces a FRESH
+         peer connection for this person (new RTCPeerConnection,
+         new ICE gathering), whatever the dot's color. The manual
+         path out of a stuck pair must never depend on the auto
+         discipline's backoff. */
+      recon = document.createElement('button');
+      recon.type = 'button';
+      recon.className = 'live-reconnect-btn';
+      recon.textContent = '🔄';
+      recon.title = 'Reconnect';
+      (function(targetId){
+        recon.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          manualRestart(targetId);
+        });
+      })(uid);
     }
     var tname = document.createElement('span');
     tname.className = 'tname';
@@ -770,6 +791,7 @@ function liveRoomDiff(prev, next){
     var srcTag = document.createElement('span');
     srcTag.className = 'lc-src-tag';
     label.appendChild(srcTag);
+    if (recon) label.appendChild(recon);
     var menuBtn = document.createElement('button');
     menuBtn.type = 'button';
     menuBtn.className = 'tile-menu';
@@ -789,7 +811,7 @@ function liveRoomDiff(prev, next){
     gridEl.appendChild(el);
     tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
                   badges: badges, srcTag: srcTag, menuBtn: menuBtn,
-                  member: member, dot: dot};
+                  member: member, dot: dot, recon: recon};
     updateTile(member);
     var P = peers[uid];
     if (P) P.videoEl = video;
@@ -1481,7 +1503,12 @@ function liveRoomDiff(prev, next){
      peer event and on a 1s interval. The dot on each remote tile's
      label row mirrors connectionState: grey = connecting/new,
      green = connected, red = failed (or disconnected past the
-     grace window); tapping a RED dot retries that peer. */
+     grace window); tapping the dot — or the tile's 🔄 button —
+     forces a fresh peer connection for that person.
+     Build W1 adds per peer: restartAttempts (same counter as
+     restarts), lastIceState (last ICE state seen), audioLive /
+     videoLive (a live remote track of that kind is on the peer) —
+     the owner's two-phone test reads these to prove see + hear. */
   window.__liveDiag = {peers: {}};
   var restartCounts = {};   /* uid -> ICE restarts this failure episode */
   function peerHasRemoteTrack(P){
@@ -1496,10 +1523,43 @@ function liveRoomDiff(prev, next){
       return P.pc.getSenders().some(function(s){ return !!s.track; });
     } catch (e) { return false; }
   }
+  function peerTrackLive(P, kind){
+    try {
+      return P.pc.getReceivers().some(function(r){
+        return r.track && r.track.kind === kind
+          && r.track.readyState === 'live';
+      });
+    } catch (e) { return false; }
+  }
+  /* Episode reset (Build W1): the auto-restart counter — and the
+     stall latch — clear ONLY on sustained health, never on a
+     momentary 'connected' blip (a flapping peer must not earn a
+     fresh budget every few seconds). Sustained = 'connected' for
+     HEALTHY_RESET_MS with, for peers carrying remote video, frames
+     still advancing (flowSince is the stall sampler's continuous-
+     flow clock). Called from refreshDiag's 1s tick. */
+  var HEALTHY_RESET_MS = 5000;
+  function maybeResetEpisode(uid, P){
+    if ((restartCounts[uid] || 0) === 0 && !P.stallRestarted) return;
+    if (!P || P.pc.connectionState !== 'connected') return;
+    var now = Date.now();
+    if (peerShouldHaveVideo(P)){
+      if (P.flowSince && now - P.flowSince >= HEALTHY_RESET_MS
+          && P.lastAdvanceAt && now - P.lastAdvanceAt < 3000){
+        restartCounts[uid] = 0;
+        P.stallRestarted = false;
+      }
+    } else if (P.healthySince
+               && now - P.healthySince >= HEALTHY_RESET_MS){
+      restartCounts[uid] = 0;
+      P.stallRestarted = false;
+    }
+  }
   function refreshDiag(){
     var out = {};
     Object.keys(peers).forEach(function(uid){
       var P = peers[uid];
+      maybeResetEpisode(uid, P);
       out[uid] = {
         state: P.pc.connectionState,
         iceState: P.pc.iceConnectionState,
@@ -1507,6 +1567,10 @@ function liveRoomDiff(prev, next){
         hasRemoteTrack: peerHasRemoteTrack(P),
         hasLocalSenders: peerHasLocalSenders(P),
         restarts: restartCounts[uid] || 0,
+        restartAttempts: restartCounts[uid] || 0,
+        lastIceState: P.lastIceState || P.pc.iceConnectionState,
+        audioLive: peerTrackLive(P, 'audio'),
+        videoLive: peerTrackLive(P, 'video'),
         framesDecoded: (P.lastFrames == null ? null : P.lastFrames),
         stalls: P.stallCount || 0,
         stalled: !!P.stalled
@@ -1537,13 +1601,16 @@ function liveRoomDiff(prev, next){
      is silently frozen (dead relay path, sender-side stall). The
      state poll samples getStats per peer: a panelist peer with a
      live remote video track whose inbound framesDecoded has not
-     advanced for ~6s is STALLED — its dot goes amber and ONE
+     advanced for ~6s is STALLED — its dot goes amber and an
      automatic restart fires through the same shared discipline
-     as 'failed'/'disconnected' (per-peer cap + cooldown, see
+     as 'failed'/'disconnected' (per-peer cap + backoff, see
      tryAutoRestart). Frames advancing again clears the stall.
      stallRestarted latches per freeze episode so a peer whose
      frames stay frozen (e.g. their camera is off) is not
-     restarted in a loop; it re-arms only when frames move. */
+     restarted in a loop; it re-arms only on SUSTAINED flow
+     (frames advancing continuously for HEALTHY_RESET_MS — see
+     maybeResetEpisode), never on a single advancing sample, so
+     a freeze/advance/freeze flap cannot farm fresh restarts. */
   var STALL_MS = 6000;
   function peerShouldHaveVideo(P){
     if (!P || P.remoteKind !== 'panelist') return false;
@@ -1571,13 +1638,16 @@ function liveRoomDiff(prev, next){
         if (frames === null) return;
         var now = Date.now();
         if (P.lastFrames === null || frames > P.lastFrames){
-          /* Frames moved (or first sample): healthy. Re-arm the
-             one-shot stall restart and clear any stall flag. */
+          /* Frames moved (or first sample): healthy. Start (or
+             keep) the continuous-flow clock — the episode budget
+             re-arms off SUSTAINED flow in maybeResetEpisode, not
+             off this single sample — and clear any stall flag. */
           P.lastFrames = frames;
           P.lastAdvanceAt = now;
-          P.stallRestarted = false;
+          if (!P.flowSince) P.flowSince = now;
           if (P.stalled){ P.stalled = false; refreshDiag(); }
         } else {
+          P.flowSince = 0;
           if (!P.lastAdvanceAt) P.lastAdvanceAt = now;
           if (now - P.lastAdvanceAt >= STALL_MS && !P.stalled){
             P.stalled = true;
@@ -1598,6 +1668,7 @@ function liveRoomDiff(prev, next){
     peers: peers,
     restartCounts: restartCounts,
     sampleStats: samplePeerStats,
+    manualRestart: manualRestart,
     guardPlay: guardPlayVideo,
     unlockAudio: function(){ unlockAudio(); },
     soundNeeded: function(){
@@ -1624,23 +1695,40 @@ function liveRoomDiff(prev, next){
     }
     if (P.pendingReoffer) makeOffer(uid);
   }
-  /* The ONE automatic-restart discipline (Build N): 'failed',
-     'disconnected' past its grace window, and media stalls all
-     come through here. Cap: one automatic restart per peer per
-     failure episode (the counter resets when the peer reaches
-     'connected'); a per-peer cooldown keeps the triggers from
-     stacking restarts back to back. Returns true when a restart
-     actually fired. Manual retries (red/amber dot) reset the
-     counter themselves and are not capped here. */
-  var AUTO_RESTART_COOLDOWN_MS = 8000;
+  /* The ONE automatic-restart discipline (Build N, strengthened
+     in Build W1): 'failed', 'disconnected' past its grace window,
+     and media stalls all come through here. Build N allowed ONE
+     automatic restart per failure episode — too weak for real
+     phone networks, where the first restart often lands while
+     the radio is still switching towers. W1: up to
+     AUTO_RESTART_MAX attempts per episode with growing backoff
+     between them (immediate, then 8s, 16s, 32s, 60s — the delay
+     is keyed to attempts already fired, so triggers can't stack
+     restarts back to back). The episode counter resets ONLY on
+     sustained health (see maybeResetEpisode): a healthy
+     connection is never restarted (every trigger checks the
+     peer still exists and is wanted), and a flapping one cannot
+     farm a fresh budget off a momentary 'connected'. Returns
+     true when a restart actually fired. Manual retries (the
+     tile dot / 🔄 button) reset the counter themselves and are
+     not capped or backed off here. */
+  var AUTO_RESTART_MAX = 5;
+  var AUTO_RESTART_BASE_MS = 8000;
+  function autoRestartDelay(count){
+    if (count <= 0) return 0;
+    var d = AUTO_RESTART_BASE_MS * Math.pow(2, count - 1);
+    return d > 60000 ? 60000 : d;
+  }
   function tryAutoRestart(uid){
     var P = peers[uid];
     if (!P || ended) return false;
-    if ((restartCounts[uid] || 0) >= 1) return false;
+    var count = restartCounts[uid] || 0;
+    if (count >= AUTO_RESTART_MAX) return false;
     var now = Date.now();
-    if (P.lastRestartAt && now - P.lastRestartAt < AUTO_RESTART_COOLDOWN_MS)
+    if (P.lastRestartAt
+        && now - P.lastRestartAt < autoRestartDelay(count))
       return false;
-    restartCounts[uid] = (restartCounts[uid] || 0) + 1;
+    restartCounts[uid] = count + 1;
     P.lastRestartAt = now;
     if (P.offered){ /* I drive this pair: restart ICE + re-offer */
       try { P.pc.restartIce(); } catch (e) {}
@@ -1656,29 +1744,24 @@ function liveRoomDiff(prev, next){
     var P = peers[uid];
     if (!P) return;
     setStatus('Connection problem — reconnecting…');
-    /* S4 discipline, now shared: ONE automatic restart per
-       failure episode; after that the tile dot (red) is the
-       manual retry path. */
+    /* The shared auto discipline (bounded attempts + backoff);
+       the tile dot / 🔄 button stays the uncapped manual path
+       once the budget is spent. */
     if (!tryAutoRestart(uid)) refreshDiag();
   }
   function manualRestart(uid){
+    /* Force a FRESH peer connection for this person (Build W1):
+       tear the old RTCPeerConnection down entirely and let
+       reconcilePeers build a new one — fresh ICE gathering, fresh
+       negotiation — for BOTH roles. (The old behavior restarted
+       ICE in place when I was the offerer, which cannot escape
+       a wedged pc.) The episode budget resets: a human tap is
+       the judgement call the auto cap defers to. */
     restartCounts[uid] = 0;
-    var P = peers[uid];
-    if (P){
-      P.stalled = false;
-      P.stallRestarted = false;
-      P.lastRestartAt = 0;
-      P.lastAdvanceAt = Date.now(); /* grace for the stall sampler */
-    }
-    if (P && P.offered){
-      try { P.pc.restartIce(); } catch (e) {}
-      makeOffer(uid);
-    } else {
-      if (P) closePeer(uid);
-      reconcilePeers();
-      var P2 = peers[uid];
-      if (P2 && !P2.offered && !P2.helloSent) sayHelloTo(uid);
-    }
+    if (peers[uid]) closePeer(uid);
+    reconcilePeers();
+    var P2 = peers[uid];
+    if (P2 && !P2.offered && !P2.helloSent) sayHelloTo(uid);
     refreshDiag();
   }
   function ensurePeer(uid, offerer){
@@ -1697,6 +1780,7 @@ function liveRoomDiff(prev, next){
              chain: Promise.resolve(), discBad: false, discTimer: null,
              remoteStream: null,
              lastFrames: null, lastAdvanceAt: 0, lastRestartAt: 0,
+             lastIceState: 'new', healthySince: 0, flowSince: 0,
              stalled: false, stallCount: 0, stallRestarted: false,
              remoteKind: isPanelist(uid) ? 'panelist' : 'watcher',
              videoEl: T ? T.video : null};
@@ -1734,17 +1818,37 @@ function liveRoomDiff(prev, next){
       if (pc.signalingState === 'stable') noteStable(uid);
       refreshDiag();
     };
-    pc.oniceconnectionstatechange = function(){ refreshDiag(); };
+    pc.oniceconnectionstatechange = function(){
+      if (peers[uid] === P) P.lastIceState = pc.iceConnectionState;
+      refreshDiag();
+    };
+    /* Renegotiation safety net (Build W1): the explicit call
+       sites (media landing, hello, reconcile) drive negotiation;
+       this catches a track change that slips past all of them
+       (e.g. a kind my stream gains after this peer was created).
+       Only the pair's designated offerer may act, and makeOffer
+       itself serializes + coalesces, so this can never double up
+       an offer. Source switches use replaceTrack, which does not
+       fire this event and still needs no renegotiation. */
+    pc.onnegotiationneeded = function(){
+      if (peers[uid] !== P || ended) return;
+      if (amMember && shouldOfferTo(uid)) makeOffer(uid);
+    };
     pc.onconnectionstatechange = function(){
       if (ended || peers[uid] !== P) return;
       var st = pc.connectionState;
       if (st === 'connected'){
-        restartCounts[uid] = 0;
+        /* Build W1: reaching 'connected' starts the health clock
+           but does NOT reset the restart budget — only sustained
+           health does (maybeResetEpisode), so a flapping peer
+           can't farm fresh attempts off brief reconnects. */
+        if (!P.healthySince) P.healthySince = Date.now();
         P.discBad = false;
         P.stalled = false;
         if (P.discTimer){ clearTimeout(P.discTimer); P.discTimer = null; }
         setStatus(null);
       } else if (st === 'disconnected'){
+        P.healthySince = 0;
         setStatus('Reconnecting…');
         if (!P.discTimer){
           P.discTimer = setTimeout(function(){
@@ -1760,6 +1864,7 @@ function liveRoomDiff(prev, next){
           }, 5000);
         }
       } else if (st === 'failed'){
+        P.healthySince = 0;
         handleFailed(uid);
       }
       refreshDiag();
@@ -1965,22 +2070,46 @@ function liveRoomDiff(prev, next){
       else P.pendingHello = true;
     } else if (sig.kind === 'offer'){
       P = ensurePeer(from, false);
-      /* S2: SDP work for this peer is serialized on P.chain. */
+      /* S2: SDP work for this peer is serialized on P.chain.
+         Build W1 — perfect negotiation for offer collisions: the
+         fixed offer rule means both sides of a pair can still
+         have offers in flight at once (panel reorder flips who
+         offers, a promotion race, both sides renegotiating after
+         a reconnect). Before W1 the loser's setRemoteDescription
+         threw InvalidStateError into the catch and that pair
+         silently never connected. Now: a collision exists when
+         this pc is not 'stable'; the pair's DESIGNATED offerer
+         (shouldOfferTo, computed from the same panel order on
+         both sides) is impolite and ignores the incoming offer —
+         theirs will roll back and answer mine; the polite side
+         rolls its own pending offer back and answers theirs. */
       (function(Pp, payload){
         enqueuePeerOp(Pp, function(){
           if (peers[from] !== Pp) return;
           if (amMember) addLocalTracks(Pp);
-          return Pp.pc.setRemoteDescription(
-              new RTCSessionDescription(payload || {}))
-            .then(function(){
-              flushIce(Pp);
-              return Pp.pc.createAnswer();
-            })
-            .then(function(a){ return Pp.pc.setLocalDescription(a); })
-            .then(function(){
-              signal(from, 'answer', Pp.pc.localDescription.toJSON());
-            })
-            .catch(function(){});
+          var accept = function(){
+            if (peers[from] !== Pp) return;
+            return Pp.pc.setRemoteDescription(
+                new RTCSessionDescription(payload || {}))
+              .then(function(){
+                flushIce(Pp);
+                return Pp.pc.createAnswer();
+              })
+              .then(function(a){ return Pp.pc.setLocalDescription(a); })
+              .then(function(){
+                signal(from, 'answer', Pp.pc.localDescription.toJSON());
+              })
+              .catch(function(){});
+          };
+          var collision = Pp.pc.signalingState !== 'stable'
+            || Pp.makingOffer;
+          if (!collision) return accept();
+          if (shouldOfferTo(from)) return; /* impolite: mine wins */
+          Pp.makingOffer = false;
+          Pp.pendingReoffer = false;
+          return Pp.pc.setLocalDescription({type: 'rollback'})
+            .catch(function(){})
+            .then(accept);
         });
       })(P, sig.payload);
     } else if (sig.kind === 'answer'){
@@ -1989,6 +2118,11 @@ function liveRoomDiff(prev, next){
       (function(Pp, payload){
         enqueuePeerOp(Pp, function(){
           if (peers[from] !== Pp) return;
+          /* A stale answer (to an offer that was rolled back in
+             a collision, or from a peer object since recreated)
+             must not touch a settled pc — the throw was caught
+             before, but skipping is cheaper and clearer. */
+          if (Pp.pc.signalingState === 'stable') return;
           return Pp.pc.setRemoteDescription(
               new RTCSessionDescription(payload || {}))
             .then(function(){ flushIce(Pp); })
@@ -3153,12 +3287,12 @@ function liveRoomDiff(prev, next){
       return;
     }
     btn.disabled = false;
-    btn.textContent = '✋ Ask to join';
+    btn.textContent = '🙋 Ask to join panel';
     if (d.my_join && d.my_join.status === 'declined' && d.my_join.decided_at){
       var age = (Date.now() - Date.parse(d.my_join.decided_at)) / 1000;
       if (age < 60){
         btn.disabled = true;
-        btn.textContent = '✋ Ask again in ' + Math.ceil(60 - age) + 's';
+        btn.textContent = '🙋 Ask again in ' + Math.ceil(60 - age) + 's';
       }
     }
     if (msg.dataset.sticky !== '1') msg.hidden = true;
