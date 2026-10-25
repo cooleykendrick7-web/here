@@ -121,6 +121,42 @@
   <p style="font-size:14.5px;margin-top:8px">Cash-outs open at <strong>{{ cashout_min }} earned tickets ({{ cashout_min_dollars|e }})</strong>.
   {% if earned > 0 %}You have {{ earned }} — {{ cashout_min - earned }} to go. Host lives and earn gifts to get there!{% else %}Host a live and earn gifts to get there!{% endif %}</p>
   {% endif %}
+  {% if payouts_history %}
+  <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+    <div style="font-weight:800;font-size:14.5px">Your cash-outs</div>
+    {% for p in payouts_history %}
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span>{{ p.tickets }} 🎟️ ({{ p.dollars|e }}) — {{ p.status_text|e }}{% if p.decided %} · {{ p.decided|e }}{% endif %}</span>
+      <span style="color:var(--muted);font-size:12.5px;white-space:nowrap">{{ p.when|e }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-title">🏦 Bank payouts</div>
+  {% if setup_q == 'unavailable' %}
+  <p style="font-size:14.5px;margin-top:8px">🏦 <strong>Bank payouts are being switched on</strong> — the owner is finishing a verification step with Stripe. Hand payouts still work meanwhile: cash out above as usual and the owner sends it by hand.</p>
+  {% elif bank_state == 'ready' %}
+  <p style="font-size:14.5px;margin-top:8px">✅ <strong>Bank payouts ready</strong> — when the owner approves your cash-out, the money goes straight to your bank (lands in about 2 business days). No more typing a Cash App handle.</p>
+  <form method="post" action="/payouts/update" style="margin-top:10px">
+    <button type="submit" class="btn-ghost">Update bank details</button>
+  </form>
+  {% elif bank_state == 'started' %}
+  <p style="font-size:14.5px;margin-top:8px">Your bank setup isn't finished yet — pick up where you left off and your cash-outs can land straight in your bank.</p>
+  {% if setup_q == 'done' %}<p style="color:var(--muted);font-size:13px;margin-top:6px">Stripe saved your progress, but there's still a step left.</p>{% endif %}
+  <form method="post" action="/payouts/setup" style="margin-top:10px">
+    <button type="submit" class="btn">Continue setup</button>
+  </form>
+  <p style="color:var(--muted);font-size:13px;margin-top:8px">Hand payouts still work meanwhile — cash out above and the owner sends it by hand.</p>
+  {% else %}
+  <p style="font-size:14.5px;margin-top:8px">Get paid straight to your bank — one 5-minute setup with Stripe. HERE never sees your bank numbers.</p>
+  <form method="post" action="/payouts/setup" style="margin-top:10px">
+    <button type="submit" class="btn">Set up bank payouts</button>
+  </form>
+  <p style="color:var(--muted);font-size:13px;margin-top:8px">Prefer the old way? Cash out above and the owner sends it by hand.</p>
+  {% endif %}
 </div>
 
 <div class="card">
