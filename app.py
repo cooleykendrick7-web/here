@@ -1126,6 +1126,36 @@ def init_db():
         expires_at TEXT NOT NULL, created_at TEXT NOT NULL)""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_live_shouts_room "
               "ON live_shouts(live_id, id)")
+    # --- Live Showdown battles (Build W2) ---
+    # A battle LINKS two existing live rooms; it never merges them.
+    # Scores are ticket-points added by the gift handler in the same
+    # transaction as each gift. finish_reason: 'timer' | 'forfeit'.
+    # effects_done guards the exactly-once result posts + notices.
+    c.execute("""CREATE TABLE IF NOT EXISTS live_battles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        challenger_live_id INTEGER NOT NULL,
+        challenger_user_id INTEGER NOT NULL,
+        opponent_live_id INTEGER NOT NULL,
+        opponent_user_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        duration_sec INTEGER NOT NULL DEFAULT 300,
+        started_at TEXT, ends_at TEXT,
+        challenger_score INTEGER NOT NULL DEFAULT 0,
+        opponent_score INTEGER NOT NULL DEFAULT 0,
+        winner_user_id INTEGER,
+        finish_reason TEXT,
+        effects_done INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, decided_at TEXT)""")
+    # One battle per live, per role column (the code-level busy
+    # check covers cross-column involvement; these are the backstop).
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
+              "idx_live_battles_chal_live ON live_battles"
+              "(challenger_live_id) WHERE status IN ('pending','active')")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
+              "idx_live_battles_opp_live ON live_battles"
+              "(opponent_live_id) WHERE status IN ('pending','active')")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_live_battles_recent "
+              "ON live_battles(status, decided_at)")
     c.execute("""CREATE TABLE IF NOT EXISTS payout_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL, tickets INTEGER NOT NULL,
@@ -6389,6 +6419,10 @@ async def profile(request: Request, uid: int):
         "status='live' ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
     _lconn.close()
     prof_live_id = live_row["id"] if live_row else None
+    # Build W2: ⚔️ Showdown record (finished battles only).
+    _bconn = db()
+    _sw, _sl, _sd = _showdown_record(_bconn, uid)
+    _bconn.close()
     # Private profile: non-friends see a locked profile (public face
     # only) — the owner, their friends, and the owner context see all.
     locked = bool(prof.get("private_profile")) and user["id"] != uid \
@@ -6404,6 +6438,7 @@ async def profile(request: Request, uid: int):
         "is_gold_inviter": is_gold_inviter(uid),
         "is_insider": is_insider(uid),
         "live_level": _streamer_level(prof.get("gift_lifetime")),
+        "showdown_w": _sw, "showdown_l": _sl, "showdown_d": _sd,
         "streak": current_streak(uid),
         "contest_winner": contest_winner_user_id() == uid,
         "viewer_follows": bool(user["id"] != uid
@@ -8110,8 +8145,18 @@ def _sweep_lives(conn):
         "host_seen_at<?", (cutoff,)).fetchall()
     for row in stale:
         _end_live_row(conn, dict(row))
-    if stale:
+    # Build W2: lazy Showdown resolution rides the same sweep —
+    # active battles past their clock finish here (the state poll
+    # and the lives list both pass through), then any finished
+    # battle still missing its result posts/notices gets settled.
+    _changed = _battle_expire(conn)
+    if stale or _changed:
         conn.commit()
+    _pending_fx = conn.execute(
+        "SELECT id FROM live_battles WHERE status='finished' AND "
+        "effects_done=0 ORDER BY id ASC LIMIT 5").fetchall()
+    for _r in _pending_fx:
+        _battle_settle_effects(_r["id"])
 
 
 def _end_live_row(conn, live):
@@ -8147,6 +8192,23 @@ def _end_live_row(conn, live):
     conn.execute(
         "UPDATE live_games SET status='ended', ended_at=? "
         "WHERE live_id=? AND status='active'", (stamp, live["id"]))
+    # Build W2: a Showdown dies with the room — an ACTIVE battle is
+    # finished on the spot as a forfeit win for the other host, and
+    # a still-pending challenge involving this room is cancelled.
+    _bb = conn.execute(
+        "SELECT * FROM live_battles WHERE status='active' AND "
+        "(challenger_live_id=? OR opponent_live_id=?)",
+        (live["id"], live["id"])).fetchone()
+    if _bb:
+        _bb = dict(_bb)
+        _winner = (_bb["opponent_user_id"]
+                   if _bb["challenger_live_id"] == live["id"]
+                   else _bb["challenger_user_id"])
+        _battle_finish(conn, _bb, "forfeit", winner_user_id=_winner)
+    conn.execute(
+        "UPDATE live_battles SET status='cancelled', decided_at=? "
+        "WHERE status='pending' AND (challenger_live_id=? OR "
+        "opponent_live_id=?)", (stamp, live["id"], live["id"]))
 
 
 def _live_get(conn, lid):
@@ -8614,8 +8676,12 @@ async def lives_page(request: Request):
     if err:
         return err
     rows = _lives_page_list(user, is_owner(request))
+    _bconn = db()
+    _recent = _recent_showdowns(_bconn)
+    _bconn.close()
     return render(request, "lives.html",
-                  {"lives": rows, "sections": _lives_sections(rows)})
+                  {"lives": rows, "sections": _lives_sections(rows),
+                   "recent_showdowns": _recent})
 
 
 @app.get("/lives.json")
@@ -8841,6 +8907,259 @@ async def live_leave(request: Request, lid: int):
         conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
+
+
+# ---------------- Live Showdown battles (Build W2) ----------------
+# A battle LINKS two live rooms — viewers never move rooms; both
+# state polls carry the same shared scoreboard from their own
+# room's point of view. Gifts are the score: the gift handler adds
+# each ticket gift's cost to the receiving side inside the gift's
+# own transaction, so money flow is exactly as it always was.
+# Resolution is LAZY: _sweep_lives (which every live read/write
+# passes through) finishes expired battles, and _end_live_row
+# finishes a battle the moment a host's live ends (forfeit).
+BATTLE_DURATIONS = (180, 300, 600)
+BATTLE_BANNER_SECONDS = 60    # finished block lingers in both rooms
+BATTLE_DECLINED_SECONDS = 30  # declined notice lingers for challenger
+
+
+def _battle_get(conn, bid):
+    r = conn.execute("SELECT * FROM live_battles WHERE id=?",
+                     (bid,)).fetchone()
+    return dict(r) if r else None
+
+
+def _battle_busy(conn, lid):
+    """The pending/active battle involving this live, either role."""
+    r = conn.execute(
+        "SELECT * FROM live_battles WHERE status IN ('pending',"
+        "'active') AND (challenger_live_id=? OR opponent_live_id=?) "
+        "ORDER BY id DESC LIMIT 1", (lid, lid)).fetchone()
+    return dict(r) if r else None
+
+
+def _battle_for_live(conn, lid):
+    """The battle block a room's state poll should carry: the live
+    pending/active battle, else a just-finished one still inside
+    its 60s winner-banner window, else (challenger only) a fresh
+    decline so the challenger hears about it."""
+    b = _battle_busy(conn, lid)
+    if b:
+        return b
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=BATTLE_BANNER_SECONDS)).isoformat()
+    r = conn.execute(
+        "SELECT * FROM live_battles WHERE status='finished' AND "
+        "decided_at>=? AND (challenger_live_id=? OR "
+        "opponent_live_id=?) ORDER BY id DESC LIMIT 1",
+        (cutoff, lid, lid)).fetchone()
+    if r:
+        return dict(r)
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=BATTLE_DECLINED_SECONDS)).isoformat()
+    r = conn.execute(
+        "SELECT * FROM live_battles WHERE status='declined' AND "
+        "decided_at>=? AND challenger_live_id=? ORDER BY id DESC "
+        "LIMIT 1", (cutoff, lid)).fetchone()
+    return dict(r) if r else None
+
+
+def _battle_finish(conn, battle, reason, winner_user_id=None):
+    """Guarded active→finished flip (no commit). Timer finishes
+    compute the winner from the scores (tie = NULL = draw);
+    forfeits pass the surviving host explicitly. Returns True
+    only for the caller that actually flipped it."""
+    if battle["status"] != "active":
+        return False
+    if reason != "forfeit":
+        cs, os_ = battle["challenger_score"], battle["opponent_score"]
+        if cs > os_:
+            winner_user_id = battle["challenger_user_id"]
+        elif os_ > cs:
+            winner_user_id = battle["opponent_user_id"]
+        else:
+            winner_user_id = None
+    cur = conn.execute(
+        "UPDATE live_battles SET status='finished', "
+        "winner_user_id=?, finish_reason=?, decided_at=? "
+        "WHERE id=? AND status='active'",
+        (winner_user_id, reason, now_iso(), battle["id"]))
+    return cur.rowcount == 1
+
+
+def _battle_expire(conn):
+    """Finish every active battle whose clock ran out (no commit).
+    Returns how many flipped."""
+    rows = conn.execute(
+        "SELECT * FROM live_battles WHERE status='active' AND "
+        "ends_at IS NOT NULL AND ends_at<=?", (now_iso(),)).fetchall()
+    n = 0
+    for r in rows:
+        if _battle_finish(conn, dict(r), "timer"):
+            n += 1
+    return n
+
+
+def _battle_result_text(b):
+    cn = (get_user(b["challenger_user_id"]) or {}).get(
+        "name", "Deleted user")
+    on = (get_user(b["opponent_user_id"]) or {}).get(
+        "name", "Deleted user")
+    cs, os_ = b["challenger_score"], b["opponent_score"]
+    if b["winner_user_id"] is None:
+        return (f"⚔️ Live Showdown draw! {cn} and {on} tied "
+                f"{cs}–{os_}. Nobody takes the crown — run it back!")
+    if b["winner_user_id"] == b["challenger_user_id"]:
+        wname, lname, ws, ls = cn, on, cs, os_
+    else:
+        wname, lname, ws, ls = on, cn, os_, cs
+    text = f"⚔️ {wname} won the Live Showdown {ws}–{ls} vs {lname}!"
+    if b.get("finish_reason") == "forfeit":
+        text += f" ({lname} left the live — forfeit win.)"
+    return text
+
+
+def _battle_settle_effects(bid):
+    """Exactly-once finish side effects, on its OWN connection:
+    both hosts get the result as their own feed post (moderation-
+    flagged like any post) and a notification. The effects_done
+    claim makes concurrent settlers safe; _sweep_lives retries
+    any finished battle that somehow missed out."""
+    conn = db()
+    b = conn.execute("SELECT * FROM live_battles WHERE id=?",
+                     (bid,)).fetchone()
+    if not b or b["status"] != "finished":
+        conn.close()
+        return
+    cur = conn.execute(
+        "UPDATE live_battles SET effects_done=1 WHERE id=? AND "
+        "status='finished' AND effects_done=0", (bid,))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return
+    b = dict(b)
+    text = _battle_result_text(b)
+    stamp = now_iso()
+    post_ids = {}
+    for uid in (b["challenger_user_id"], b["opponent_user_id"]):
+        cur = conn.execute(
+            "INSERT INTO posts(user_id, page_id, kind, body, "
+            "feeling, link_url, video_url, media, privacy, "
+            "music_video_id, music_title, music_artist, music_thumb, "
+            "music_start, created_at) VALUES(?,?,?,?,?,?,?,?,?,"
+            "?,?,?,?,?,?)",
+            (uid, None, "text", text, "", "", "", "", "public",
+             "", "", "", "", 0, stamp))
+        post_ids[uid] = cur.lastrowid
+    conn.commit()
+    conn.close()
+    for uid, pid in post_ids.items():
+        other = (b["opponent_user_id"] if uid == b["challenger_user_id"]
+                 else b["challenger_user_id"])
+        notify(uid, "showdown", text, f"/post/{pid}", actor_id=other)
+        uname = (get_user(uid) or {}).get("name", "")
+        flag_item("post", pid, uid, uname, text)
+
+
+def _battle_json(conn, battle, lid):
+    """The state-poll battle block from THIS room's point of view:
+    'me' is always this room's host, scores already swapped."""
+    is_chal = battle["challenger_live_id"] == lid
+    my_uid = (battle["challenger_user_id"] if is_chal
+              else battle["opponent_user_id"])
+    opp_uid = (battle["opponent_user_id"] if is_chal
+               else battle["challenger_user_id"])
+    opp_live = (battle["opponent_live_id"] if is_chal
+                else battle["challenger_live_id"])
+    me = _live_person(my_uid)
+    opp = _live_person(opp_uid)
+    seconds_left = None
+    if battle["status"] == "active" and battle.get("ends_at"):
+        seconds_left = max(0, int((
+            datetime.fromisoformat(battle["ends_at"])
+            - datetime.now(timezone.utc)).total_seconds()))
+    winner = battle["winner_user_id"]
+    return {
+        "id": battle["id"], "status": battle["status"],
+        "duration_sec": battle["duration_sec"],
+        "seconds_left": seconds_left,
+        "my_score": (battle["challenger_score"] if is_chal
+                     else battle["opponent_score"]),
+        "opp_score": (battle["opponent_score"] if is_chal
+                      else battle["challenger_score"]),
+        "me": {"user_id": my_uid, "name": me["name"],
+               "avatar": me["avatar"]},
+        "opponent": {"live_id": opp_live, "user_id": opp_uid,
+                     "name": opp["name"], "avatar": opp["avatar"]},
+        "direction": "outgoing" if is_chal else "incoming",
+        "winner_user_id": winner,
+        "winner_name": (me["name"] if winner == my_uid
+                        else opp["name"]) if winner else None,
+        "i_won": (winner == my_uid) if winner else None,
+        "forfeit": battle.get("finish_reason") == "forfeit",
+    }
+
+
+def _battle_candidates(conn, user, live):
+    """Other currently-live hosts this host could challenge: live
+    now, not already in a battle, and watchable by the challenger
+    (blocked pairs never battle)."""
+    rows = conn.execute(
+        "SELECT * FROM live_sessions WHERE status='live' AND id!=? "
+        "ORDER BY created_at DESC LIMIT 20", (live["id"],)).fetchall()
+    out = []
+    for r in rows:
+        other = dict(r)
+        if _battle_busy(conn, other["id"]):
+            continue
+        if not _live_can_watch(user, other):
+            continue
+        p = _live_person(other["host_id"])
+        out.append({"live_id": other["id"],
+                    "user_id": other["host_id"], "name": p["name"],
+                    "avatar": p["avatar"], "title": other["title"]})
+    return out
+
+
+def _showdown_record(conn, uid):
+    """(wins, losses, draws) over finished battles for a profile."""
+    w = conn.execute(
+        "SELECT COUNT(*) c FROM live_battles WHERE status='finished' "
+        "AND winner_user_id=?", (uid,)).fetchone()["c"]
+    played = conn.execute(
+        "SELECT COUNT(*) c FROM live_battles WHERE status='finished' "
+        "AND (challenger_user_id=? OR opponent_user_id=?)",
+        (uid, uid)).fetchone()["c"]
+    d = conn.execute(
+        "SELECT COUNT(*) c FROM live_battles WHERE status='finished' "
+        "AND winner_user_id IS NULL AND (challenger_user_id=? OR "
+        "opponent_user_id=?)", (uid, uid)).fetchone()["c"]
+    return w, played - w - d, d
+
+
+def _recent_showdowns(conn, limit=5):
+    """Last finished battles for the /lives 🏆 strip."""
+    rows = conn.execute(
+        "SELECT * FROM live_battles WHERE status='finished' ORDER "
+        "BY decided_at DESC, id DESC LIMIT ?", (limit,)).fetchall()
+    out = []
+    for r in rows:
+        b = dict(r)
+        cn = _live_person(b["challenger_user_id"])["name"]
+        on = _live_person(b["opponent_user_id"])["name"]
+        winner_name = None
+        if b["winner_user_id"] == b["challenger_user_id"]:
+            winner_name = cn
+        elif b["winner_user_id"] == b["opponent_user_id"]:
+            winner_name = on
+        out.append({
+            "challenger_name": cn, "opponent_name": on,
+            "challenger_score": b["challenger_score"],
+            "opponent_score": b["opponent_score"],
+            "winner_name": winner_name,
+            "forfeit": b.get("finish_reason") == "forfeit"})
+    return out
 
 
 @app.get("/live/{lid}/state")
@@ -9122,6 +9441,15 @@ async def live_state(request: Request, lid: int):
         "SELECT tickets_balance FROM users WHERE id=?",
         (user["id"],)).fetchone()
     out["my_tickets"] = (_me["tickets_balance"] or 0) if _me else 0
+    # Build W2: the Showdown block (shared scoreboard from this
+    # room's point of view) + — host only — who they could challenge
+    # right now. _sweep_lives above already finished any battle
+    # whose clock ran out and settled its result posts.
+    _battle = _battle_for_live(conn, lid)
+    out["battle"] = (_battle_json(conn, _battle, lid)
+                     if _battle else None)
+    if is_host:
+        out["battle_candidates"] = _battle_candidates(conn, user, live)
     conn.close()
     return JSONResponse(out)
 
@@ -9696,6 +10024,10 @@ async def live_gift(request: Request, lid: int):
             status_code=400)
     cost = gift["tickets"]
     conn = db()
+    # Build W2: a battle whose clock already ran out finishes
+    # BEFORE this gift lands, so a late gift never scores.
+    if _battle_expire(conn):
+        conn.commit()
     if not _live_present(conn, lid, user["id"], host_id):
         conn.close()
         return JSONResponse(
@@ -9749,6 +10081,20 @@ async def live_gift(request: Request, lid: int):
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, created_at) VALUES(?,?,?,?,?,?)",
         (host_id, "gift_receive", cost, lid, gift_key, stamp))
+    # Build W2: Showdown scoring — inside THIS gift's transaction,
+    # so a gift scores exactly once, by exactly its ticket cost
+    # (the free gift costs 0 = cheers only, scores nothing). The
+    # money above never changes: battles only read the cost.
+    _bb = conn.execute(
+        "SELECT * FROM live_battles WHERE status='active' AND "
+        "(challenger_live_id=? OR opponent_live_id=?)",
+        (lid, lid)).fetchone()
+    if _bb and cost:
+        _col = ("challenger_score" if _bb["challenger_live_id"] == lid
+                else "opponent_score")
+        conn.execute(
+            f"UPDATE live_battles SET {_col}={_col}+? WHERE id=? "
+            "AND status='active'", (cost, _bb["id"]))
     conn.commit()
     bal = conn.execute(
         "SELECT tickets_balance FROM users WHERE id=?",
@@ -9836,6 +10182,288 @@ async def live_shout(request: Request, lid: int):
     return JSONResponse({"ok": True, "balance": bal or 0,
                          "shout_id": shout_id,
                          "expires_at": expires})
+
+
+def _battle_host_ctx(request, lid):
+    """(user, conn, live, err) for Showdown actions: signed in,
+    hosting THIS room, and the room still live. Caller closes the
+    conn on every path (err paths already closed it)."""
+    user = current_user(request)
+    if not user:
+        return None, None, None, JSONResponse(
+            {"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if not live:
+        conn.close()
+        return None, None, None, JSONResponse(
+            {"ok": False, "error": "not found"}, status_code=404)
+    if live["host_id"] != user["id"]:
+        conn.close()
+        return None, None, None, JSONResponse(
+            {"ok": False, "error": "Only the host can do that."},
+            status_code=403)
+    if live["status"] != "live":
+        conn.close()
+        return None, None, None, JSONResponse(
+            {"ok": False, "error": "This live has ended."},
+            status_code=409)
+    return user, conn, live, None
+
+
+def _battle_insert_pending(conn, my_live, opp_live, duration):
+    """Insert a pending challenge row; the partial unique indexes
+    backstop the busy checks. Returns battle id or None on a
+    lost race (treated as 'already in a Showdown')."""
+    try:
+        cur = conn.execute(
+            "INSERT INTO live_battles(challenger_live_id, "
+            "challenger_user_id, opponent_live_id, opponent_user_id, "
+            "status, duration_sec, created_at) VALUES(?,?,?,?,"
+            "'pending',?,?)",
+            (my_live["id"], my_live["host_id"], opp_live["id"],
+             opp_live["host_id"], duration, now_iso()))
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return None
+
+
+@app.post("/live/{lid}/battle/challenge")
+async def live_battle_challenge(request: Request, lid: int):
+    """Host (while live) challenges another live host to a
+    ⚔️ LIVE SHOWDOWN of 3, 5 or 10 minutes."""
+    user, conn, live, err = _battle_host_ctx(request, lid)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        opp_lid = int(data.get("opponent_live_id") or 0)
+    except (TypeError, ValueError):
+        opp_lid = 0
+    try:
+        duration = int(data.get("duration_sec") or 300)
+    except (TypeError, ValueError):
+        duration = 300
+    if duration not in BATTLE_DURATIONS:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "Pick 3, 5 or 10 minutes."},
+            status_code=400)
+    if opp_lid == lid:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't battle yourself."},
+            status_code=400)
+    opp = _live_get(conn, opp_lid)
+    if not opp or opp["status"] != "live":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That host isn't live right now."},
+            status_code=400)
+    if opp["host_id"] == user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't battle yourself."},
+            status_code=400)
+    if not _live_can_watch(user, opp, owner_on=is_owner(request)):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't battle that host."},
+            status_code=400)
+    if _battle_busy(conn, lid):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You're already in a Showdown — "
+                                   "finish that one first."},
+            status_code=400)
+    if _battle_busy(conn, opp_lid):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": f"{_live_person(opp['host_id'])['name']} is "
+                      "already in a Showdown."},
+            status_code=400)
+    bid = _battle_insert_pending(conn, live, opp, duration)
+    opp_name = _live_person(opp["host_id"])["name"]
+    conn.close()
+    if not bid:
+        return JSONResponse(
+            {"ok": False, "error": "One of you is already in a "
+                                   "Showdown."},
+            status_code=400)
+    notify(opp["host_id"], "showdown",
+           f"⚔️ {user['name']} challenged you to a LIVE SHOWDOWN "
+           f"({duration // 60} min)! Open your live to accept.",
+           f"/live/{opp_lid}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "battle_id": bid})
+
+
+@app.post("/live/{lid}/battle/{bid}/accept")
+async def live_battle_accept(request: Request, lid: int, bid: int):
+    """The challenged host accepts: the clock starts NOW and both
+    rooms' state polls pick up the shared scoreboard."""
+    user, conn, live, err = _battle_host_ctx(request, lid)
+    if err:
+        return err
+    b = _battle_get(conn, bid)
+    if not b or b["opponent_live_id"] != lid:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That challenge isn't yours."},
+            status_code=404)
+    if b["status"] != "pending":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That challenge is gone."},
+            status_code=400)
+    chal = _live_get(conn, b["challenger_live_id"])
+    if not chal or chal["status"] != "live":
+        conn.execute(
+            "UPDATE live_battles SET status='cancelled', "
+            "decided_at=? WHERE id=? AND status='pending'",
+            (now_iso(), bid))
+        conn.commit()
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That live already ended — "
+                                   "challenge called off."},
+            status_code=400)
+    started = datetime.now(timezone.utc)
+    ends = started + timedelta(seconds=b["duration_sec"])
+    cur = conn.execute(
+        "UPDATE live_battles SET status='active', started_at=?, "
+        "ends_at=? WHERE id=? AND status='pending'",
+        (started.isoformat(), ends.isoformat(), bid))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That challenge is gone."},
+            status_code=400)
+    b2 = _battle_get(conn, bid)
+    out = _battle_json(conn, b2, lid)
+    conn.commit()
+    conn.close()
+    notify(b["challenger_user_id"], "showdown",
+           f"⚔️ {user['name']} accepted your Showdown — it's ON! "
+           "Gifts are points. Good luck!",
+           f"/live/{b['challenger_live_id']}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "battle": out})
+
+
+@app.post("/live/{lid}/battle/{bid}/decline")
+async def live_battle_decline(request: Request, lid: int, bid: int):
+    """The challenged host passes; the challenger hears about it
+    in their own state poll (and by notification)."""
+    user, conn, live, err = _battle_host_ctx(request, lid)
+    if err:
+        return err
+    b = _battle_get(conn, bid)
+    if not b or b["opponent_live_id"] != lid:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That challenge isn't yours."},
+            status_code=404)
+    cur = conn.execute(
+        "UPDATE live_battles SET status='declined', decided_at=? "
+        "WHERE id=? AND status='pending'", (now_iso(), bid))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That challenge is gone."},
+            status_code=400)
+    conn.commit()
+    conn.close()
+    notify(b["challenger_user_id"], "showdown",
+           f"⚔️ {user['name']} passed on the Showdown this time.",
+           f"/live/{b['challenger_live_id']}", actor_id=user["id"])
+    return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/battle/{bid}/cancel")
+async def live_battle_cancel(request: Request, lid: int, bid: int):
+    """The challenger calls off their own pending challenge."""
+    user, conn, live, err = _battle_host_ctx(request, lid)
+    if err:
+        return err
+    b = _battle_get(conn, bid)
+    if not b or b["challenger_live_id"] != lid:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That challenge isn't yours."},
+            status_code=404)
+    cur = conn.execute(
+        "UPDATE live_battles SET status='cancelled', decided_at=? "
+        "WHERE id=? AND status='pending'", (now_iso(), bid))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That challenge is gone."},
+            status_code=400)
+    conn.commit()
+    conn.close()
+    notify(b["opponent_user_id"], "showdown",
+           f"⚔️ {user['name']} called off the Showdown challenge.",
+           f"/live/{b['opponent_live_id']}", actor_id=user["id"])
+    return JSONResponse({"ok": True})
+
+
+@app.post("/live/{lid}/battle/{bid}/rematch")
+async def live_battle_rematch(request: Request, lid: int, bid: int):
+    """One-tap rematch from the result banner: a FRESH challenge
+    from this room to the other host (same length as last time),
+    through the exact same busy guards as a normal challenge."""
+    user, conn, live, err = _battle_host_ctx(request, lid)
+    if err:
+        return err
+    b = _battle_get(conn, bid)
+    if not b or lid not in (b["challenger_live_id"],
+                            b["opponent_live_id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That Showdown isn't yours."},
+            status_code=404)
+    if b["status"] != "finished":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That Showdown isn't over yet."},
+            status_code=400)
+    opp_lid = (b["opponent_live_id"] if b["challenger_live_id"] == lid
+               else b["challenger_live_id"])
+    opp = _live_get(conn, opp_lid)
+    if not opp or opp["status"] != "live":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That host isn't live anymore."},
+            status_code=400)
+    if _battle_busy(conn, lid) or _battle_busy(conn, opp_lid):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "One of you is already in a "
+                                   "Showdown."},
+            status_code=400)
+    new_id = _battle_insert_pending(conn, live, opp, b["duration_sec"])
+    conn.close()
+    if not new_id:
+        return JSONResponse(
+            {"ok": False, "error": "One of you is already in a "
+                                   "Showdown."},
+            status_code=400)
+    notify(opp["host_id"], "showdown",
+           f"⚔️ {user['name']} wants a REMATCH! Open your live "
+           "to accept the Showdown.",
+           f"/live/{opp_lid}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "battle_id": new_id})
 
 
 @app.post("/live/{lid}/signal")
