@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}My Earnings — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">📊 My earnings</div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
+    <div>
+      <div style="font-size:30px;font-weight:900;color:var(--red)">{{ lifetime }} 🎟️</div>
+      <div style="color:var(--muted);font-size:13px">Lifetime tickets earned</div>
+    </div>
+    <div>
+      <div style="font-size:30px;font-weight:900">{{ earned }} 🎟️</div>
+      <div style="color:var(--muted);font-size:13px">Available to cash out</div>
+    </div>
+    <div>
+      {% if pending %}
+      <div style="font-size:30px;font-weight:900">{{ pending.tickets }} 🎟️</div>
+      <div style="color:var(--muted);font-size:13px">Cash-out on its way · {{ pending.dollars|e }}</div>
+      {% else %}
+      <div style="font-size:30px;font-weight:900">0 🎟️</div>
+      <div style="color:var(--muted);font-size:13px">Cash-out on its way</div>
+      {% endif %}
+    </div>
+    <div>
+      <div style="font-size:30px;font-weight:900">{{ paid_total|e }}</div>
+      <div style="color:var(--muted);font-size:13px">Paid out to you so far</div>
+    </div>
+  </div>
+  <p style="color:var(--muted);font-size:13.5px;margin-top:12px">
+    Every gift and shout-out your viewers send lands here. This page
+    is private — only you can see it.
+  </p>
+</div>
+
+<div class="card">
+  <div class="section-title">🎙️ Earnings per stream</div>
+  {% if streams or earlier %}
+  <div style="margin-top:4px">
+    {% for s in streams %}
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <span><strong>{{ s.title|e }}</strong><br>
+      <span style="color:var(--muted);font-size:12.5px">{{ s.when|e }} · {{ s.gifts }} gift{% if s.gifts != 1 %}s{% endif %} received</span></span>
+      <span style="font-weight:800;white-space:nowrap">{{ s.tickets }} 🎟️</span>
+    </div>
+    {% endfor %}
+    {% if earlier %}
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <span><strong>Earlier streams</strong><br>
+      <span style="color:var(--muted);font-size:12.5px">{{ earlier.gifts }} gift{% if earlier.gifts != 1 %}s{% endif %} received · from before per-stream tracking</span></span>
+      <span style="font-weight:800;white-space:nowrap">{{ earlier.tickets }} 🎟️</span>
+    </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <p style="color:var(--muted);font-size:14px;margin-top:6px">No earnings yet — host a live and the gifts you earn land here, stream by stream.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-title">💰 Cash out</div>
+  {% if pending %}
+  <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and is waiting for the owner's approval. You'll see it marked paid right here.</p>
+  {% elif can_cashout %}
+  <p style="font-size:14.5px;margin-top:8px">You can cash out <strong>all {{ earned }} earned tickets = {{ cashout_dollars|e }}</strong>. Tell us exactly where to send it — the owner sends payouts by hand and marks them paid.</p>
+  <form method="post" action="/tickets/cashout" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+    <input type="text" name="payout_note" required maxlength="300" placeholder="e.g. Cash App $YourHandle, or bank name"
+      style="flex:1;min-width:220px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:14px">
+    <button type="submit" class="btn">Cash out {{ cashout_dollars|e }}</button>
+  </form>
+  {% else %}
+  <p style="font-size:14.5px;margin-top:8px">Cash-outs open at <strong>{{ cashout_min }} earned tickets</strong>.
+  {% if earned > 0 %}You have {{ earned }} — {{ cashout_min - earned }} to go. Host lives and earn gifts to get there!{% else %}Host a live and earn gifts to get there!{% endif %}</p>
+  {% endif %}
+  {% if payouts_history %}
+  <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+    <div style="font-weight:800;font-size:14.5px">Your cash-outs</div>
+    {% for p in payouts_history %}
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span>{{ p.tickets }} 🎟️ ({{ p.dollars|e }}) — {{ p.status_text|e }}{% if p.decided %} · {{ p.decided|e }}{% endif %}</span>
+      <span style="color:var(--muted);font-size:12.5px;white-space:nowrap">{{ p.when|e }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-title">🏦 Bank payouts</div>
+  {% if bank_state == 'ready' %}
+  <p style="font-size:14.5px;margin-top:8px">✅ <strong>Bank payouts ready</strong> — when the owner approves your cash-out, the money goes straight to your bank (lands in about 2 business days). No more typing a Cash App handle.</p>
+  <form method="post" action="/payouts/update" style="margin-top:10px">
+    <button type="submit" class="btn-ghost">Update bank details</button>
+  </form>
+  {% elif bank_state == 'started' %}
+  <p style="font-size:14.5px;margin-top:8px">Your bank setup isn't finished yet — pick up where you left off and your cash-outs can land straight in your bank.</p>
+  <form method="post" action="/payouts/setup" style="margin-top:10px">
+    <button type="submit" class="btn">Continue setup</button>
+  </form>
+  <p style="color:var(--muted);font-size:13px;margin-top:8px">Hand payouts still work meanwhile — cash out above and the owner sends it by hand.</p>
+  {% else %}
+  <p style="font-size:14.5px;margin-top:8px">Get paid straight to your bank — one 5-minute setup with Stripe. HERE never sees your bank numbers.</p>
+  <form method="post" action="/payouts/setup" style="margin-top:10px">
+    <button type="submit" class="btn">Set up bank payouts</button>
+  </form>
+  <p style="color:var(--muted);font-size:13px;margin-top:8px">Prefer the old way? Cash out above and the owner sends it by hand.</p>
+  {% endif %}
+</div>
+
+{% endblock %}
