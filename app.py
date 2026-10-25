@@ -12008,9 +12008,35 @@ async def page_promote_status(request: Request, pid: int, aid: int):
 #   gift_earned == SUM(tickets) WHERE kind IN
 #       ('gift_receive','cashout_hold','cashout_return')
 
-def _gift(key, name, tickets, category):
+def _gift(key, name, tickets, category, anim):
     return {"key": key, "name": name, "tickets": tickets,
-            "category": category, "img": f"/static/gifts/{key}.webp"}
+            "category": category, "img": f"/static/gifts/{key}.webp",
+            "anim": anim}
+
+
+# Build RICH: every gift carries its OWN send animation name — the
+# live page's animation engine (templates/live.html, @keyframes
+# giftfx-*) implements exactly this set. Tiny/free gifts stay light
+# (rise/pulse/flyby), mids get spin/bounce/burst, and the big gifts
+# (>=100) get the showpieces (zoomin/burst/shower — themed vehicles
+# and the jet keep flyby, they DRIVE/FLY across the stage).
+GIFT_ANIMS = ("rise", "burst", "flyby", "spin", "shower", "zoomin",
+              "bounce", "pulse")
+
+
+def _gift_anim_name_for(tickets):
+    """Fallback animation name by price (legacy/unknown keys and
+    any catalog entry missing one): the tier ladder in one name."""
+    t = tickets or 0
+    if t >= 5000:
+        return "shower"
+    if t >= 500:
+        return "burst"
+    if t >= 100:
+        return "zoomin"
+    if t >= 50:
+        return "spin"
+    return "rise"
 
 
 # Build P-GIFTS: the emoji cast is retired. The catalog is Ken's own
@@ -12022,78 +12048,78 @@ def _gift(key, name, tickets, category):
 # ledger and earns the host nothing.
 _GIFT_ROWS = [
     # --- 💰 Money (sheet 1) ---
-    ("neon_heart", "Neon Heart", 0, "money"),
-    ("money_bag", "Money Bag", 1, "money"),
-    ("flying_cash", "Flying Cash", 5, "money"),
-    ("gift_stack", "Gift Stack", 10, "money"),
-    ("here_shades", "HERE Shades", 15, "money"),
-    ("here_rocket", "HERE Rocket", 25, "money"),
-    ("money_duck", "Money Duck", 35, "money"),
-    ("money_bear", "Money Bear", 50, "money"),
-    ("money_buddy", "Money Buddy", 65, "money"),
-    ("cash_gremlin", "Cash Gremlin", 75, "money"),
-    ("money_heart", "Money Heart", 100, "money"),
-    ("money_tree", "Money Tree", 125, "money"),
-    ("golden_mic", "Golden Mic", 150, "money"),
-    ("megaphone", "HERE Megaphone", 200, "money"),
-    ("boss_face", "Boss Face", 250, "money"),
-    ("heart_hustler", "Heart Hustler", 300, "money"),
-    ("gold_kicks", "Gold Kicks", 400, "money"),
-    ("money_panda", "Money Panda", 500, "money"),
-    ("angel_bag", "Angel Bag", 600, "money"),
-    ("champagne_bucket", "Champagne Bucket", 750, "money"),
-    ("dab_king", "Dab King", 900, "money"),
-    ("here_diamond", "HERE Diamond", 1000, "money"),
-    ("diamond_dollar", "Diamond Dollar", 1200, "money"),
-    ("here_crown", "HERE Crown", 1500, "money"),
-    ("burning_cash", "Burning Cash", 1800, "money"),
-    ("the_vault", "The Vault", 2000, "money"),
-    ("crown_jewel_bag", "Crown Jewel Bag", 2500, "money"),
-    ("here_juice", "HERE Juice", 3000, "money"),
-    ("g_wagon", "G-Wagon", 4000, "money"),
-    ("midnight_rider", "Midnight Rider", 5000, "money"),
-    ("the_cutlass", "The Cutlass", 7500, "money"),
-    ("royal_fortune", "Royal Fortune", 10000, "money"),
+    ("neon_heart", "Neon Heart", 0, "money", "rise"),
+    ("money_bag", "Money Bag", 1, "money", "rise"),
+    ("flying_cash", "Flying Cash", 5, "money", "flyby"),
+    ("gift_stack", "Gift Stack", 10, "money", "bounce"),
+    ("here_shades", "HERE Shades", 15, "money", "pulse"),
+    ("here_rocket", "HERE Rocket", 25, "money", "flyby"),
+    ("money_duck", "Money Duck", 35, "money", "bounce"),
+    ("money_bear", "Money Bear", 50, "money", "spin"),
+    ("money_buddy", "Money Buddy", 65, "money", "bounce"),
+    ("cash_gremlin", "Cash Gremlin", 75, "money", "spin"),
+    ("money_heart", "Money Heart", 100, "money", "zoomin"),
+    ("money_tree", "Money Tree", 125, "money", "zoomin"),
+    ("golden_mic", "Golden Mic", 150, "money", "pulse"),
+    ("megaphone", "HERE Megaphone", 200, "money", "burst"),
+    ("boss_face", "Boss Face", 250, "money", "zoomin"),
+    ("heart_hustler", "Heart Hustler", 300, "money", "spin"),
+    ("gold_kicks", "Gold Kicks", 400, "money", "spin"),
+    ("money_panda", "Money Panda", 500, "money", "shower"),
+    ("angel_bag", "Angel Bag", 600, "money", "zoomin"),
+    ("champagne_bucket", "Champagne Bucket", 750, "money", "burst"),
+    ("dab_king", "Dab King", 900, "money", "burst"),
+    ("here_diamond", "HERE Diamond", 1000, "money", "zoomin"),
+    ("diamond_dollar", "Diamond Dollar", 1200, "money", "burst"),
+    ("here_crown", "HERE Crown", 1500, "money", "zoomin"),
+    ("burning_cash", "Burning Cash", 1800, "money", "burst"),
+    ("the_vault", "The Vault", 2000, "money", "zoomin"),
+    ("crown_jewel_bag", "Crown Jewel Bag", 2500, "money", "shower"),
+    ("here_juice", "HERE Juice", 3000, "money", "pulse"),
+    ("g_wagon", "G-Wagon", 4000, "money", "flyby"),
+    ("midnight_rider", "Midnight Rider", 5000, "money", "flyby"),
+    ("the_cutlass", "The Cutlass", 7500, "money", "flyby"),
+    ("royal_fortune", "Royal Fortune", 10000, "money", "shower"),
     # --- ❤️ Love (sheet 3) ---
-    ("single_rose", "Single Rose", 1, "love"),
-    ("candle_glow", "Candle Glow", 5, "love"),
-    ("heart_balloons", "Heart Balloons", 10, "love"),
-    ("love_letter", "Love Letter", 15, "love"),
-    ("hug_heart", "Hug Heart", 20, "love"),
-    ("i_love_you", "I Love You", 25, "love"),
-    ("infinity_hearts", "Infinity Hearts", 35, "love"),
-    ("gift_boxes", "Gift Boxes", 50, "love"),
-    ("hoodie_teddy", "Hoodie Teddy", 65, "love"),
-    ("white_teddy", "White Teddy", 75, "love"),
-    ("mystery_gift", "Mystery Gift", 90, "love"),
-    ("rose_dome", "Rose Dome", 100, "love"),
-    ("panda_love", "Panda Love", 125, "love"),
-    ("crowned_bears", "Crowned Bears", 150, "love"),
-    ("rose_box", "Rose Box", 180, "love"),
-    ("forever_roses_bucket", "Forever Roses", 200, "love"),
-    ("heart_bouquet_box", "Heart Bouquet Box", 250, "love"),
-    ("love_script", "Love Script", 300, "love"),
-    ("dripping_heart", "Dripping Crown Heart", 400, "love"),
-    ("couple_goals", "Couple Goals", 500, "love"),
-    ("crowned_heart", "Crowned Heart", 750, "love"),
-    ("rose_heart_wreath", "Rose Heart Wreath", 1000, "love"),
-    ("teddy_king", "Teddy King", 1250, "love"),
-    ("heart_of_roses", "Heart of Roses", 1500, "love"),
+    ("single_rose", "Single Rose", 1, "love", "rise"),
+    ("candle_glow", "Candle Glow", 5, "love", "pulse"),
+    ("heart_balloons", "Heart Balloons", 10, "love", "rise"),
+    ("love_letter", "Love Letter", 15, "love", "flyby"),
+    ("hug_heart", "Hug Heart", 20, "love", "pulse"),
+    ("i_love_you", "I Love You", 25, "love", "pulse"),
+    ("infinity_hearts", "Infinity Hearts", 35, "love", "spin"),
+    ("gift_boxes", "Gift Boxes", 50, "love", "bounce"),
+    ("hoodie_teddy", "Hoodie Teddy", 65, "love", "bounce"),
+    ("white_teddy", "White Teddy", 75, "love", "spin"),
+    ("mystery_gift", "Mystery Gift", 90, "love", "burst"),
+    ("rose_dome", "Rose Dome", 100, "love", "zoomin"),
+    ("panda_love", "Panda Love", 125, "love", "zoomin"),
+    ("crowned_bears", "Crowned Bears", 150, "love", "zoomin"),
+    ("rose_box", "Rose Box", 180, "love", "burst"),
+    ("forever_roses_bucket", "Forever Roses", 200, "love", "shower"),
+    ("heart_bouquet_box", "Heart Bouquet Box", 250, "love", "zoomin"),
+    ("love_script", "Love Script", 300, "love", "flyby"),
+    ("dripping_heart", "Dripping Crown Heart", 400, "love", "zoomin"),
+    ("couple_goals", "Couple Goals", 500, "love", "zoomin"),
+    ("crowned_heart", "Crowned Heart", 750, "love", "pulse"),
+    ("rose_heart_wreath", "Rose Heart Wreath", 1000, "love", "spin"),
+    ("teddy_king", "Teddy King", 1250, "love", "zoomin"),
+    ("heart_of_roses", "Heart of Roses", 1500, "love", "shower"),
     # --- 👑 Luxury (sheet 2, no-logo keepers only) ---
-    ("forever_roses", "Forever Roses Box", 1000, "luxury"),
-    ("cigar_box", "Cigar Box", 1500, "luxury"),
-    ("diamond_rings", "Diamond Rings", 2500, "luxury"),
-    ("gift_card", "Gift Card", 3000, "luxury"),
-    ("ceo_chain", "CEO Chain", 3500, "luxury"),
-    ("grillz_case", "Grillz Case", 4000, "luxury"),
-    ("bulldog_boss", "Bulldog Boss", 5000, "luxury"),
-    ("luxury_lounge", "Luxury Lounge", 6000, "luxury"),
-    ("private_jet", "Private Jet", 12000, "luxury"),
-    ("yacht_night", "Yacht Night", 15000, "luxury"),
-    ("mansion_sunset", "Mansion Sunset", 20000, "luxury"),
+    ("forever_roses", "Forever Roses Box", 1000, "luxury", "shower"),
+    ("cigar_box", "Cigar Box", 1500, "luxury", "zoomin"),
+    ("diamond_rings", "Diamond Rings", 2500, "luxury", "burst"),
+    ("gift_card", "Gift Card", 3000, "luxury", "flyby"),
+    ("ceo_chain", "CEO Chain", 3500, "luxury", "spin"),
+    ("grillz_case", "Grillz Case", 4000, "luxury", "burst"),
+    ("bulldog_boss", "Bulldog Boss", 5000, "luxury", "burst"),
+    ("luxury_lounge", "Luxury Lounge", 6000, "luxury", "zoomin"),
+    ("private_jet", "Private Jet", 12000, "luxury", "flyby"),
+    ("yacht_night", "Yacht Night", 15000, "luxury", "zoomin"),
+    ("mansion_sunset", "Mansion Sunset", 20000, "luxury", "shower"),
 ]
-GIFT_CATALOG = {k: _gift(k, n, t, c) for k, n, t, c in _GIFT_ROWS}
-GIFT_ORDER = [k for k, _n, _t, _c in _GIFT_ROWS]
+GIFT_CATALOG = {k: _gift(k, n, t, c, a) for k, n, t, c, a in _GIFT_ROWS}
+GIFT_ORDER = [k for k, _n, _t, _c, _a in _GIFT_ROWS]
 GIFT_CATEGORIES = [("money", "💰 Money"), ("love", "❤️ Love"),
                    ("luxury", "👑 Luxury")]
 
@@ -12175,12 +12201,14 @@ def _gift_public(gift_key, tickets=None):
         t = tickets if tickets is not None else g["tickets"]
         return {"key": gift_key, "emoji": "", "name": g["name"],
                 "tickets": t, "category": g["category"],
-                "img": g["img"], "anim": _gift_anim_tier(t)}
+                "img": g["img"], "anim": _gift_anim_tier(t),
+                "anim_name": g["anim"]}
     emoji, name = LEGACY_GIFT_LABELS.get(gift_key, ("🎁", "Gift"))
     t = tickets if tickets is not None else 0
     return {"key": gift_key, "emoji": emoji, "name": name,
             "tickets": t, "category": "", "img": "",
-            "anim": _gift_anim_tier(t)}
+            "anim": _gift_anim_tier(t),
+            "anim_name": _gift_anim_name_for(t)}
 
 
 # ---------------- gifter ranks + streamer levels (Build P-GIFTS) ----
@@ -12470,6 +12498,7 @@ async def tickets_page(request: Request):
     return render(request, "tickets.html", {
         "balance": balance, "earned": earned,
         "earned_dollars": _money(_earned_dollars(earned)),
+        "earned_worth": _money2(_earned_dollars(earned)),
         "cashout_min": CASHOUT_MIN_TICKETS,
         "cashout_min_dollars": _money(
             _earned_dollars(CASHOUT_MIN_TICKETS)),
@@ -12639,11 +12668,14 @@ async def earnings_page(request: Request):
     as the wallet page (same min, same hold, one pending at a
     time), and bank setup/update are the existing /payouts routes.
 
-    Money display discipline (Build V): tickets are the unit
-    everywhere; dollars appear ONLY inside the cash-out area —
-    the exact amount of a request being made or in flight, the
-    per-request history amounts, and the total actually paid
-    out. No conversion-rate copy anywhere on this page."""
+    Money display discipline (Build V, as amended by Build RICH —
+    Ken's direct order): on THIS private page the earned-ticket
+    figures carry their dollar worth beside them and the cash-out
+    center states plainly whether the user can cash out now or
+    exactly how many more tickets (and dollars) they need. The
+    worth math is the cash-out math itself (_earned_dollars), so
+    the page can never disagree with a payout. Public profiles
+    still show no money anywhere."""
     user, err = require_login(request)
     if err:
         return err
@@ -12701,8 +12733,17 @@ async def earnings_page(request: Request):
     bank_state = ("ready" if me.get("payout_ready")
                   else "started" if me.get("stripe_acct_id")
                   else "none")
+    cashout_remaining = max(0, CASHOUT_MIN_TICKETS - earned)
     return render(request, "earnings.html", {
         "lifetime": lifetime, "earned": earned,
+        "lifetime_worth": _money2(_earned_dollars(lifetime)),
+        "earned_worth": _money2(_earned_dollars(earned)),
+        "cashout_remaining": cashout_remaining,
+        "cashout_remaining_dollars": _money2(max(
+            0, _earned_dollars(CASHOUT_MIN_TICKETS)
+            - _earned_dollars(earned))),
+        "cashout_min_dollars": _money2(
+            _earned_dollars(CASHOUT_MIN_TICKETS)),
         "streams": streams, "earlier": earlier,
         "pending": ({"tickets": pending["tickets"],
                      "dollars": _money2(pending["dollars_cents"]),
