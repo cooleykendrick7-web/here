@@ -19,6 +19,11 @@
   scroll-snap-stop:always;background:#000;overflow:hidden}
 .mv-cell video{position:absolute;inset:0;width:100%;height:100%;
   object-fit:contain;background:#000;display:block}
+.mv-lock{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);
+  z-index:6;background:rgba(20,20,20,.82);color:#fff;font-weight:800;
+  font-size:16px;padding:14px 20px;border-radius:999px;
+  border:2px dashed rgba(255,255,255,.5);text-decoration:none;
+  white-space:nowrap}
 /* --- top bar --- */
 #mv-topbar{position:absolute;top:0;left:0;right:0;z-index:5;
   padding:10px 12px 18px;pointer-events:none;
@@ -223,6 +228,7 @@
         <option value="friends">👥 Friends only</option>
         <option value="onlyme">🔒 Only me</option>
       </select>
+      {% include "partials/lock_fields.html" %}
       <div style="text-align:right;margin-top:14px">
         <button class="btn" type="submit">Post</button>
       </div>
@@ -494,6 +500,18 @@
     video.setAttribute('playsinline', '');
     video.preload = 'metadata';
     cell.appendChild(video);
+
+    /* Build LOCKED CONTENT: a locked View shows a lock chip over the
+       (sourceless) player; tapping goes to the post page, where the
+       unlock form lives. The server sent no video URL for it. */
+    if (item.lock && !item.lock.open) {
+      var lk = document.createElement('a');
+      lk.className = 'mv-lock';
+      lk.href = '/post/' + item.post_id;
+      lk.textContent = '🔒 Locked · ' + item.lock.price + ' 🎟️'
+        + (item.lock.adult ? ' · 18+' : '') + ' — tap to unlock';
+      cell.appendChild(lk);
+    }
 
     var entry = {item: item, el: cell, video: video};
 

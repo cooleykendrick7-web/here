@@ -37,7 +37,7 @@
 
 <div class="card">
   <div class="section-title">🎙️ Earnings per stream</div>
-  {% if streams or earlier or page_gifts %}
+  {% if streams or earlier or page_gifts or locked_content %}
   <div style="margin-top:4px">
     {% for s in streams %}
     <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
@@ -58,6 +58,13 @@
       <span><strong>🎁 Page gifts</strong><br>
       <span style="color:var(--muted);font-size:12.5px">{{ page_gifts.gifts }} gift{% if page_gifts.gifts != 1 %}s{% endif %} received · sent straight to your profile and your Pages — no live needed</span></span>
       <span style="font-weight:800;white-space:nowrap">{{ page_gifts.tickets }} 🎟️</span>
+    </div>
+    {% endif %}
+    {% if locked_content %}
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <span><strong>🔒 Locked content</strong><br>
+      <span style="color:var(--muted);font-size:12.5px">{{ locked_content.sales }} unlock{% if locked_content.sales != 1 %}s{% endif %} sold · fans paid to open your locked posts and messages</span></span>
+      <span style="font-weight:800;white-space:nowrap">{{ locked_content.tickets }} 🎟️</span>
     </div>
     {% endif %}
   </div>

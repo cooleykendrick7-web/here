@@ -86,7 +86,34 @@
           <span class="listing-meta"><span class="listing-title">{{ m.listing.title|e }}</span><span class="listing-price">{{ m.listing.price|e }}</span></span>
         </a>
         {% endif %}
+        {% if m.locked %}
+        {# Build LOCKED CONTENT: open → the media itself, served by
+           the /locked/dm gate; closed → a lock card. The server
+           emitted no media URL and no caption for a closed lock. #}
+        {% if m.locked.open %}
+        <div class="lock-media">
+          {% if m.locked.is_video %}<video class="story-clip" src="{{ m.locked.media_url|e }}" controls playsinline preload="metadata"></video>
+          {% else %}<img class="story-clip" src="{{ m.locked.media_url|e }}" alt="Unlocked content">{% endif %}
+          <div class="story-card-label">🔓 Locked content · {{ m.locked.price }} 🎟️{% if m.locked.adult %} · 18+{% endif %}</div>
+        </div>
+        {% else %}
+        <div class="lock-card" style="border:2px dashed var(--border);border-radius:14px;padding:18px 14px;text-align:center;min-width:210px;background:var(--glass,rgba(127,127,127,.06))">
+          <div style="font-size:32px;line-height:1">🔒</div>
+          <div style="font-weight:800;margin-top:6px">Locked content</div>
+          <div style="color:var(--muted);font-size:13px;margin-top:2px">Unlock it once — it's yours forever.</div>
+          {% if m.locked.adult %}<div style="margin-top:6px"><span class="kind-tag" style="background:#7f1d1d;color:#fff">18+ content</span></div>{% endif %}
+          <form method="post" action="/messages/{{ m.id }}/unlock" style="margin-top:10px">
+            {% if m.locked.adult %}
+            <label style="display:block;font-size:13px;margin-bottom:6px"><input type="checkbox" name="confirm_adult" value="1" required> I'm 18 or older</label>
+            {% endif %}
+            <button type="submit" class="btn btn-sm">🔓 Unlock for {{ m.locked.price }} 🎟️</button>
+          </form>
+        </div>
+        {% endif %}
+        {% endif %}
+        {% if m.body %}
         <div class="msg-bub {% if m.mine %}msg-mine{% else %}msg-theirs{% endif %}">{{ m.body|e }}</div>
+        {% endif %}
         <div class="msg-time">{{ m.created_at|e }}<button type="button" class="mmenu-btn" title="Message options" aria-label="Message options"
           data-dtitle="Message options" data-dlabel="🗑 Delete this message"
           data-dconfirm="Delete this message? It disappears only for you — the other person keeps their copy."
@@ -102,6 +129,26 @@
     <input type="text" name="body" placeholder="Message {{ friend.name|e }}…" required maxlength="2000" autocomplete="off">
     <button type="submit" class="btn btn-sm">Send</button>
   </form>
+
+  {% if user and user.creator_mode %}
+  {# Build LOCKED CONTENT: the creator-only paid-attachment form.
+     The server re-checks Creator Mode + price on every send. #}
+  <form action="/messages/{{ friend.id }}" method="post" enctype="multipart/form-data"
+        style="margin-top:10px;border:1px dashed var(--border);border-radius:10px;padding:10px 12px">
+    <label class="fld" style="margin-top:0">🔒 Send locked content — {{ friend.name|e }} pays to open it</label>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="file" name="lock_media" accept="image/*,video/mp4,video/quicktime,video/webm" required>
+      <input type="number" name="lock_price" min="5" max="5000" step="1" inputmode="numeric" required
+             placeholder="Price 🎟️ (5–5,000)"
+             style="border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:14px;max-width:170px">
+      <label style="font-size:14px"><input type="checkbox" name="lock_adult" value="1"> 18+</label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <input type="text" name="body" placeholder="Caption (hidden until they unlock)" maxlength="2000" autocomplete="off" style="flex:1">
+      <button type="submit" class="btn btn-sm">Send locked</button>
+    </div>
+  </form>
+  {% endif %}
 </div>
 
 {% endblock %}
