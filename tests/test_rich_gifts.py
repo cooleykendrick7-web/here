@@ -293,11 +293,13 @@ for needle, label in [
         ("hideBoostChip();", "chip cleared (sheet close / expiry)")]:
     check(f"live page: {label} present", needle in page)
 check("live page: sender renders locally on BOTH send paths",
-      page.count("renderLocalGift(g, d.gift_id)") == 2,
-      str(page.count("renderLocalGift(g, d.gift_id)")))
+      page.count("renderLocalGift(g, d.gift_id, d)") == 2,
+      str(page.count("renderLocalGift(g, d.gift_id, d)")))
 check("live page: boost reuses the normal /gift send path",
-      page.count("post('/gift', {gift_key: g.key})") == 2,
-      str(page.count("post('/gift', {gift_key: g.key})")))
+      page.count("post('/gift', {gift_key: g.key, "
+                 "target_user_id: giftTargetId})") == 2,
+      str(page.count("post('/gift', {gift_key: g.key, "
+                     "target_user_id: giftTargetId})")))
 check("live page: the old sender-suppression line is gone",
       "lastGiftId = Math.max(lastGiftId, d.gift_id)" not in page)
 check("live page: boost chip follows the last sent gift (state var)",
