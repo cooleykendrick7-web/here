@@ -20,14 +20,14 @@
 <meta property="og:site_name" content="HERE">
 <meta property="og:title" content="{% block og_title %}HERE — Come Get HERE{% endblock %}">
 <meta property="og:description" content="{% block og_description %}HERE is where the fun lives — go live with your people, gift streamers, battle in Live Showdowns, play games, post stories, buy &amp; sell. Free to join at joincomehere.com{% endblock %}">
-{% block og_image_block %}<meta property="og:image" content="https://joincomehere.com/static/og-logo.jpg">
+{% block og_image_block %}<meta property="og:image" content="https://joincomehere.com/static/og-share.jpg">
 <meta property="og:image:width" content="1320">
-<meta property="og:image:height" content="1320">
+<meta property="og:image:height" content="2417">
 <meta property="og:image:type" content="image/jpeg">{% endblock %}
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="{{ self.og_title() }}">
 <meta name="twitter:description" content="{{ self.og_description() }}">
-<meta name="twitter:image" content="{% block twitter_image %}https://joincomehere.com/static/og-logo.jpg{% endblock %}">
+<meta name="twitter:image" content="{% block twitter_image %}https://joincomehere.com/static/og-share.jpg{% endblock %}">
 <style>
 :root{
   --red:#d41f2e;
@@ -57,6 +57,10 @@
      the logo's --red is separate and NEVER follows the accent). */
   --glass-rgb:255,255,255;
   --look-accent:#d41f2e;
+  /* Build SHINE: the accent as rgba() components, for the glows in
+     the lit-glass block at the end of this stylesheet. render()
+     overrides it per viewer alongside --look-accent. */
+  --look-accent-rgb:212,31,46;
 }
 *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 body{background:var(--bg);color:#1c1e21}
@@ -850,6 +854,206 @@ button.menu-item{background:none;border:none;width:100%;text-align:left;
   .menu-search input:focus{border-color:var(--red)}
   .mobmenu{top:64px;left:8px;right:8px;width:auto}
 }
+
+/* ================= Build SHINE: the lit-glass finish =================
+   Ken's target picture, as a pure visual layer over the GLASS /
+   LOOKS / CLEAR semantics (no fill or alpha changes anywhere):
+   deeply frosted cards with light caught along the top edge and
+   the accent glowing around the rim, the header as ONE floating
+   glass strip of orb buttons, red-glass action pills, tinted-glass
+   chips, a glowing ring on the profile avatar.
+   THE GATE: every rule below keys off the scheme classes render()
+   stamps — scheme-glass / scheme-mix / scheme-solid on <body>
+   (the VIEWER's scheme) and on the profile .spot-scope (the
+   OWNER's scheme). Scope selectors outrank the body ones, so a
+   profile shines — or doesn't — by its owner, never its visitor;
+   the RESTORE rules at the bottom hand a non-glass scope back its
+   plain surfaces when the visitor's own glass would leak in.
+   SOLID gets no shine anywhere. In MIX only the small/soft
+   surfaces (the --glass-alpha-soft family) shine; cards stay
+   clean solid. The CLEAR slider still owns the fills: at
+   --glass-alpha:0 the fills vanish and the sheen, borders, blur
+   and rims below REMAIN — frosted outlines that still shine.
+   Small surfaces never gain backdrop-filter (phone perf): sheen
+   + lit border only. The live page's --lg glass is untouched. */
+
+/* --- deeper frost: card family + sheets (glass) --- */
+@supports ((backdrop-filter:blur(20px)) or (-webkit-backdrop-filter:blur(20px))){
+body.scheme-glass .card, body.scheme-glass .page-card, body.scheme-glass .stat-card,
+body.scheme-glass .topbar, body.scheme-glass .mobmenu, body.scheme-glass .aud-popup,
+body.scheme-glass #cmenu-sheet, body.scheme-glass #dmenu-sheet,
+.spot-scope.scheme-glass .card, .spot-scope.scheme-glass .page-card,
+.spot-scope.scheme-glass .stat-card{
+  backdrop-filter:blur(20px) saturate(1.35);-webkit-backdrop-filter:blur(20px) saturate(1.35)}}
+
+/* --- the lit edge: top sheen + accent rim + halo (glass) --- */
+body.scheme-glass .card, body.scheme-glass .page-card, body.scheme-glass .stat-card,
+body.scheme-glass table.admin, body.scheme-glass .tag-suggest, body.scheme-glass .react-picker,
+body.scheme-glass .aud-popup, body.scheme-glass #cmenu-sheet, body.scheme-glass #dmenu-sheet,
+body.scheme-glass .mobmenu,
+.spot-scope.scheme-glass .card, .spot-scope.scheme-glass .page-card,
+.spot-scope.scheme-glass .stat-card, .spot-scope.scheme-glass table.admin,
+.spot-scope.scheme-glass .tag-suggest, .spot-scope.scheme-glass .react-picker{
+  border:1px solid rgba(255,255,255,.26);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.38),
+    inset 0 -1px 0 rgba(var(--look-accent-rgb,212,31,46),.35),
+    0 12px 34px rgba(0,0,0,.38),
+    0 0 26px rgba(var(--look-accent-rgb,212,31,46),.10)}
+
+/* --- header: one floating glass strip (glass) --- */
+body.scheme-glass .topbar{top:10px;left:10px;right:10px;width:auto;border-radius:20px;
+  border:1px solid rgba(255,255,255,.26);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.38),
+    inset 0 -1px 0 rgba(var(--look-accent-rgb,212,31,46),.35),
+    0 12px 34px rgba(0,0,0,.38),
+    0 0 26px rgba(var(--look-accent-rgb,212,31,46),.10)}
+body.scheme-glass .mobmenu{top:82px}
+
+/* --- header orbs: circular glass, lit rim (glass + mix small) --- */
+body.scheme-glass .nav-ic, body.scheme-mix .nav-ic{
+  border:1px solid rgba(255,255,255,.26);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.38),
+    0 0 14px rgba(var(--look-accent-rgb,212,31,46),.10)}
+@keyframes shinepulse{
+  0%,100%{box-shadow:inset 0 1px 0 rgba(255,255,255,.38),
+    0 0 10px rgba(var(--look-accent-rgb,212,31,46),.35)}
+  50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.38),
+    0 0 24px rgba(var(--look-accent-rgb,212,31,46),.65)}}
+body.scheme-glass .nav-ic.nav-live, body.scheme-mix .nav-ic.nav-live{
+  animation:shinepulse 1.6s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){
+  body.scheme-glass .nav-ic.nav-live, body.scheme-mix .nav-ic.nav-live{
+    animation:none;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.38),
+      0 0 14px rgba(var(--look-accent-rgb,212,31,46),.35)}}
+
+/* --- buttons: glass pills (glass); Go Live = red glass --- */
+body.scheme-glass .btn, .spot-scope.scheme-glass .btn{
+  background:rgba(var(--look-accent-rgb,212,31,46),.20);
+  border:1px solid rgba(255,255,255,.26);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.38),
+    0 0 18px rgba(var(--look-accent-rgb,212,31,46),.22);
+  text-shadow:0 1px 2px rgba(0,0,0,.30)}
+body.scheme-glass .btn:hover, .spot-scope.scheme-glass .btn:hover{
+  background:rgba(var(--look-accent-rgb,212,31,46),.32)}
+body.scheme-glass .btn-ghost, .spot-scope.scheme-glass .btn-ghost{
+  border:1px solid rgba(255,255,255,.26);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.38),
+    0 0 14px rgba(var(--look-accent-rgb,212,31,46),.08)}
+body.scheme-glass #golive-btn{
+  background:rgba(212,31,46,.34);
+  border:1px solid rgba(255,255,255,.30);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.42),
+    0 10px 26px rgba(0,0,0,.35),
+    0 0 30px rgba(212,31,46,.45)}
+body.scheme-glass #golive-btn:hover{background:rgba(212,31,46,.48)}
+
+/* --- chips + small surfaces: sheen only, NO blur (glass + mix) --- */
+body.scheme-glass .kind-tab, body.scheme-mix .kind-tab,
+body.scheme-glass .picker-chip, body.scheme-mix .picker-chip,
+body.scheme-glass .poll-opt-btn, body.scheme-mix .poll-opt-btn,
+body.scheme-glass .chip, body.scheme-mix .chip,
+.spot-scope.scheme-glass .kind-tab, .spot-scope.scheme-mix .kind-tab,
+.spot-scope.scheme-glass .picker-chip, .spot-scope.scheme-mix .picker-chip,
+.spot-scope.scheme-glass .poll-opt-btn, .spot-scope.scheme-mix .poll-opt-btn,
+.spot-scope.scheme-glass .chip, .spot-scope.scheme-mix .chip{
+  border-color:rgba(255,255,255,.30);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.30)}
+body.scheme-glass .kind-tag, body.scheme-mix .kind-tag,
+body.scheme-glass .comment .cbub, body.scheme-mix .comment .cbub,
+body.scheme-glass .msg-theirs, body.scheme-mix .msg-theirs,
+.spot-scope.scheme-glass .kind-tag, .spot-scope.scheme-mix .kind-tag,
+.spot-scope.scheme-glass .comment .cbub, .spot-scope.scheme-mix .comment .cbub{
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.30)}
+
+/* --- profile avatar: accent glow ring (glass-scoped profiles) --- */
+.spot-scope.scheme-glass .avatar.av-100:not(.av-gold),
+.spot-scope.scheme-glass .av-ph.av-100:not(.av-gold){
+  box-shadow:0 0 0 2px rgba(255,255,255,.22),
+    0 0 20px rgba(var(--look-accent-rgb,212,31,46),.45)}
+
+/* --- RESTORE: a non-glass profile scope stays plain even when
+       the visitor's own glass is shining around it. Values are
+       the surfaces' own base values from earlier in this sheet. --- */
+.spot-scope.scheme-solid .card, .spot-scope.scheme-mix .card,
+.spot-scope.scheme-solid .page-card, .spot-scope.scheme-mix .page-card{
+  border:1px solid rgba(255,255,255,.55);
+  box-shadow:0 4px 24px rgba(13,16,23,.08)}
+.spot-scope.scheme-solid .stat-card, .spot-scope.scheme-mix .stat-card{
+  border:none;box-shadow:0 1px 2px rgba(0,0,0,.1)}
+.spot-scope.scheme-solid .tag-suggest, .spot-scope.scheme-mix .tag-suggest{
+  border:1px solid var(--border);box-shadow:0 6px 18px rgba(0,0,0,.2)}
+.spot-scope.scheme-solid .react-picker, .spot-scope.scheme-mix .react-picker{
+  border:1px solid var(--border);box-shadow:0 4px 14px rgba(0,0,0,.18)}
+@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){
+.spot-scope.scheme-solid .card, .spot-scope.scheme-mix .card,
+.spot-scope.scheme-solid .page-card, .spot-scope.scheme-mix .page-card,
+.spot-scope.scheme-solid .stat-card, .spot-scope.scheme-mix .stat-card{
+  backdrop-filter:blur(6px) saturate(1.15);-webkit-backdrop-filter:blur(6px) saturate(1.15)}}
+.spot-scope.scheme-solid .btn, .spot-scope.scheme-mix .btn{
+  background:var(--look-accent,var(--red));border:none;
+  box-shadow:none;text-shadow:none}
+.spot-scope.scheme-solid .btn:hover, .spot-scope.scheme-mix .btn:hover{
+  background:var(--red-dark)}
+.spot-scope.scheme-solid .btn-ghost, .spot-scope.scheme-mix .btn-ghost{
+  border:none;box-shadow:none}
+.spot-scope.scheme-solid .kind-tab, .spot-scope.scheme-solid .picker-chip,
+.spot-scope.scheme-solid .poll-opt-btn, .spot-scope.scheme-solid .chip{
+  border-color:var(--border);box-shadow:none}
+.spot-scope.scheme-solid .kind-tag, .spot-scope.scheme-solid .comment .cbub,
+.spot-scope.scheme-solid .msg-theirs{box-shadow:none}
+
+/* --- kill switch: reduced transparency = shine fully off --- */
+@media (prefers-reduced-transparency: reduce){
+  body.scheme-glass .card, body.scheme-glass .page-card,
+  .spot-scope.scheme-glass .card, .spot-scope.scheme-glass .page-card{
+    backdrop-filter:none;-webkit-backdrop-filter:none;
+    border:1px solid rgba(255,255,255,.55);
+    box-shadow:0 4px 24px rgba(13,16,23,.08)}
+  body.scheme-glass .stat-card, .spot-scope.scheme-glass .stat-card{
+    backdrop-filter:none;-webkit-backdrop-filter:none;
+    border:none;box-shadow:0 1px 2px rgba(0,0,0,.1)}
+  body.scheme-glass table.admin, body.scheme-glass .tag-suggest,
+  body.scheme-glass .react-picker, body.scheme-glass .aud-popup,
+  body.scheme-glass #cmenu-sheet, body.scheme-glass #dmenu-sheet,
+  body.scheme-glass .mobmenu,
+  .spot-scope.scheme-glass table.admin, .spot-scope.scheme-glass .tag-suggest,
+  .spot-scope.scheme-glass .react-picker{
+    backdrop-filter:none;-webkit-backdrop-filter:none;
+    border:1px solid var(--border);
+    box-shadow:0 10px 34px rgba(0,0,0,.4)}
+  body.scheme-glass .tag-suggest, .spot-scope.scheme-glass .tag-suggest{
+    box-shadow:0 6px 18px rgba(0,0,0,.2)}
+  body.scheme-glass .react-picker, .spot-scope.scheme-glass .react-picker{
+    box-shadow:0 4px 14px rgba(0,0,0,.18)}
+  body.scheme-glass .mobmenu{border:1px solid #3d3d3d;
+    box-shadow:0 12px 32px rgba(0,0,0,.55)}
+  body.scheme-glass .topbar{top:0;left:0;right:auto;width:100%;
+    border-radius:0;border:none;backdrop-filter:none;
+    -webkit-backdrop-filter:none;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  body.scheme-glass .nav-ic, body.scheme-mix .nav-ic{border:none;box-shadow:none}
+  body.scheme-glass .btn, .spot-scope.scheme-glass .btn{
+    box-shadow:none;text-shadow:none}
+  body.scheme-glass .btn-ghost, .spot-scope.scheme-glass .btn-ghost{
+    border:none;box-shadow:none}
+  body.scheme-glass #golive-btn{box-shadow:0 8px 22px rgba(0,0,0,.35)}
+  body.scheme-glass .kind-tab, body.scheme-mix .kind-tab,
+  body.scheme-glass .picker-chip, body.scheme-mix .picker-chip,
+  body.scheme-glass .poll-opt-btn, body.scheme-mix .poll-opt-btn,
+  body.scheme-glass .chip, body.scheme-mix .chip,
+  body.scheme-glass .kind-tag, body.scheme-mix .kind-tag,
+  body.scheme-glass .comment .cbub, body.scheme-mix .comment .cbub,
+  body.scheme-glass .msg-theirs, body.scheme-mix .msg-theirs,
+  .spot-scope.scheme-glass .kind-tab, .spot-scope.scheme-mix .kind-tab,
+  .spot-scope.scheme-glass .picker-chip, .spot-scope.scheme-mix .picker-chip,
+  .spot-scope.scheme-glass .poll-opt-btn, .spot-scope.scheme-mix .poll-opt-btn,
+  .spot-scope.scheme-glass .chip, .spot-scope.scheme-mix .chip,
+  .spot-scope.scheme-glass .kind-tag, .spot-scope.scheme-mix .kind-tag,
+  .spot-scope.scheme-glass .comment .cbub, .spot-scope.scheme-mix .comment .cbub{
+    border-color:var(--border);box-shadow:none}
+  .spot-scope.scheme-glass .avatar.av-100:not(.av-gold),
+  .spot-scope.scheme-glass .av-ph.av-100:not(.av-gold){box-shadow:none}}
+/* ================= /Build SHINE ================= */
 </style>
 {% block head_extra %}{% endblock %}
 {% if page_bg %}
@@ -858,7 +1062,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 </style>
 {% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_look_classes %} {{ viewer_look_classes }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }};--glass-alpha-soft:{{ viewer_glass_alpha_soft or '0.82' }};--glass-rgb:{{ viewer_glass_rgb or '255,255,255' }};--look-accent:{{ viewer_look_accent or '#d41f2e' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
+<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_look_classes %} {{ viewer_look_classes }}{% endif %}{% if viewer_scheme_class %} {{ viewer_scheme_class }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }};--glass-alpha-soft:{{ viewer_glass_alpha_soft or '0.82' }};--glass-rgb:{{ viewer_glass_rgb or '255,255,255' }};--look-accent:{{ viewer_look_accent or '#d41f2e' }};--look-accent-rgb:{{ viewer_look_accent_rgb or '212,31,46' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
 
 <header class="topbar">
   <a class="logo" href="/home">HERE</a>
@@ -866,7 +1070,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <input type="text" name="q" placeholder="Search HERE" value="{{ q|default('')|e }}" autocomplete="off">
   </form>
   <nav class="topnav">
-    <a class="nav-ic" href="/lives" title="Lives">🔴</a>
+    <a class="nav-ic nav-live" href="/lives" title="Lives">🔴</a>
     <a class="nav-ic" href="/market" title="Market">🛒</a>
     <a class="nav-ic" href="/messages" title="Messages">💬{% if unread_msgs %}<span class="badge">{{ unread_msgs }}</span>{% endif %}</a>
     <a class="nav-ic" href="/notifications" title="Notifications">🔔{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>

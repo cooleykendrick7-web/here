@@ -11,14 +11,14 @@
 <meta property="og:title" content="{{ profile.name|e }} on HERE">
 <meta property="og:description" content="{{ profile.name|e }} is on HERE — join to see their posts, stories and lives">
 {% if og_image %}<meta property="og:image" content="{{ og_image|e }}">
-{% else %}<meta property="og:image" content="https://joincomehere.com/static/og-logo.jpg">
+{% else %}<meta property="og:image" content="https://joincomehere.com/static/og-share.jpg">
 <meta property="og:image:width" content="1320">
-<meta property="og:image:height" content="1320">
+<meta property="og:image:height" content="2417">
 <meta property="og:image:type" content="image/jpeg">{% endif %}
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="{{ profile.name|e }} on HERE">
 <meta name="twitter:description" content="{{ profile.name|e }} is on HERE — join to see their posts, stories and lives">
-<meta name="twitter:image" content="{{ og_image|e if og_image else 'https://joincomehere.com/static/og-logo.jpg' }}">
+<meta name="twitter:image" content="{{ og_image|e if og_image else 'https://joincomehere.com/static/og-share.jpg' }}">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 24px 110px}
@@ -29,6 +29,14 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
    on-dark / on-light class is the server-side luminance verdict, so
    the owner's name and words stay readable on their own color. */
 .card.look-on-dark,.card.look-on-light{background:rgb(var(--glass-rgb,255,255,255))}
+/* Build SHINE: a glass owner's public card gets the lit-glass edge
+   (the accent triplet rides inline via the look vars). */
+.card.scheme-glass{border:1px solid rgba(255,255,255,.26);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.38),inset 0 -1px 0 rgba(var(--look-accent-rgb,212,31,46),.35),0 12px 34px rgba(0,0,0,.38),0 0 26px rgba(var(--look-accent-rgb,212,31,46),.10)}
+.card.scheme-glass .avatar,.card.scheme-glass .av-ph{box-shadow:0 0 0 2px rgba(255,255,255,.22),0 0 20px rgba(var(--look-accent-rgb,212,31,46),.45)}
+@media (prefers-reduced-transparency: reduce){
+.card.scheme-glass{border:1px solid #2a2a2a;box-shadow:0 8px 32px rgba(212,31,46,.15)}
+.card.scheme-glass .avatar,.card.scheme-glass .av-ph{box-shadow:none}}
 .card.look-on-dark{color:#f4f4f6}
 .card.look-on-light{color:#1c1e21}
 .card.look-on-light .meta{color:#5a5e66}
@@ -52,7 +60,7 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 </head>
 <body>
 <div class="brand">HERE</div>
-<div class="card{% if profile.look_classes %} {{ profile.look_classes }}{% endif %}"{% if profile.look_style %} style="{{ profile.look_style }}"{% endif %}>
+<div class="card{% if profile.look_classes %} {{ profile.look_classes }}{% endif %}{% if profile.look_scheme_class %} {{ profile.look_scheme_class }}{% endif %}"{% if profile.look_style %} style="{{ profile.look_style }}"{% endif %}>
   {% if profile.avatar %}<img class="avatar" src="{{ profile.avatar|e }}" alt="">
   {% else %}<span class="av-ph">{{ profile.name[:1]|upper|e }}</span>{% endif %}
   {% if profile.spot_name %}<div class="spot">{{ profile.spot_name|e }}</div>{% endif %}
