@@ -11,14 +11,14 @@
 <meta property="og:title" content="{{ profile.name|e }} on HERE">
 <meta property="og:description" content="{{ profile.name|e }} is on HERE — join to see their posts, stories and lives">
 {% if og_image %}<meta property="og:image" content="{{ og_image|e }}">
-{% else %}<meta property="og:image" content="https://joincomehere.com/static/og-share.jpg">
+{% else %}<meta property="og:image" content="https://joincomehere.com/static/og-logo.jpg">
 <meta property="og:image:width" content="1320">
-<meta property="og:image:height" content="2417">
+<meta property="og:image:height" content="1320">
 <meta property="og:image:type" content="image/jpeg">{% endif %}
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="{{ profile.name|e }} on HERE">
 <meta name="twitter:description" content="{{ profile.name|e }} is on HERE — join to see their posts, stories and lives">
-<meta name="twitter:image" content="{{ og_image|e if og_image else 'https://joincomehere.com/static/og-share.jpg' }}">
+<meta name="twitter:image" content="{{ og_image|e if og_image else 'https://joincomehere.com/static/og-logo.jpg' }}">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 24px 110px}
