@@ -365,6 +365,36 @@
 #gift-boost .gb-art{display:flex;align-items:center}
 #gift-boost .gb-art img{width:32px;height:32px;object-fit:contain}
 #gift-boost-count{color:#ffd97a}
+/* ===== Build PANEL GIFTS: tap a panel tile to aim your gifts =====
+   The selected panelist's tile wears an animated rainbow glow —
+   an inset ring + outer halo cycling the hue wheel (box-shadow
+   only: no layout shift, no filters on the video, cheap to run).
+   Reduced motion: one steady gold glow instead of the cycle.
+   .gift-flash is the one-shot ring a tile flashes when a gift
+   lands on that panelist. */
+.live-tile.selectable{cursor:pointer}
+.live-tile.panel-selected{animation:panelrainbow 2.8s linear infinite}
+@keyframes panelrainbow{
+  0%{box-shadow:inset 0 0 0 3px #ff4d4d,0 0 16px 4px rgba(255,77,77,.55)}
+  17%{box-shadow:inset 0 0 0 3px #ff9f1a,0 0 16px 4px rgba(255,159,26,.55)}
+  33%{box-shadow:inset 0 0 0 3px #ffe93d,0 0 16px 4px rgba(255,233,61,.55)}
+  50%{box-shadow:inset 0 0 0 3px #3dff7a,0 0 16px 4px rgba(61,255,122,.55)}
+  67%{box-shadow:inset 0 0 0 3px #3db9ff,0 0 16px 4px rgba(61,185,255,.55)}
+  83%{box-shadow:inset 0 0 0 3px #b13dff,0 0 16px 4px rgba(177,61,255,.55)}
+  100%{box-shadow:inset 0 0 0 3px #ff4d4d,0 0 16px 4px rgba(255,77,77,.55)}}
+.live-tile.gift-flash{animation:panelflash 1.2s ease-out}
+@keyframes panelflash{
+  0%{box-shadow:inset 0 0 0 3px rgba(255,215,110,.95),0 0 26px 10px rgba(255,215,110,.6)}
+  100%{box-shadow:inset 0 0 0 0 rgba(255,215,110,0),0 0 0 0 rgba(255,215,110,0)}}
+@media (prefers-reduced-motion: reduce){
+  .live-tile.panel-selected{animation:none;
+    box-shadow:inset 0 0 0 3px #ffd76e,0 0 16px 4px rgba(255,215,110,.5)}
+  .live-tile.gift-flash{animation:none}}
+.gift-target{align-self:center;font-size:12.5px;font-weight:700;
+  color:#ffd97a;background:rgba(20,20,22,.55);
+  border:1px solid rgba(255,255,255,.25);padding:6px 10px;
+  border-radius:999px;white-space:nowrap}
+.gift-target[hidden]{display:none}
 /* ===== controls / action bar ===== */
 .live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
 .live-ctl{background:var(--lg-bg);color:#fff;border:var(--lg-border);border-radius:999px;
@@ -628,6 +658,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
   <!-- watcher -->
   <button type="button" class="live-ctl" id="ctl-gift" hidden>🎁 Gift</button>
+  <span class="gift-target" id="gift-target" hidden>🎁 Gifting: host</span>
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
   {% if role == 'watcher' %}<button type="button" class="live-ctl" id="ctl-minimize" hidden>➖ Minimize</button>{% endif %}
   <button type="button" class="live-ctl" id="ctl-join" hidden>🙋 Ask to join panel</button>
@@ -898,6 +929,11 @@ function liveRoomDiff(prev, next){
                                      is suppressed here, never the cursor */
   var boostGift = null, boostCount = 0, boostTimer = null,
       boostBusy = false, boostLastAt = 0;   /* Build RICH Boost chip */
+  var giftTargetId = (B.host && B.host.id) || null,
+      giftTargetName = (B.host && B.host.name) || '';
+      /* Build PANEL GIFTS: who my gifts aim at — the host until I
+         tap another panelist's tile; reset to the host by the
+         state poll when my target leaves the panel. */
   var giftSheetOpen = false;
   var armedGiftKey = null, armedGiftAt = 0;   /* ≥500 two-tap confirm */
   var giftBannerTimer = null;
@@ -1140,6 +1176,10 @@ function liveRoomDiff(prev, next){
     el.appendChild(label);
     el.appendChild(menuBtn);
     el.appendChild(roleChip);
+    /* Build PANEL GIFTS: tapping a tile aims my gifts at that
+       panelist (the tile's own buttons stopPropagation, so this
+       only fires for plain tile taps). */
+    el.addEventListener('click', function(){ selectGiftTarget(uid); });
     gridEl.appendChild(el);
     tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
                   badges: badges, srcTag: srcTag, menuBtn: menuBtn,
@@ -4053,6 +4093,70 @@ function liveRoomDiff(prev, next){
     var bal = $('gift-balance');
     if (bal) bal.textContent = myTickets;
   }
+  /* ---- Build PANEL GIFTS: gift targeting ----
+     Tap a panel tile to aim every gift (sheet sends AND Boost
+     re-sends) at that panelist; the server only ever pays people
+     who are ON the panel, so a target who leaves mid-show falls
+     back to the host here (poll sync) and is refused there. */
+  function hostUid(){ return (B.host && B.host.id) || null; }
+  function canAimGifts(){ return !!B.me && B.me !== hostUid(); }
+  function paintGiftTarget(){
+    Object.keys(tiles).forEach(function(uid){
+      var T = tiles[uid];
+      if (!T) return;
+      var mine = +uid === B.me;
+      T.el.classList.toggle('selectable', canAimGifts() && !mine);
+      T.el.classList.toggle('panel-selected',
+        canAimGifts() && !mine && +uid === giftTargetId);
+    });
+    var lab = $('gift-target');
+    if (lab){
+      lab.hidden = !canAimGifts();
+      lab.textContent = '🎁 Gifting: ' + (giftTargetName || 'host');
+    }
+    var st = $('gift-sheet-target');
+    if (st) st.textContent = giftTargetName || 'host';
+  }
+  function selectGiftTarget(uid){
+    if (!canAimGifts()) return;
+    if (uid === B.me) return;          /* my own tile is never a target */
+    if (!panelById[uid]) return;      /* panel members only */
+    giftTargetId = uid;
+    giftTargetName = panelById[uid].name || '';
+    paintGiftTarget();
+  }
+  function resetGiftTarget(){
+    giftTargetId = hostUid();
+    var hm = giftTargetId ? panelById[giftTargetId] : null;
+    giftTargetName = hm ? (hm.name || '')
+      : ((B.host && B.host.name) || '');
+    paintGiftTarget();
+  }
+  function syncGiftTarget(){
+    /* Every state poll: a target who left the panel resets to
+       the host BEFORE the next send; the name follows renames. */
+    if (!canAimGifts()) return;
+    if (!giftTargetId || !panelById[giftTargetId]) resetGiftTarget();
+    else giftTargetName = panelById[giftTargetId].name
+      || giftTargetName;
+    paintGiftTarget();
+  }
+  function giftTargetRefused(d){
+    /* The send was refused because my target left the panel —
+       fall back to the host; the caller shows the error plainly. */
+    if (d && d.error && d.error.indexOf('panel') !== -1
+        && giftTargetId !== hostUid()) resetGiftTarget();
+  }
+  function flashGiftTile(uid){
+    if (!uid) return;
+    var T = tiles[uid];
+    if (!T) return;
+    T.el.classList.remove('gift-flash');
+    void T.el.offsetWidth;
+    T.el.classList.add('gift-flash');
+    setTimeout(function(){ T.el.classList.remove('gift-flash'); },
+               1300);
+  }
   function giftSenderLabel(g){
     var r = g.sender_rank;
     return (r && r.rank >= 1 && r.label)
@@ -4198,7 +4302,8 @@ function liveRoomDiff(prev, next){
     applyGiftAnim(art, g, 3000);
     if (giftAnimName(g) === 'burst') giftBurstParticles(b);
     $('live-gift-banner-text').textContent =
-      giftSenderLabel(g) + ' sent ' + g.name + '!';
+      giftSenderLabel(g) + ' sent ' + g.name
+      + (g.recipient_name ? ' to ' + g.recipient_name : '') + '!';
     b.hidden = false;
     if (giftBannerTimer) clearTimeout(giftBannerTimer);
     giftBannerTimer = setTimeout(function(){ b.hidden = true; }, 3000);
@@ -4213,7 +4318,8 @@ function liveRoomDiff(prev, next){
     applyGiftAnim(im, g, 3200);
     if (giftAnimName(g) === 'burst') giftBurstParticles(t);
     $('live-gift-takeover-text').textContent =
-      giftSenderLabel(g) + ' sent ' + g.name + '!';
+      giftSenderLabel(g) + ' sent ' + g.name
+      + (g.recipient_name ? ' to ' + g.recipient_name : '') + '!';
     t.hidden = false;
     if (giftTakeoverTimer) clearTimeout(giftTakeoverTimer);
     giftTakeoverTimer = setTimeout(function(){
@@ -4233,17 +4339,22 @@ function liveRoomDiff(prev, next){
     else if (tier === 3 || (g.tickets || 0) >= 100) showGiftBanner(g);
     else if (tier === 2) spawnGiftPop(g);
     else spawnGiftFloat(g);
-    addNotice('🎁 ' + giftSenderLabel(g) + ' sent ' + g.name);
+    addNotice('🎁 ' + giftSenderLabel(g) + ' sent ' + g.name
+      + (g.recipient_name ? ' to ' + g.recipient_name : ''));
+    flashGiftTile(g.recipient_id);
   }
   /* Sender parity (Build RICH): my own gift plays on MY screen the
      moment the send lands — rendered locally from the POST's gift
      id, and the state-poll echo of that same id is suppressed by
      seenGiftIds in handleGiftEvent (dedupe by per-send id). */
-  function renderLocalGift(g, giftId){
+  function renderLocalGift(g, giftId, resp){
     if (!giftId) return;
     handleGiftEvent({
       id: giftId, sender_id: B.me, sender_name: 'You',
       sender_rank: null, gift_key: g.key, key: g.key,
+      recipient_id: (resp && resp.recipient_id) || giftTargetId,
+      recipient_name: (resp && resp.recipient_name)
+        || giftTargetName || '',
       name: g.name, tickets: g.tickets, category: g.category,
       img: g.img, emoji: g.emoji || '',
       anim: giftTierOf(g.tickets), anim_name: giftAnimName(g)});
@@ -4290,17 +4401,18 @@ function liveRoomDiff(prev, next){
     }
     boostBusy = true;
     $('gift-boost').disabled = true;
-    post('/gift', {gift_key: g.key}).then(function(d){
+    post('/gift', {gift_key: g.key, target_user_id: giftTargetId}).then(function(d){
       boostBusy = false;
       var chip = $('gift-boost');
       if (chip) chip.disabled = false;
       if (d && d.ok){
         myTickets = d.balance;
         paintTickets();
-        renderLocalGift(g, d.gift_id);
+        renderLocalGift(g, d.gift_id, d);
         showBoostChip(g, boostCount + 1);
         renderGiftSheet();
       } else {
+        giftTargetRefused(d);
         toast((d && d.error) || 'Could not send that gift.');
         if (d && d.error && d.error.indexOf('Not enough') === 0)
           hideBoostChip();
@@ -4366,15 +4478,17 @@ function liveRoomDiff(prev, next){
       }
       armedGiftKey = null;
     }
-    post('/gift', {gift_key: g.key}).then(function(d){
+    post('/gift', {gift_key: g.key, target_user_id: giftTargetId}).then(function(d){
       if (d && d.ok){
         myTickets = d.balance;
         paintTickets();
-        renderLocalGift(g, d.gift_id);
-        toast('Sent ' + g.name + '!');
+        renderLocalGift(g, d.gift_id, d);
+        toast('Sent ' + g.name + ' to '
+          + (d.recipient_name || giftTargetName || 'the host') + '!');
         showBoostChip(g, 1);
         renderGiftSheet();
       } else {
+        giftTargetRefused(d);
         toast((d && d.error) || 'Could not send that gift.');
       }
     });
@@ -4390,13 +4504,21 @@ function liveRoomDiff(prev, next){
       + 'rel="noopener" style="color:#ffd97a;font-weight:700">'
       + 'Get tickets 🎟️</a>';
     sheetActions.appendChild(bal);
+    var tline = document.createElement('div');
+    tline.style.cssText = 'padding:0 8px 8px;font-size:13px;'
+      + 'color:#ffd97a;font-weight:700';
+    tline.innerHTML = '🎯 Gifting: <span id="gift-sheet-target">'
+      + '</span> — tap a panel tile to change who gets your gifts';
+    sheetActions.appendChild(tline);
+    paintGiftTarget();
     if (battleState && battleState.status === 'active'){
       var bnote = document.createElement('div');
       bnote.style.cssText = 'padding:2px 8px 8px;font-size:13px;'
         + 'color:#ffd97a;font-weight:700';
-      bnote.textContent = '⚔️ Showdown is ON — ticket gifts score '
-        + 'points in this room. Free gifts cheer — ticket gifts '
-        + 'score!';
+      bnote.textContent = '⚔️ Showdown is ON — ticket gifts TO A '
+        + 'BATTLING HOST score points for their side. Gifts to '
+        + 'other panelists pay them but score 0. Free gifts cheer '
+        + 'only!';
       sheetActions.appendChild(bnote);
     }
     var tabs = document.createElement('div');
@@ -4907,6 +5029,7 @@ function liveRoomDiff(prev, next){
           audienceIds = d.viewer_list.map(function(v){ return v.id; });
         syncMembership();
         renderTiles();
+        syncGiftTarget();
         /* Attach sweep (Build N): if a panelist's peer holds a
            remote stream the tile is not showing (the ontrack /
            panel-poll race in ensurePeer, or any other dropped
