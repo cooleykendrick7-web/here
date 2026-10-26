@@ -67,6 +67,13 @@
     var busy = false;
     form.addEventListener("submit", function (ev) {
       if (busy) return;                       // our own resubmit
+      // Build LOCKED CONTENT: a post being locked must upload the
+      // file straight to the server (the locked store) — a presigned
+      // key points at the PUBLIC posts/ prefix and can never be
+      // locked, so the server would refuse it. Normal path instead.
+      var lf = form.querySelector("input[name='lock_price']");
+      if (lf && lf.value && lf.value.trim() !== ""
+          && lf.value.trim() !== "0") return;
       var file = input.files && input.files[0];
       if (!file || !/^video\//.test(file.type || "")) return;  // normal path
       ev.preventDefault();
