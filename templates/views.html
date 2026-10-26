@@ -142,6 +142,13 @@
 #mv-composer-sheet select{width:100%;background:#222;color:#fff;
   border:1px solid rgba(255,255,255,.25);border-radius:10px;padding:10px 12px;font-size:15px}
 #mv-composer-sheet input[type=file]{font-size:14px;color:#fff;margin-top:4px}
+/* Build WALL (tagging everywhere): the @tag picker rides the View
+   composer too — same ids base.html's shared picker script binds to,
+   restyled for the dark sheet. */
+#mv-composer-sheet .tag-suggest{background:#222;border-color:rgba(255,255,255,.25)}
+#mv-composer-sheet .tag-item{color:#fff}
+#mv-composer-sheet .tag-item:hover,#mv-composer-sheet .tag-item.sel{background:rgba(212,31,46,.25)}
+#mv-composer-sheet .tag-hint{color:rgba(255,255,255,.55)}
 #mv-loading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
   z-index:2;font-size:15px;font-weight:600;color:rgba(255,255,255,.8)}
 </style>
@@ -203,8 +210,13 @@
       <label class="fld" for="mv-comp-file">Video</label>
       <input id="mv-comp-file" type="file" name="media" required data-r2up="post"
              accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm">
-      <label class="fld" for="mv-comp-body">Caption</label>
-      <textarea id="mv-comp-body" name="body" maxlength="2000" placeholder="Say something… use #hashtags"></textarea>
+      <label class="fld" for="composer-body">Caption</label>
+      <div class="composer-body-wrap">
+        <textarea id="composer-body" name="body" maxlength="2000" placeholder="Say something… use #hashtags"></textarea>
+        <div class="tag-suggest" id="tag-suggest" hidden></div>
+      </div>
+      <div class="tag-hint">Tip: type @ to tag a friend or a page.</div>
+      <input type="hidden" name="tags_json" id="tags-json" value="">
       <label class="fld" for="mv-comp-privacy">Who can see this?</label>
       <select id="mv-comp-privacy" name="privacy">
         <option value="public">🌍 Public</option>

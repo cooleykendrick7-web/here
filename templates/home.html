@@ -37,7 +37,16 @@
   <button type="button" id="daily-dismiss" class="btn-ghost btn-sm" style="margin-left:auto" aria-label="Dismiss today's challenge">✕</button>
 </div>
 
-<div class="card composer">
+<div class="card composer slim-composer" id="slim-composer">
+  <button type="button" class="slim-bar" id="slim-bar" aria-expanded="false" aria-controls="slim-body">
+    <span class="slim-pen">✍️</span>
+    <span class="slim-bar-text">Say something…</span>
+  </button>
+  <div class="slim-body" id="slim-body" hidden>
+    <div class="slim-head">
+      <span class="slim-head-label">✍️ Say something…</span>
+      <button type="button" class="slim-close" id="slim-close" aria-label="Close composer">✕</button>
+    </div>
   <form action="/posts" method="post" enctype="multipart/form-data">
     <input type="hidden" name="kind" id="kind-input" value="text">
     <div class="kind-tabs" id="kind-tabs">
@@ -133,6 +142,7 @@
       <button type="submit" class="btn">Post</button>
     </div>
   </form>
+  </div>
 </div>
 
 {% for item in feed_items %}

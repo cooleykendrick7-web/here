@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}#{{ tag|e }} — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="section-title">🏷️ #{{ tag|e }}</div>
+  <p style="color:var(--muted);font-size:14px">{{ count }} {{ 'post' if count == 1 else 'posts' }} with this hashtag that you can see. Hashtags help set your algorithm — the more a tag is used, the more it shapes what HERE shows you.</p>
+  <p style="margin-top:8px"><a href="/discover">🧭 Back to Discover →</a></p>
+</div>
+
+{% for post in posts %}
+  {% include "partials/post_card.html" %}
+{% else %}
+<div class="card"><p style="color:var(--muted)">No posts with #{{ tag|e }} that you can see yet.</p></div>
+{% endfor %}
+
+{% endblock %}

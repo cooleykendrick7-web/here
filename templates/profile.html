@@ -170,6 +170,147 @@
   </div>
 </div>
 {% endif %}
+{% if profile.is_self %}
+<div class="card" id="wall-settings">
+  <form action="/settings/wall" method="post" style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
+    <input type="hidden" name="next" value="/user/{{ profile.id }}">
+    <strong>🧱 Your wall</strong>
+    <label style="font-weight:500"><input type="checkbox" name="wall_open" value="1" {% if wall_open %}checked{% endif %}> Open — friends can write here</label>
+    <label style="font-weight:500"><input type="checkbox" name="wall_approve_first" value="1" {% if wall_approve_first %}checked{% endif %}> Approve first</label>
+    <button type="submit" class="btn-ghost btn-sm">Save</button>
+  </form>
+</div>
+{% endif %}
+{% if pending_wall_posts %}
+<div class="card" id="wall-pending" style="border:2px solid var(--red)">
+  <h3 style="margin:0 0 6px">🧱 Waiting for your approval</h3>
+  <p style="color:var(--muted);margin:0 0 10px">Only you can see these. Approve one and it shows on your wall like a normal post.</p>
+  {% for post in pending_wall_posts %}
+  {% include "partials/post_card.html" %}
+  <div style="display:flex;gap:8px;margin:-6px 0 14px">
+    <form class="inline-form" action="/wall/{{ post.id }}/approve" method="post">
+      <button type="submit" class="btn btn-sm">✅ Approve</button>
+    </form>
+    <form class="inline-form" action="/wall/{{ post.id }}/delete" method="post" onsubmit="return confirm('Delete this wall post?');">
+      <button type="submit" class="btn-danger btn-sm">🗑 Delete</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% if profile.is_self or can_write_wall %}
+<div class="card composer slim-composer" id="slim-composer">
+  <button type="button" class="slim-bar" id="slim-bar" aria-expanded="false" aria-controls="slim-body">
+    <span class="slim-pen">✍️</span>
+    <span class="slim-bar-text">{% if profile.is_self %}Say something…{% else %}Say something on {{ profile.name|e }}'s wall…{% endif %}</span>
+  </button>
+  <div class="slim-body" id="slim-body" hidden>
+    <div class="slim-head">
+      <span class="slim-head-label">✍️ {% if profile.is_self %}Say something…{% else %}Say something on {{ profile.name|e }}'s wall…{% endif %}</span>
+      <button type="button" class="slim-close" id="slim-close" aria-label="Close composer">✕</button>
+    </div>
+  <form action="/posts" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="kind" id="kind-input" value="text">
+    {% if not profile.is_self %}<input type="hidden" name="wall_user_id" value="{{ profile.id }}">{% endif %}
+    <input type="hidden" name="next" value="/user/{{ profile.id }}">
+    <div class="kind-tabs" id="kind-tabs">
+      <button type="button" class="kind-tab active" data-kind="text">📝 Status</button>
+      <button type="button" class="kind-tab" data-kind="photo">📷 Photo</button>
+      <button type="button" class="kind-tab" data-kind="feeling">😊 Feeling</button>
+      <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
+      <button type="button" class="kind-tab" data-kind="poll">📊 Poll</button>
+    </div>
+    <div class="composer-body-wrap">
+      <textarea name="body" id="composer-body" placeholder="{% if profile.is_self %}What's on your mind?{% else %}Write on {{ profile.name|e }}'s wall…{% endif %}"></textarea>
+      <div class="tag-suggest" id="tag-suggest" hidden></div>
+    </div>
+    <div class="tag-hint">Tip: type @ to tag a friend or a page. Paste any link — it turns clickable, and YouTube links play right here.</div>
+    <input type="hidden" name="tags_json" id="tags-json" value="">
+
+    <div id="fld-feeling" style="display:none">
+      <label class="fld" for="feeling-select">Feeling</label>
+      <select name="feeling" id="feeling-select">
+        <option value="">— pick a feeling —</option>
+        <option>happy</option><option>excited</option><option>loved</option>
+        <option>blessed</option><option>grateful</option><option>thankful</option>
+        <option>relaxed</option><option>proud</option><option>motivated</option>
+        <option>sad</option><option>tired</option><option>sick</option>
+        <option>angry</option><option>annoyed</option><option>lonely</option>
+      </select>
+    </div>
+
+    <div id="fld-media" style="display:none">
+      <label class="fld" for="media-file">Upload <span id="media-kind-label">photo</span> <span id="media-kind-hint">(jpg, png, gif, webp)</span></label>
+      <input type="file" name="media" id="media-file" accept="image/*" data-r2up="post">
+    </div>
+
+    <div id="fld-poll" style="display:none">
+      <label class="fld">Poll options — your post text above is the question (2–4 options, 60 characters each)</label>
+      <input type="text" name="option1" maxlength="60" placeholder="Option 1" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option2" maxlength="60" placeholder="Option 2" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option3" maxlength="60" placeholder="Option 3 (optional)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <input type="text" name="option4" maxlength="60" placeholder="Option 4 (optional)" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+    </div>
+
+    <div class="composer-music" style="margin-top:10px">
+      <button type="button" class="btn-ghost btn-sm" id="wall-music-toggle">🎵 Add music</button>
+      <div class="music-picker" id="wall-music-picker" hidden style="margin-top:10px">
+        <input type="hidden" name="music_video_id" class="mp-vid" value="">
+        <input type="hidden" name="music_url" class="mp-urlhidden" value="">
+        <p style="color:var(--muted);font-size:13px;margin:0 0 8px">Songs stream from YouTube — the artist's official upload, played right on your post.</p>
+        <div style="display:flex;gap:8px">
+          <input type="text" class="mp-url" placeholder="Paste a YouTube link to the song" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
+          <button type="button" class="btn-ghost mp-check" style="font-weight:700">Check</button>
+        </div>
+        <p class="mp-msg"></p>
+        <p style="margin:8px 0 2px"><a class="mp-find" href="https://www.youtube.com/results?search_query=" target="_blank" rel="noopener" style="font-weight:700">🔎 Find a song on YouTube ↗</a></p>
+        <p style="color:var(--muted);font-size:12.5px;margin:0">Find the official song, copy its link, paste it here.</p>
+        <div class="mp-card" hidden>
+          <img class="mp-thumb" alt="">
+          <div style="flex:1;min-width:0"><div class="mp-title"></div><div class="mp-artist"></div></div>
+          <button type="button" class="chip mp-remove">Remove</button>
+        </div>
+        <div style="margin-top:10px">
+          <label class="fld" for="wall-music-start">Start the song at (seconds)</label>
+          <input type="number" name="music_start" id="wall-music-start" min="0" max="3600" step="1" value="0" style="width:110px;padding:7px 10px;border:1px solid var(--border);border-radius:8px">
+        </div>
+        <label class="fld" style="margin-top:12px">🔥 Popular on HERE</label>
+        <div class="mp-popular"></div>
+      </div>
+    </div>
+
+    {% if composer_friends %}
+    <div class="composer-aud">
+      <button type="button" class="btn-ghost btn-sm" id="composer-aud-toggle">👁 Hide from…</button>
+      <div class="aud-popup composer-aud-popup" id="composer-aud-popup" hidden>
+        <div class="aud-title">🙈 Hide this post from…</div>
+        <p class="aud-hint">Checked friends won't see this post.</p>
+        <div class="aud-list">
+          {% for f in composer_friends %}
+          <label class="aud-row"><input type="checkbox" name="hide_from" value="{{ f.id }}"> {{ f.name|e }}</label>
+          {% endfor %}
+        </div>
+        <button type="button" class="btn btn-sm composer-aud-done" style="margin-top:8px">Done</button>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="post-row" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <label class="fld" style="margin:0;font-size:14px">👁
+        <select name="privacy" style="border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:14px">
+          <option value="public">🌍 Public</option>
+          <option value="friends">👥 Friends</option>
+          <option value="onlyme">🔒 Only me</option>
+        </select>
+      </label>
+      <button type="submit" class="btn">Post</button>
+    </div>
+  </form>
+  </div>
+</div>
+{% elif wall_closed_note %}
+<div class="card"><p style="color:var(--muted)">🧱 {{ profile.name|e }}'s wall is closed right now.</p></div>
+{% endif %}
 {% for post in posts %}
   {% include "partials/post_card.html" %}
 {% else %}
@@ -178,4 +319,59 @@
 {% endif %}
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  // Build WALL: the profile wall composer is the same block as the
+  // home composer's (Build SLIM wrap included) — same kind-tab wiring.
+  // Guarded: profiles where no composer renders (non-friends, locked)
+  // skip it entirely.
+  var kindInput = document.getElementById('kind-input');
+  var bodyBox = document.getElementById('composer-body');
+  if (!kindInput || !bodyBox) return;
+  var tabs = document.querySelectorAll('#kind-tabs .kind-tab');
+  var fFeeling = document.getElementById('fld-feeling');
+  var fMedia = document.getElementById('fld-media');
+  var fPoll = document.getElementById('fld-poll');
+  var mediaLbl = document.getElementById('media-kind-label');
+  var mediaHint = document.getElementById('media-kind-hint');
+  var mediaInput = document.getElementById('media-file');
+  var homePlaceholder = bodyBox.placeholder;
+  var placeholders = {
+    text: homePlaceholder,
+    photo: "Say something about this photo…",
+    feeling: "What's going on?",
+    video: "What is this video about?",
+    poll: "Ask a question…"
+  };
+  function setKind(kind){
+    kindInput.value = kind;
+    tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.kind === kind); });
+    bodyBox.placeholder = placeholders[kind] || placeholders.text;
+    fFeeling.style.display = (kind === 'feeling') ? 'block' : 'none';
+    fMedia.style.display = (kind === 'photo' || kind === 'video') ? 'block' : 'none';
+    if (fPoll) fPoll.style.display = (kind === 'poll') ? 'block' : 'none';
+    if (kind === 'video') { mediaLbl.textContent = 'video'; mediaHint.textContent = '(mp4, mov, webm)'; mediaInput.accept = 'video/*,.mp4,.mov,.webm'; }
+    else { mediaLbl.textContent = 'photo'; mediaHint.textContent = '(jpg, png, gif, webp)'; mediaInput.accept = 'image/*'; }
+  }
+  tabs.forEach(function(t){ t.addEventListener('click', function(){ setKind(t.dataset.kind); }); });
+  setKind('text');
+
+  // 🎵 music picker (shared wiring lives in base.html)
+  var mToggle = document.getElementById('wall-music-toggle');
+  var mPicker = document.getElementById('wall-music-picker');
+  if (mToggle && mPicker && window.hereMusicPicker) {
+    var mWired = false;
+    mToggle.addEventListener('click', function(){
+      mPicker.hidden = !mPicker.hidden;
+      if (!mPicker.hidden && !mWired) {
+        mWired = true;
+        window.hereMusicPicker(mPicker, {});
+      }
+    });
+  }
+})();
+</script>
 {% endblock %}

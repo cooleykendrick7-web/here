@@ -38,7 +38,16 @@
 </div>
 
 {% if page.joined or page.is_owner %}
-<div class="card composer">
+<div class="card composer slim-composer" id="slim-composer">
+  <button type="button" class="slim-bar" id="slim-bar" aria-expanded="false" aria-controls="slim-body">
+    <span class="slim-pen">✍️</span>
+    <span class="slim-bar-text">Say something…</span>
+  </button>
+  <div class="slim-body" id="slim-body" hidden>
+    <div class="slim-head">
+      <span class="slim-head-label">✍️ Say something…</span>
+      <button type="button" class="slim-close" id="slim-close" aria-label="Close composer">✕</button>
+    </div>
   <form action="/page/{{ page.id }}/post" method="post" enctype="multipart/form-data">
     <input type="hidden" name="kind" id="kind-input" value="text">
     <div class="kind-tabs" id="kind-tabs">
@@ -100,6 +109,7 @@
       <button type="submit" class="btn">Post to Page</button>
     </div>
   </form>
+  </div>
 </div>
 {% endif %}
 

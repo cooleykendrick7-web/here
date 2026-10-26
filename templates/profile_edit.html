@@ -212,6 +212,20 @@
   </form>
 </div>
 
+<div class="card" id="wall">
+  <div class="section-title">🧱 Your Wall</div>
+  <p style="margin-top:8px;color:var(--muted)">Your wall is the space on your profile where your friends can write posts for everyone who can see your profile to enjoy. Close it and nobody can write there. Turn on approve-first and every wall post waits for your OK before anyone else sees it.</p>
+  <form action="/settings/wall" method="post" style="margin-top:12px">
+    <div class="field">
+      <label style="font-weight:500"><input type="checkbox" name="wall_open" value="1" {% if profile.wall_open %}checked{% endif %}> My wall is open — friends can write on my profile</label>
+    </div>
+    <div class="field">
+      <label style="font-weight:500"><input type="checkbox" name="wall_approve_first" value="1" {% if profile.wall_approve_first %}checked{% endif %}> Approve wall posts first — I see them on my profile and approve or delete them before anyone else does</label>
+    </div>
+    <button type="submit" class="btn">Save Wall</button>
+  </form>
+</div>
+
 <div class="card">
   <div class="section-title">🔇 Silenced people</div>
   <p style="margin-top:8px;color:var(--muted)">Silencing is quiet and one-way: they never know. Their taps, comments, messages and calls stop notifying and buzzing you, and their posts stay out of your home feed. You stay friends and they can still message you — it just lands silently.</p>

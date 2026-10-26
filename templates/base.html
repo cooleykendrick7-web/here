@@ -299,6 +299,23 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
   width:100%;border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:15px;margin-top:4px}
 .composer input[type=file]{margin-top:6px;font-size:14px}
 .composer .post-row{margin-top:12px;text-align:right}
+/* ===== Build SLIM: the "Say something" composer bar =====
+   The composer card rests as ONE slim glass bar (✍️ + the words) —
+   the card itself carries the site glass, so the bar wears whatever
+   scheme the viewer runs. Tapping the bar swaps it for the FULL
+   composer (the same form, untouched); posting reloads the page
+   collapsed, and the ✕ folds it back. */
+.slim-bar{display:flex;align-items:center;gap:10px;width:100%;background:none;
+  border:none;cursor:pointer;padding:6px 4px;text-align:left;font-size:16px;
+  color:var(--muted)}
+.slim-bar .slim-pen{font-size:20px;line-height:1}
+.slim-bar:hover{color:#333}
+.slim-body{margin-top:2px}
+.slim-body[hidden]{display:none}
+.slim-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.slim-head-label{font-weight:700;font-size:15px}
+.slim-close{background:none;border:1px solid var(--border);border-radius:999px;
+  width:30px;height:30px;cursor:pointer;font-size:14px;line-height:1;color:#333;flex:none}
 /* ===== tag / hide-from pickers ===== */
 .picker-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .picker-chip{display:inline-flex;align-items:center;gap:5px;background:rgba(245,246,247,var(--glass-alpha-soft));
@@ -1205,7 +1222,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     {% if trends %}
     <h4>Trending this week</h4>
     {% for t in trends %}
-    <a class="contact-item" href="/search?q={{ t.q|urlencode }}">
+    <a class="contact-item" {% if t.q.startswith('#') %}href="/tag/{{ t.q[1:]|lower }}"{% else %}href="/search?q={{ t.q|urlencode }}"{% endif %}>
       <span style="font-weight:700;color:var(--red)">{{ t.label|e }}</span>
       <span style="color:var(--muted);font-size:12px;margin-left:auto">{{ t.count }} posts</span>
     </a>
@@ -1765,6 +1782,38 @@ document.addEventListener('click', function(ev){
   var ta = document.getElementById('composer-body');
   if (ta) ta.addEventListener('input', function(){ closeAudPopup(pop); });
   paint();
+})();
+</script>
+<script>
+/* ===== Build SLIM: open / close the "Say something" composer =====
+   At most one slim composer lives on a page (home, page, profile).
+   Tapping the bar swaps it for the full composer and focuses the
+   text box; the ✕ folds it back to the bar. A page reload (which is
+   what posting does) always lands collapsed. Deep links aimed at
+   the composer — the nav's "➕ New post" goes to /home#composer-body —
+   auto-open it so the anchor still lands somewhere real. */
+(function(){
+  var wrap = document.getElementById('slim-composer');
+  if (!wrap) return;
+  var bar = document.getElementById('slim-bar');
+  var body = document.getElementById('slim-body');
+  var closeBtn = document.getElementById('slim-close');
+  if (!bar || !body) return;
+  function open(){
+    body.hidden = false;
+    bar.hidden = true;
+    bar.setAttribute('aria-expanded', 'true');
+    var ta = document.getElementById('composer-body');
+    if (ta) ta.focus();
+  }
+  function shut(){
+    body.hidden = true;
+    bar.hidden = false;
+    bar.setAttribute('aria-expanded', 'false');
+  }
+  bar.addEventListener('click', open);
+  if (closeBtn) closeBtn.addEventListener('click', shut);
+  if (window.location.hash === '#composer-body') open();
 })();
 </script>
 {% if user %}

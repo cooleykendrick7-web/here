@@ -59,16 +59,34 @@
 </div>
 {% endif %}
 
+{% if tags %}
+<div class="card">
+  <div class="section-title">🏷️ Trending Tags</div>
+  <p style="color:var(--muted);font-size:14px">The hashtags people are posting most this week. Tap one to see every post carrying it.</p>
+  {% for t in tags %}
+  <div class="row-item">
+    <div class="grow">
+      <div class="nm"><a href="/tag/{{ t.tag }}">{{ t.label|e }}</a></div>
+      <div class="sub">{{ t.count }} {{ 'post' if t.count == 1 else 'posts' }}</div>
+    </div>
+    <div class="row-actions">
+      <a class="btn-ghost btn-sm" href="/tag/{{ t.tag }}">View posts</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="card">
   <div class="section-title">🔥 Trending this week</div>
   {% for t in trends %}
   <div class="row-item">
     <div class="grow">
-      <div class="nm"><a href="/search?q={{ t.q|urlencode }}">{{ t.label|e }}</a></div>
+      <div class="nm">{% if t.q.startswith('#') %}<a href="/tag/{{ t.q[1:]|lower }}">{{ t.label|e }}</a>{% else %}<a href="/search?q={{ t.q|urlencode }}">{{ t.label|e }}</a>{% endif %}</div>
       <div class="sub">{{ t.count }} {{ 'post' if t.count == 1 else 'posts' }}</div>
     </div>
     <div class="row-actions">
-      <a class="btn-ghost btn-sm" href="/search?q={{ t.q|urlencode }}">View posts</a>
+      {% if t.q.startswith('#') %}<a class="btn-ghost btn-sm" href="/tag/{{ t.q[1:]|lower }}">View posts</a>{% else %}<a class="btn-ghost btn-sm" href="/search?q={{ t.q|urlencode }}">View posts</a>{% endif %}
     </div>
   </div>
   {% else %}
