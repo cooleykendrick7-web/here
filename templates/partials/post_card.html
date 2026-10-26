@@ -82,7 +82,84 @@
   {% if post.media %}
     {% set _m = post.media|lower %}
     {% if _m.endswith('.mp4') or _m.endswith('.mov') or _m.endswith('.webm') %}
-    <video class="post-video-file" controls preload="metadata" src="{{ post.media|e }}"></video>
+    <div class="post-video-wrap" style="position:relative">
+    <video class="post-video-file" muted loop playsinline preload="metadata" src="{{ post.media|e }}"></video>
+    <button type="button" class="post-vol-btn" aria-label="Turn sound on" title="Sound on/off" style="position:absolute;right:10px;bottom:18px;width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.55);background:rgba(10,10,14,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:#fff;font-size:17px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;z-index:2">\U0001f507</button>
+    </div>
+<script>
+/* Build AUTOPLAY (Ken's order 2026-10-26): post videos autoplay MUTED
+   as they scroll into view and pause when scrolled past, so the feed
+   looks live and active; tap a video to get its sound. One shared
+   IntersectionObserver (window.__herePostIO); each include re-runs
+   init(), wiring only unwired videos (data-post-wired). The speaker
+   chip toggles sound only. Ad cards are excluded: they run their own
+   wiring (Build ADS-2). If the browser refuses autoplay the rejection
+   is swallowed and the first frame just sits there. */
+(function () {
+  function tryPlay(v) {
+    var p = v.play();
+    if (p && p.catch) { p.catch(function () { /* refused: stay quiet */ }); }
+  }
+  function wire(v) {
+    if (v.getAttribute("data-post-wired") || v.getAttribute("data-ad-wired")) { return; }
+    v.setAttribute("data-post-wired", "1");
+    var wrap = v.parentNode;
+    var btn = wrap ? wrap.querySelector(".post-vol-btn") : null;
+    function sync() {
+      if (!btn) { return; }
+      btn.textContent = v.muted ? "\U0001f507" : "\U0001f50a";
+      btn.setAttribute("aria-label",
+                       v.muted ? "Turn sound on" : "Turn sound off");
+    }
+    if (btn) {
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        v.muted = !v.muted;
+        if (!v.muted) { tryPlay(v); }
+        sync();
+      });
+      sync();
+    }
+    v.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (v.muted) { v.muted = false; tryPlay(v); sync(); }
+      else if (v.paused) { tryPlay(v); } else { v.pause(); }
+    });
+    if (window.__herePostIO) { window.__herePostIO.observe(v); }
+  }
+  function init() {
+    var vids = document.querySelectorAll(".card.post:not(.ad-card) video.post-video-file");
+    for (var i = 0; i < vids.length; i++) { wire(vids[i]); }
+  }
+  if (!window.__herePostIO && "IntersectionObserver" in window) {
+    window.__herePostIO = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        var v = entries[i].target;
+        if (entries[i].intersectionRatio >= 0.4) { tryPlay(v); }
+        else { v.pause(); }
+      }
+    }, { threshold: [0, 0.4] });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+  /* Cards injected after page load get wired too (debounced). */
+  if (!window.__herePostMO && "MutationObserver" in window) {
+    var pending = false;
+    window.__herePostMO = new MutationObserver(function () {
+      if (pending) { return; }
+      pending = true;
+      setTimeout(function () { pending = false; init(); }, 250);
+    });
+    window.__herePostMO.observe(document.documentElement,
+                                { childList: true, subtree: true });
+  }
+})();
+</script>
     {% elif _m.endswith('.mp3') or _m.endswith('.wav') or _m.endswith('.ogg') or _m.endswith('.m4a') %}
     <audio class="post-audio" controls src="{{ post.media|e }}"></audio>
     {% else %}
