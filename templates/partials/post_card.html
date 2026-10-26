@@ -7,6 +7,9 @@
   {% if post.is_share %}
   <div class="share-banner">🔁 <a href="/user/{{ post.shared_by_id }}">{{ post.shared_by_name|e }}</a> shared <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a>'s post <span class="post-meta">· {{ post.shared_at|e }}</span></div>
   {% endif %}
+  {% if post.is_wall_post %}
+  <div class="share-banner">🧱 <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a> wrote on <a href="/user/{{ post.wall_owner_id }}">{{ post.wall_owner_name|e }}</a>'s wall</div>
+  {% endif %}
   <div class="post-header">
     {% if post.author_avatar %}<img class="avatar av-40" src="{{ post.author_avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ post.author_name[:1]|upper|e }}</span>{% endif %}
