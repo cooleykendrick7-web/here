@@ -24,6 +24,7 @@
         {% elif n.kind == 'message' %}💬
         {% elif n.kind == 'share' %}🔁
         {% elif n.kind == 'tag' %}🏷
+        {% elif n.kind == 'page_gift' %}🎁
         {% else %}🔔{% endif %}
         {{ n.text|e }}
       </div>

@@ -226,6 +226,17 @@
   </form>
 </div>
 
+<div class="card" id="creator-mode">
+  <div class="section-title">🎨 Creator Mode</div>
+  <p style="margin-top:8px;color:var(--muted)">Turning Creator Mode on makes you a creator: your profile and your Pages get a 🎁 Gift button, so fans can send you gifts — you earn every ticket into the same wallet as your live gifts. Creators will also be able to sell locked content.</p>
+  <form action="/settings/creator" method="post" style="margin-top:12px">
+    <div class="field">
+      <label style="font-weight:500"><input type="checkbox" name="creator_mode" value="1" {% if profile.creator_mode %}checked{% endif %}> Creator Mode — my profile and Pages can take gifts</label>
+    </div>
+    <button type="submit" class="btn">Save Creator Mode</button>
+  </form>
+</div>
+
 <div class="card">
   <div class="section-title">🔇 Silenced people</div>
   <p style="margin-top:8px;color:var(--muted)">Silencing is quiet and one-way: they never know. Their taps, comments, messages and calls stop notifying and buzzing you, and their posts stay out of your home feed. You stay friends and they can still message you — it just lands silently.</p>

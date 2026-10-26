@@ -64,6 +64,7 @@
         <a class="btn-ghost" href="/earnings">📊 My earnings</a>
         <a class="btn-ghost" href="/settings/profile#spot">🏠 Customize my spot</a>
         {% if profile.is_private %}<span class="kind-tag">🔒 Private</span>{% endif %}
+        <a class="kind-tag" href="/settings/profile#creator-mode" style="text-decoration:none">🎨 Creator Mode: {% if profile.creator_mode %}On{% else %}Off{% endif %}</a>
         {% if profile.is_verified %}
         <span class="kind-tag"><span class="verified-star">★</span> Verified</span>
         {% elif profile.verification_status == 'pending' %}
@@ -103,6 +104,7 @@
         </form>
         {% endif %}
         <a class="btn-ghost btn-sm" href="/messages/{{ profile.id }}">💬 Message</a>
+        {% include "partials/page_gift.html" %}
         {% if profile.can_steal_look %}
         <form class="inline-form" action="/user/{{ profile.id }}/steal-look" method="post">
           <button type="submit" class="btn-ghost btn-sm" title="Copy {{ profile.name|e }}'s look — scheme, colors and style — to your own HERE. Their background photo stays theirs.">🎨 Steal this look</button>
@@ -136,6 +138,7 @@
   <p style="color:var(--muted);font-size:15px">🔒 This profile is private — only friends can see what's here.</p>
 </div>
 {% else %}
+{% include "partials/recent_gifts.html" %}
 {% if album_photos or profile.is_self %}
 <div class="card">
   <div style="display:flex;align-items:center;gap:8px">

@@ -37,7 +37,7 @@
 
 <div class="card">
   <div class="section-title">🎙️ Earnings per stream</div>
-  {% if streams or earlier %}
+  {% if streams or earlier or page_gifts %}
   <div style="margin-top:4px">
     {% for s in streams %}
     <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
@@ -51,6 +51,13 @@
       <span><strong>Earlier streams</strong><br>
       <span style="color:var(--muted);font-size:12.5px">{{ earlier.gifts }} gift{% if earlier.gifts != 1 %}s{% endif %} received · from before per-stream tracking</span></span>
       <span style="font-weight:800;white-space:nowrap">{{ earlier.tickets }} 🎟️</span>
+    </div>
+    {% endif %}
+    {% if page_gifts %}
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <span><strong>🎁 Page gifts</strong><br>
+      <span style="color:var(--muted);font-size:12.5px">{{ page_gifts.gifts }} gift{% if page_gifts.gifts != 1 %}s{% endif %} received · sent straight to your profile and your Pages — no live needed</span></span>
+      <span style="font-weight:800;white-space:nowrap">{{ page_gifts.tickets }} 🎟️</span>
     </div>
     {% endif %}
   </div>

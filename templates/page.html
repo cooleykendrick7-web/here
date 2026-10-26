@@ -33,9 +33,12 @@
         <button type="submit" class="btn btn-sm">Join Page</button>
       </form>
       {% endif %}
+      {% include "partials/page_gift.html" %}
     </div>
   </div>
 </div>
+
+{% include "partials/recent_gifts.html" %}
 
 {% if page.joined or page.is_owner %}
 <div class="card composer slim-composer" id="slim-composer">
