@@ -106,8 +106,10 @@ check("A: .card fills with the glass var",
       ".card{background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha))" in home)
 check("A: .topbar fills with the glass var",
       "background:rgba(17,17,17,var(--glass-alpha))" in home)
-check("A: comment bubbles fill with the glass var (no blur)",
-      ".comment .cbub{background:rgba(240,242,245,var(--glass-alpha))"
+check("A: comment bubbles fill with the SOFT glass var (no blur)",
+      # Build CLEAR: small surfaces ride --glass-alpha-soft (equal
+      # to --glass-alpha in Glass; the Mix split lives there).
+      ".comment .cbub{background:rgba(240,242,245,var(--glass-alpha-soft))"
       in home)
 check("A: sheets fill with the glass var",
       ".aud-popup{position:fixed" in home
@@ -130,8 +132,9 @@ check("A: settings keeps the Box Transparency words (legacy name)",
       "Box Transparency" in st)
 check("A: the one slider keeps id/name box-opacity + box_opacity",
       'id="box-opacity"' in st and 'name="box_opacity"' in st)
-check("A: slider ends are labeled More clear / More solid",
-      "More clear" in st and "More solid" in st)
+check("A: slider ends are labeled Completely clear / More solid",
+      # Build CLEAR: the left end is full transparency now.
+      "Completely clear" in st and "More solid" in st)
 _m = re.search(r'id="box-opacity"[^>]*value="(\d+)"', st)
 check("A: slider thumb sits at the effective default 82",
       _m and _m.group(1) == "82", st[st.find('id="box-opacity"'):
@@ -170,8 +173,8 @@ check("A: glass_alpha_for(saved 100) == '1'",
 FRESH.post("/settings/boxes", data={"box_opacity": "5"})
 row = dbq("SELECT box_opacity FROM users WHERE id=?", (FRESH_ID,))[0]
 bt = body_tag(FRESH.get("/home").text)
-check("A: 5 clamps to the 30 readability floor everywhere",
-      row["box_opacity"] == 30 and "--glass-alpha:0.3" in bt)
+check("A: 5 is stored as 5 everywhere (Build CLEAR floor is 0)",
+      row["box_opacity"] == 5 and "--glass-alpha:0.05" in bt)
 
 # Spot saves preserve the stored tint strength (field absent now)
 FRESH.post("/settings/spot", data={

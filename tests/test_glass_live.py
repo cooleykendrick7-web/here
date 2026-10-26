@@ -87,10 +87,11 @@ check("/settings/profile contains the box-opacity slider",
 r = A.post("/settings/boxes", data={"box_opacity": "5"})
 check("POST /settings/boxes 5 -> 303", r.status_code == 303,
       str(r.status_code))
-check("POST 5 clamps DB to 30", box_opacity_of(AID) == 30,
-      str(box_opacity_of(AID)))
-check("/home <body> contains --box-alpha:0.3 at 30",
-      "--box-alpha:0.3" in body_tag(A.get("/home").text))
+# Build CLEAR: the floor is 0 now — 5 is a real value, not a clamp.
+check("POST 5 stores DB 5 (no 30 floor anymore)",
+      box_opacity_of(AID) == 5, str(box_opacity_of(AID)))
+check("/home <body> contains --box-alpha:0.05 at 5",
+      "--box-alpha:0.05" in body_tag(A.get("/home").text))
 
 r = A.post("/settings/boxes", data={"box_opacity": "250"})
 check("POST /settings/boxes 250 -> 303", r.status_code == 303,
@@ -139,6 +140,37 @@ check("'live-float' appears BEFORE 'live-comment-form'",
       -1 < live_html.find("live-float") < live_html.find("live-comment-form"))
 check("live page does NOT keep .live-panel{background:var(--card)",
       ".live-panel{background:var(--card)" not in live_html)
+
+# Build J: unified clear-glass tokens on the live page (forced,
+# independent of the app-wide box_opacity setting) + compact controls.
+for needle in ("--lg-bg: rgba(14,16,20,0.16)",
+               "--lg-bg-strong: rgba(14,16,20,0.28)",
+               "--lg-blur: blur(14px)", "--lg-text-shadow"):
+    check(f"live glass token present {needle!r}", needle in live_html)
+check("glass: floating comments use var(--lg-bg)",
+      ".live-float .live-comment{background:var(--lg-bg)" in live_html)
+check("glass: #live-sheet uses var(--lg-bg-strong)",
+      "overflow-y:auto;background:var(--lg-bg-strong)" in live_html)
+check("glass: .tile-label uses var(--lg-bg)",
+      "background:var(--lg-bg);border-top:var(--lg-border)" in live_html)
+# Old stage fills are gone. NOTE: the bare literal
+# "rgba(255,255,255,.78)" legitimately recurs as a TEXT color
+# (color:rgba(255,255,255,.78) on the poll/game notes and the
+# sheet/panel empty-state strings), so that one fill assertion is
+# scoped to its background: form; the rest are asserted bare.
+for needle in ("rgba(0,0,0,.45)", "rgba(255,255,255,.94)",
+               "rgba(253,238,240,.78)", "rgba(28,30,33,.72)",
+               "background:rgba(255,255,255,.78)"):
+    check(f"live glass: old fill gone {needle!r}",
+          needle not in live_html)
+check("compact: rail buttons are 40px circles",
+      ".live-rail button{width:40px" in live_html)
+check("compact: comment input is 36px tall",
+      ".live-comment-form input{flex:1;height:36px" in live_html)
+check("compact: exit button is 44px",
+      "width:44px;height:44px" in live_html)
+check("live glass: floating comments still at bottom:25%",
+      "bottom:25%" in live_html)
 
 # ---------------- 3. liveRoomDiff harness + node --check ----------------
 _node = shutil.which("node")

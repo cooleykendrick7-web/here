@@ -4,10 +4,12 @@ readability guardrail, profile application, Steal This Look, and
 the /welcome vibe picker.
 
 - Storage: users.look_scheme (default 'glass'), look_surface,
-  look_accent; glass -> house alpha 0.82 regardless of the slider,
-  solid -> alpha "1" + the surface color as --glass-rgb, mix -> the
-  saved box_opacity (and saving via the legacy /settings/boxes route
-  flips the scheme to mix).
+  look_accent. Build CLEAR semantics: the transparency slider
+  belongs to GLASS only (saved box_opacity drives Glass, 0..100,
+  0 = completely clear); solid -> alpha "1" everywhere; mix ->
+  solid cards (--glass-alpha 1) with the small surfaces glass at
+  the saved solidity (--glass-alpha-soft). Saving via the legacy
+  /settings/boxes route is the Glass door: it lands in 'glass'.
 - Emitted per viewer on <body>: --glass-alpha, --glass-rgb,
   --look-accent (+ look-on-dark / look-on-light from the surface
   luminance). The HERE logo stays on --red, never the accent.
@@ -97,13 +99,15 @@ check("D: helpers — glass scheme, default rgb + HERE red accent",
       here.look_scheme_for(row) == "glass"
       and here.look_rgb_str_for(row) == "255,255,255"
       and here.look_accent_for(row) == "#d41f2e"
-      and here.glass_alpha_for(row) == "0.82")
+      and here.glass_alpha_for(row) == "0.82"
+      and here.glass_alpha_soft_for(row) == "0.82")
 check("D: no surface -> no guardrail class",
       here.look_scope_class_for(row) == "")
 home = FRESH.get("/home").text
 bt = body_tag(home)
 check("D: fresh body carries the full default look var set",
-      "--glass-alpha:0.82" in bt and "--glass-rgb:255,255,255" in bt
+      "--glass-alpha:0.82" in bt and "--glass-alpha-soft:0.82" in bt
+      and "--glass-rgb:255,255,255" in bt
       and "--look-accent:#d41f2e" in bt)
 check("D: fresh body has NO look-on-dark / look-on-light class",
       "look-on-dark" not in bt and "look-on-light" not in bt)
@@ -118,6 +122,13 @@ check("S: surface + accent color inputs present",
       'name="surface"' in st and 'name="accent"' in st
       and 'id="look-surface"' in st and 'id="look-accent-in"' in st)
 check("S: live preview card present", 'id="look-preview-card"' in st)
+check("S: the slider row belongs to Glass only (CLEAR gate)",
+      'id="look-glass-row"' in st and 'id="look-mix-row"' not in st
+      and "sc !== 'glass'" in st and 'min="0"' in st
+      and "Completely clear" in st)
+check("S: Mix explains itself — cards solid, bubbles glass",
+      "Cards solid · bubbles glass — bubbles use your Glass "
+      "transparency (switch to Glass to change it)." in st)
 check("S: all six preset cards render in Settings",
       all(n in st for n in
           ("Classic HERE Glass", "Midnight Gold", "Ice Glass",
@@ -134,7 +145,8 @@ check("S: solid + colors persist exactly",
       and row["look_accent"] == "#d4af37")
 bt = body_tag(FRESH.get("/home").text)
 check("S: solid body — alpha 1, surface rgb, gold accent, on-dark",
-      "--glass-alpha:1" in bt and "--glass-rgb:16,16,16" in bt
+      "--glass-alpha:1" in bt and "--glass-alpha-soft:1" in bt
+      and "--glass-rgb:16,16,16" in bt
       and "--look-accent:#d4af37" in bt and "look-on-dark" in bt)
 check("S: luminance verdicts — #101010 dark, #cfe8ff light",
       here._hex_luminance((16, 16, 16)) < 0.5
@@ -161,32 +173,38 @@ check("S: unset again -> default rgb/accent, no guardrail class",
       "--glass-rgb:255,255,255" in bt and "look-on-dark" not in bt
       and "look-on-light" not in bt)
 
-# ---------------- mix: both doors lead there -----------------------
+# ---------------- CLEAR: boxes door -> Glass; Mix split ----------
 FRESH.post("/settings/boxes", data={"box_opacity": "55"})
 row = user_row(FRESH_ID)
-check("M: saving via /settings/boxes flips the scheme to mix",
-      row["look_scheme"] == "mix" and row["box_opacity"] == 55
+check("M: saving via /settings/boxes lands in GLASS (its door)",
+      row["look_scheme"] == "glass" and row["box_opacity"] == 55
       and row["glass_set"] == 1)
 bt = body_tag(FRESH.get("/home").text)
-check("M: mix body — slider alpha + legacy layer, as Build GLASS",
-      "--glass-alpha:0.55" in bt and "--box-alpha:0.55" in bt
-      and "boxes-glass" in bt)
+check("M: glass body — slider alpha on BOTH vars + legacy layer",
+      "--glass-alpha:0.55" in bt and "--glass-alpha-soft:0.55" in bt
+      and "--box-alpha:0.55" in bt and "boxes-glass" in bt)
 FRESH.post("/settings/look", data={"scheme": "mix",
                                    "box_opacity": "70"})
 row = user_row(FRESH_ID)
 bt = body_tag(FRESH.get("/home").text)
-check("M: /settings/look mix saves the blend atomically",
-      row["look_scheme"] == "mix" and row["box_opacity"] == 70
-      and "--glass-alpha:0.7" in bt)
-FRESH.post("/settings/look", data={"scheme": "glass"})
+check("M: Mix — form slider ignored outside Glass; split alphas",
+      row["look_scheme"] == "mix" and row["box_opacity"] == 55
+      and "--glass-alpha:1" in bt and "--glass-alpha-soft:0.55" in bt
+      and "--box-alpha" not in bt and "boxes-glass" not in bt)
+FRESH.post("/settings/look", data={"scheme": "glass",
+                                   "box_opacity": "70"})
+row = user_row(FRESH_ID)
 bt = body_tag(FRESH.get("/home").text)
-check("M: back to Glass — slider ignored, alpha 0.82, no --box-alpha",
-      "--glass-alpha:0.82" in bt and "--box-alpha" not in bt
-      and "boxes-glass" not in bt)
+check("M: /settings/look Glass saves the solidity atomically",
+      row["look_scheme"] == "glass" and row["box_opacity"] == 70
+      and "--glass-alpha:0.7" in bt
+      and "--glass-alpha-soft:0.7" in bt
+      and "--box-alpha:0.7" in bt and "boxes-glass" in bt)
 FRESH.post("/settings/look", data={"scheme": "solid"})
 bt = body_tag(FRESH.get("/home").text)
-check("M: Solid ignores the stored slider too (alpha 1)",
-      "--glass-alpha:1" in bt and "--box-alpha" not in bt)
+check("M: Solid ignores the stored slider entirely (both vars 1)",
+      "--glass-alpha:1" in bt and "--glass-alpha-soft:1" in bt
+      and "--box-alpha" not in bt)
 r = FRESH.post("/settings/look", data={"reset": "1"})
 row = user_row(FRESH_ID)
 check("M: Reset-to-classic restores glass + unset colors",
@@ -253,7 +271,11 @@ VIS.post("/settings/spot", data={"reset": "1"})
 prof = VIS.get(f"/user/{OWNER_ID}").text
 sc, bt = scope_tag(prof), body_tag(prof)
 check("V: reset visitor — scope still owner's, chrome back to glass",
-      "--glass-rgb:16,16,16" in sc and "--glass-alpha:0.82" in bt
+      # Build CLEAR: Glass honors the visitor's SAVED solidity —
+      # VIS chose 70 back in the preset loop, so their chrome is
+      # glass at 0.7 (default rgb), not the unsaved 0.82 default.
+      "--glass-rgb:16,16,16" in sc and "--glass-alpha:0.7" in bt
+      and "--glass-alpha-soft:0.7" in bt
       and "--glass-rgb:255,255,255" in bt)
 own = OWNER.get(f"/user/{OWNER_ID}").text
 check("V: owner's own profile shows their look in the scope too",
