@@ -33,6 +33,26 @@
   <div class="feeling-line">— feeling <strong>{{ post.feeling|e }}</strong></div>
   {% endif %}
 
+  {% if post.lock and not post.lock.open %}
+  {# Build LOCKED CONTENT: the lock card replaces the content for
+     anyone who hasn't paid — the server never sent the body or the
+     media URL for this viewer, so there is nothing here to leak. #}
+  <div class="lock-card" style="border:2px dashed var(--border);border-radius:14px;padding:22px 16px;text-align:center;margin:10px 0;background:var(--glass,rgba(127,127,127,.06))">
+    <div style="font-size:38px;line-height:1">🔒</div>
+    <div style="font-weight:800;font-size:17px;margin-top:8px">Locked content</div>
+    <div style="color:var(--muted);font-size:13.5px;margin-top:4px">{{ post.author_name|e }} locked this post. Unlock it once — it's yours forever.</div>
+    {% if post.lock.adult %}<div style="margin-top:8px"><span class="kind-tag" style="background:#7f1d1d;color:#fff">18+ content</span></div>{% endif %}
+    <form method="post" action="/post/{{ post.id }}/unlock" style="margin-top:12px">
+      {% if post.lock.adult %}
+      <label style="display:block;font-size:13.5px;margin-bottom:8px"><input type="checkbox" name="confirm_adult" value="1" required> I'm 18 or older</label>
+      {% endif %}
+      <button type="submit" class="btn">🔓 Unlock for {{ post.lock.price }} 🎟️</button>
+    </form>
+  </div>
+  {% elif post.lock and post.lock.open %}
+  <div class="post-meta" style="margin:6px 0">🔓 Unlocked{% if post.lock.adult %} · 18+{% endif %}</div>
+  {% endif %}
+
   {% if post.body %}
   <div class="post-body">{{ post.body_html|safe }}</div>
   {% endif %}
