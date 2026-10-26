@@ -56,6 +56,14 @@ except Exception:
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("HERE_DB", os.path.join(BASE, "here.db"))
 UPLOAD_DIR = os.environ.get("HERE_UPLOADS", os.path.join(BASE, "uploads"))
+# Locked Content media lives OUTSIDE UPLOAD_DIR on purpose: the
+# /uploads static mount must never be able to serve it. Same volume,
+# sibling directory (prod: /data/locked_uploads on the persistent
+# disk); in R2 mode the same separation is the "locked/" key prefix.
+LOCKED_DIR = os.environ.get(
+    "HERE_LOCKED_UPLOADS",
+    os.path.join(os.path.dirname(os.path.abspath(UPLOAD_DIR)),
+                 "locked_uploads"))
 
 SESSION_COOKIE = "here_session"
 OWNER_COOKIE = "here_owner"
@@ -150,6 +158,11 @@ if _R2_MODE:
     @app.get("/uploads/{key:path}")
     async def uploads_serve(key: str):
         if not key or any(p in ("", ".", "..") for p in key.split("/")):
+            raise HTTPException(status_code=404)
+        # Build LOCKED CONTENT: locked/ keys are NEVER public — they
+        # are served only by the /locked/... gate routes after an
+        # entitlement check, so this route refuses them outright.
+        if key.startswith("locked/"):
             raise HTTPException(status_code=404)
         disk = os.path.join(UPLOAD_DIR, key)
         if os.path.isfile(disk):
@@ -990,6 +1003,19 @@ def init_db():
     if "wall_pending" not in _post_cols_w:
         c.execute("ALTER TABLE posts ADD COLUMN wall_pending "
                   "INTEGER DEFAULT 0")
+    # --- Build LOCKED CONTENT (posts side) ---
+    # posts.lock_price: tickets a viewer pays to open this post
+    # (0/NULL = not locked). posts.lock_adult: the seller's 18+
+    # marker — unlocking then needs the buyer's explicit confirm.
+    # A locked post's media NEVER lives under uploads/: it is stored
+    # under the locked/ key prefix (LOCKED_DIR on disk, the locked/
+    # prefix in R2) and served only by the /locked/post/{id} gate.
+    if "lock_price" not in _post_cols_w:
+        c.execute("ALTER TABLE posts ADD COLUMN lock_price "
+                  "INTEGER DEFAULT 0")
+    if "lock_adult" not in _post_cols_w:
+        c.execute("ALTER TABLE posts ADD COLUMN lock_adult "
+                  "INTEGER DEFAULT 0")
     # user_activity_days: one row per (user, Chicago day) the user did
     # something streak-worthy (visited home, posted, reacted, commented).
     c.execute("""CREATE TABLE IF NOT EXISTS user_activity_days (
@@ -1134,6 +1160,19 @@ def init_db():
     if "listing_price_cents" not in _msg_cols_m:
         c.execute("ALTER TABLE messages ADD COLUMN "
                   "listing_price_cents INTEGER")
+    # --- Build LOCKED CONTENT (DM side) ---
+    # messages.lock_media: the locked/ storage key of a paid DM
+    # attachment ('' on plain messages); lock_price/lock_adult mirror
+    # the post columns. The message's sender_id IS the seller.
+    if "lock_media" not in _msg_cols_m:
+        c.execute("ALTER TABLE messages ADD COLUMN lock_media "
+                  "TEXT DEFAULT ''")
+    if "lock_price" not in _msg_cols_m:
+        c.execute("ALTER TABLE messages ADD COLUMN lock_price "
+                  "INTEGER DEFAULT 0")
+    if "lock_adult" not in _msg_cols_m:
+        c.execute("ALTER TABLE messages ADD COLUMN lock_adult "
+                  "INTEGER DEFAULT 0")
     # --- Live Tickets: the live gift economy (safe on existing DBs) ---
     # TWO ledgers per user (see the Live Tickets section of
     # ROUTE_CONTRACT.md): tickets_balance = SPENDABLE tickets (bought,
@@ -1264,6 +1303,21 @@ def init_db():
               "ON page_gifts(recipient_id, page_id, id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_page_gifts_sender "
               "ON page_gifts(sender_id, recipient_id, id)")
+    # --- Build LOCKED CONTENT: purchase records ---
+    # One row per (content, buyer): the UNIQUE constraint is the
+    # hard guarantee a second unlock can never double-charge — the
+    # unlock transaction rolls back if this insert collides.
+    # content_type is 'post' or 'dm'; seller_id/price are snapshots
+    # of the sale. Unlocking is forever: rows are never deleted
+    # except when the content itself is deleted.
+    c.execute("""CREATE TABLE IF NOT EXISTS content_unlocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content_type TEXT NOT NULL, content_id INTEGER NOT NULL,
+        buyer_id INTEGER NOT NULL, seller_id INTEGER NOT NULL,
+        price INTEGER NOT NULL, created_at TEXT NOT NULL,
+        UNIQUE(content_type, content_id, buyer_id))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_unlocks_buyer "
+              "ON content_unlocks(buyer_id, content_type, content_id)")
     # --- Live Showdown battles (Build W2) ---
     # A battle LINKS two existing live rooms; it never merges them.
     # Scores are ticket-points added by the gift handler in the same
@@ -1511,7 +1565,11 @@ def render(request: Request, name, ctx=None):
         u = get_user(u["id"])  # refresh (last_seen changed)
         ctx["user"] = {"id": u["id"], "name": u["name"], "email": u["email"],
                        "bio": u.get("bio", ""),
-                       "avatar": avatar_url(u.get("avatar", ""))}
+                       "avatar": avatar_url(u.get("avatar", "")),
+                       # Build LOCKED CONTENT: templates gate the
+                       # creator-only lock fields on this flag (the
+                       # server re-checks on every write regardless).
+                       "creator_mode": 1 if u.get("creator_mode") else 0}
         conn = db()
         ctx["pending_count"] = conn.execute(
             "SELECT COUNT(*) c FROM friendships WHERE friend_id=? AND status='pending'",
@@ -1919,6 +1977,124 @@ def save_upload(up, subdir, allowed, max_mb=0):
             pass
         raise
     return f"{subdir}/{name}"
+
+
+# ---------------------------------------------------------------------------
+# Build LOCKED CONTENT — paid media storage + access helpers.
+# Locked files are stored under keys "locked/<kind>/<uuid>.<ext>"
+# (kind = "posts" | "dm"). On disk they live in LOCKED_DIR (never
+# UPLOAD_DIR, so the /uploads static mount can never serve them); in
+# R2 they live under the locked/ prefix and are handed out only as a
+# short-lived presigned GET minted by the gate routes — the public
+# read_url is never used for them.
+# ---------------------------------------------------------------------------
+
+def save_locked_upload(up, kind, allowed, max_mb=0):
+    """Save a locked-content file; returns its locked/ key. Mirrors
+    save_upload's validation + streaming + cap discipline (max_mb=0
+    uses MAX_UPLOAD_MB); raises ValueError with a user-facing
+    message on refusal."""
+    if up is None or not getattr(up, "filename", ""):
+        return ""
+    fname = up.filename or ""
+    ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+    if ext not in allowed:
+        raise ValueError(f"File type .{ext} not allowed.")
+    cap_mb = max_mb or MAX_UPLOAD_MB
+    if storage.r2_enabled():
+        return _save_locked_upload_r2(up, kind, ext, cap_mb)
+    limit = cap_mb * 1024 * 1024
+    name = f"{uuid.uuid4().hex}.{ext}"
+    dest = os.path.join(LOCKED_DIR, kind, name)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    src = up.file
+    try:
+        src.seek(0)
+    except Exception:
+        pass
+    total = 0
+    try:
+        with open(dest, "wb") as f:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError(
+                        f"That file is too big (max {cap_mb} MB).")
+                f.write(chunk)
+    except Exception:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
+    return f"locked/{kind}/{name}"
+
+
+def _save_locked_upload_r2(up, kind, ext, cap_mb):
+    """R2 twin of save_locked_upload (spool + one signed PUT), with
+    the same cap policy as _save_upload_r2 for post videos."""
+    uncapped = (kind == "posts" and ext in VID_EXTS)
+    limit = None if uncapped else cap_mb * 1024 * 1024
+    key = f"locked/{kind}/{uuid.uuid4().hex}.{ext}"
+    src = up.file
+    try:
+        src.seek(0)
+    except Exception:
+        pass
+    total = 0
+    tmp = tempfile.TemporaryFile()
+    try:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if limit is not None and total > limit:
+                raise ValueError(_UPLOAD_FAIL)
+            tmp.write(chunk)
+        tmp.seek(0)
+        ctype = (getattr(up, "content_type", "") or
+                 mimetypes.guess_type(up.filename or "")[0] or
+                 "application/octet-stream")
+        try:
+            storage.put_object(key, tmp, ctype, size=total)
+        except storage.StorageError:
+            raise ValueError(_UPLOAD_FAIL)
+    finally:
+        tmp.close()
+    return key
+
+
+def _has_unlock(conn, uid, ctype, cid):
+    """True when uid has paid to open this content (unlocks are
+    forever — rows are only removed when the content is deleted)."""
+    if not uid:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM content_unlocks WHERE content_type=? "
+        "AND content_id=? AND buyer_id=?",
+        (ctype, cid, uid)).fetchone() is not None
+
+
+def _serve_locked_media(key):
+    """Serve a locked/ key to a caller the gate route has ALREADY
+    authorized: presigned redirect in R2 mode, file off LOCKED_DIR
+    in disk mode. Anything missing reads as 404."""
+    if not key or not key.startswith("locked/"):
+        return HTMLResponse("Not found", status_code=404)
+    if storage.r2_enabled():
+        try:
+            return RedirectResponse(storage.presign_get(key),
+                                    status_code=302)
+        except storage.StorageError:
+            return HTMLResponse("Not found", status_code=404)
+    path = os.path.join(LOCKED_DIR, key[len("locked/"):])
+    if os.path.isfile(path):
+        return FileResponse(path)
+    return HTMLResponse("Not found", status_code=404)
 
 
 def video_embed_url(url):
@@ -2590,7 +2766,7 @@ def post_card(p, viewer, owner_on=False):
             break
     if not share_text:
         share_text = ((a["name"] if a else "Someone") + " on HERE")
-    return {
+    card = {
         "id": p["id"], "user_id": p["user_id"],
         "dom_id": ("post-share-%d" % share["id"]) if share else ("post-%d" % p["id"]),
         "author_name": a["name"] if a else "Deleted user",
@@ -2600,7 +2776,11 @@ def post_card(p, viewer, owner_on=False):
         "body_html": linkify_body(p["body"] or "", tagged_users, tagged_pages),
         "feeling": p["feeling"] or "", "link_url": p["link_url"] or "",
         "video_url": p["video_url"] or "",
-        "media": "/uploads/" + media if media else "",
+        # Locked media is served ONLY by the /locked/post/{id} gate;
+        # unlocked-kind media keeps the plain uploads URL.
+        "media": (("/locked/post/%d" % p["id"])
+                  if media.startswith("locked/")
+                  else ("/uploads/" + media if media else "")),
         # Embeds: an old Video-kind post's URL wins, then an old Link-kind
         # post's URL, then the first YouTube/Vimeo URL pasted in the body
         # (links just work now — no separate link/video box anymore).
@@ -2664,6 +2844,36 @@ def post_card(p, viewer, owner_on=False):
                                   and not share),
         "poll": poll_data,
     }
+    # --- Build LOCKED CONTENT: lock state + masking. Post privacy
+    # already ran above (can_view_post): a lock never widens who can
+    # see the post EXISTS, and unlocking never overrides privacy.
+    # The author and the owner context always see the content open;
+    # a buyer sees it open forever (content_unlocks row); everyone
+    # else gets a LOCK CARD — body, feeling, links, embeds, music,
+    # poll and the media URL are blanked HERE, server-side, so the
+    # real content never reaches the page for a non-unlocker (no
+    # view-source leak, no CSS-blur trick). Shares resolve to the
+    # original above, so sharing a locked post shares the lock. ---
+    lock = None
+    _lprice = p.get("lock_price") or 0
+    if _lprice:
+        lock_open = bool(owner_on or (viewer
+                                      and viewer["id"] == p["user_id"]))
+        if not lock_open and viewer:
+            _lc = db()
+            lock_open = _has_unlock(_lc, viewer["id"], "post", p["id"])
+            _lc.close()
+        lock = {"price": _lprice, "adult": bool(p.get("lock_adult")),
+                "open": lock_open}
+        if not lock_open:
+            card.update({
+                "body": "", "body_html": "", "feeling": "",
+                "link_url": "", "video_url": "", "media": "",
+                "embed_url": "", "music": None, "poll": None,
+                "share_text": "🔒 Locked content on HERE",
+            })
+    card["lock"] = lock
+    return card
 
 
 def flag_item(item_type, item_id, author_id, author_name, text):
@@ -3286,9 +3496,28 @@ async def public_post(request: Request, post_id: int):
     comment_count = conn.execute(
         "SELECT COUNT(*) c FROM comments WHERE post_id=?",
         (p["id"],)).fetchone()["c"]
+    # Build LOCKED CONTENT: a locked post renders open on this
+    # public page ONLY for a logged-in author or buyer (the owner
+    # context too); everyone else — anonymous visitors and link
+    # scrapers included — gets the generic teaser, exactly like a
+    # private post. The og image NEVER points at locked media.
+    _locked = bool(p.get("lock_price"))
+    if _locked:
+        _lock_open = bool(
+            is_owner(request)
+            or (viewer and (viewer["id"] == p["user_id"]
+                            or _has_unlock(conn, viewer["id"],
+                                           "post", p["id"]))))
+        if not _lock_open:
+            conn.close()
+            return _public_teaser(request, viewer)
     conn.close()
     media = p.get("media") or ""
-    media_url = "/uploads/" + media if media else ""
+    media_url = ""
+    if media:
+        media_url = ("/locked/post/%d" % p["id"]
+                     if media.startswith("locked/")
+                     else "/uploads/" + media)
     media_kind = ""
     if media:
         ext = media.rsplit(".", 1)[-1].lower() if "." in media else ""
@@ -3308,7 +3537,7 @@ async def public_post(request: Request, post_id: int):
     author_ctx = {"id": author["id"], "name": author["name"],
                   "avatar": avatar_url(author.get("avatar", ""))}
     og_image = ""
-    if media_kind == "photo" and media_url:
+    if media_kind == "photo" and media_url and not _locked:
         og_image = _abs_url(request, media_url)
     # No avatar fallback: share previews use the HERE logo
     # (template fallback og-logo.jpg) — Ken's call, 2026-10-25.
@@ -3364,6 +3593,10 @@ async def public_profile(request: Request, user_id: int):
         "AND shared_post_id IS NULL AND (privacy IS NULL OR privacy='' "
         "OR privacy='public') "
         "AND media IS NOT NULL AND media != '' "
+        # Build LOCKED CONTENT: locked posts never appear in the
+        # public photo grid — their media is not public at any price
+        # of scraping; buyers open them from the post itself.
+        "AND COALESCE(lock_price, 0) = 0 "
         "ORDER BY created_at DESC LIMIT 30", (user_id,)).fetchall()
     conn.close()
     photos = []
@@ -3515,10 +3748,20 @@ def _welcome_trending(viewer):
         cc = conn.execute(
             "SELECT COUNT(*) c FROM comments WHERE post_id=?",
             (p["id"],)).fetchone()["c"]
+        # Build LOCKED CONTENT: locked Views join welcome trending
+        # only for a viewer entitled to open them (author/buyer),
+        # and then only through the /locked gate.
+        _wurl = "/uploads/" + p["media"]
+        if p.get("lock_price"):
+            if not (p["user_id"] == viewer["id"]
+                    or _has_unlock(conn, viewer["id"], "post",
+                                   p["id"])):
+                continue
+            _wurl = "/locked/post/%d" % p["id"]
         scored.append({"post_id": p["id"],
-                       "video_url": "/uploads/" + p["media"],
-                       "poster_url": "/uploads/" + p["media"],
-                       "media": "/uploads/" + p["media"],
+                       "video_url": _wurl,
+                       "poster_url": _wurl,
+                       "media": _wurl,
                        "reaction_count": rc, "comment_count": cc,
                        "_score": 2 * rc + 3 * cc,
                        "_created": p["created_at"],
@@ -3966,6 +4209,35 @@ def create_post_from_form(user, form, page_id=None):
                                   "write on their wall.")
                 wall_user_id = _wt
                 wall_pending = 1 if _wo.get("wall_approve_first") else 0
+    # --- Build LOCKED CONTENT: an optional lock_price form field
+    # turns this post into paid content. Parsed and gated HERE,
+    # before any file is saved, so a refusal creates nothing. Only
+    # creators (users.creator_mode ON) may sell; the price is an
+    # integer 5..5000 tickets — out-of-range is a plain refusal,
+    # never a silent clamp. Page posts can't be locked (Pages earn
+    # through Page Gifts); polls can't be locked (the question IS
+    # the content). Turning Creator Mode off later never touches
+    # existing locks — only this create path is gated. ---
+    lock_price = 0
+    lock_adult = 0
+    _lraw = (form.get("lock_price") or "").strip()
+    if _lraw not in ("", "0"):
+        if page_id:
+            return None, "Locked posts aren't available on Pages."
+        if poll_options is not None:
+            return None, "Polls can't be locked."
+        if not user.get("creator_mode"):
+            return None, ("Turn on Creator Mode to sell locked "
+                          "content.")
+        try:
+            lock_price = int(_lraw)
+        except (TypeError, ValueError):
+            return None, "Lock price must be a whole number of tickets."
+        if lock_price < 5 or lock_price > 5000:
+            return None, ("Lock price must be between 5 and 5,000 "
+                          "tickets.")
+        lock_adult = 1 if (form.get("lock_adult") or "").strip() in (
+            "1", "on", "true") else 0
     body = (form.get("body") or "").strip()
     feeling = (form.get("feeling") or "").strip()
     link_url = (form.get("link_url") or "").strip()
@@ -4015,6 +4287,20 @@ def create_post_from_form(user, form, page_id=None):
     cap = POST_VIDEO_MAX_MB if _mext in VID_EXTS else 0
     if poll_options is not None:
         media = ""  # polls are text-only by design; any file is ignored
+    elif lock_price:
+        # Locked media goes to the locked store (LOCKED_DIR / the
+        # locked/ R2 prefix), NEVER the public uploads — and the
+        # browser-direct media_key path can't be used: those objects
+        # already sit at a public posts/ key, so a "locked" post
+        # pointing at one would leak. Refuse plainly instead.
+        if (form.get("media_key") or "").strip():
+            return None, ("Locked posts need the file attached right "
+                          "here — the quick upload can't be locked.")
+        try:
+            media = save_locked_upload(media_file, "posts", allowed,
+                                       max_mb=cap)
+        except ValueError as e:
+            return None, str(e)
     elif (form.get("media_key") or "").strip() and storage.r2_enabled():
         # Browser-direct upload (Build U): the file already sits in
         # R2; the form carries only the server-minted key.
@@ -4033,8 +4319,8 @@ def create_post_from_form(user, form, page_id=None):
         "INSERT INTO posts(user_id, page_id, kind, body, feeling, link_url, "
         "video_url, media, privacy, music_video_id, music_title, "
         "music_artist, music_thumb, music_start, created_at, "
-        "wall_user_id, wall_pending) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "wall_user_id, wall_pending, lock_price, lock_adult) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], page_id, kind, body, feeling, link_url, video_url,
          media, privacy,
          music["video_id"] if music else "",
@@ -4042,7 +4328,7 @@ def create_post_from_form(user, form, page_id=None):
          music["artist"] if music else "",
          music["thumb"] if music else "",
          music_start if music else 0,
-         now_iso(), wall_user_id, wall_pending))
+         now_iso(), wall_user_id, wall_pending, lock_price, lock_adult))
     pid = cur.lastrowid
     # Hashtags: parsed from the body of EVERY new post (any kind) into
     # post_hashtags. My Views consumes them now; the wall may later.
@@ -4720,10 +5006,30 @@ def _views_feed(viewer, tag=None, offset=0, limit=10):
         if pid in seen:
             score -= VIEWS_SEEN_PENALTY
         a = get_user(p["user_id"])
+        # Build LOCKED CONTENT: a locked View carries its lock into
+        # the player — no video URL and no caption for anyone who
+        # hasn't opened it; the author and buyers play it through
+        # the /locked gate instead of the public uploads path.
+        _vlock = None
+        _vurl = "/uploads/" + p["media"]
+        _vbody = p["body"] or ""
+        if p.get("lock_price"):
+            _vopen = bool(p["user_id"] == viewer["id"]
+                          or _has_unlock(conn, viewer["id"], "post",
+                                         pid))
+            _vlock = {"price": p["lock_price"],
+                      "adult": bool(p.get("lock_adult")),
+                      "open": _vopen}
+            if _vopen:
+                _vurl = "/locked/post/%d" % pid
+            else:
+                _vurl = ""
+                _vbody = ""
         items.append({
             "post_id": pid,
-            "video_url": "/uploads/" + p["media"],
-            "poster_url": "/uploads/" + p["media"],
+            "video_url": _vurl,
+            "poster_url": _vurl,
+            "lock": _vlock,
             "author": {
                 "id": p["user_id"],
                 "name": a["name"] if a else "Deleted user",
@@ -4732,7 +5038,7 @@ def _views_feed(viewer, tag=None, offset=0, limit=10):
                 "following": p["user_id"] in following,
                 "is_self": p["user_id"] == viewer["id"],
             },
-            "body": p["body"] or "",
+            "body": _vbody,
             "hashtags": tags,
             "reaction_count": rc,
             "my_reaction": (mine["kind"] or "like") if mine else None,
@@ -6395,6 +6701,14 @@ def _delete_post(pid):
         conn.execute("DELETE FROM post_tags WHERE post_id=?", (sid,))
     conn.execute("DELETE FROM posts WHERE shared_post_id=?", (pid,))
     conn.execute("DELETE FROM hidden_posts WHERE post_id=?", (pid,))
+    # Build LOCKED CONTENT: purchase records die with the post (the
+    # media file itself is left in the locked store, unreachable —
+    # the same leave-the-file discipline as uploads above).
+    conn.execute("DELETE FROM content_unlocks WHERE "
+                 "content_type='post' AND content_id=?", (pid,))
+    for sid in share_ids:
+        conn.execute("DELETE FROM content_unlocks WHERE "
+                     "content_type='post' AND content_id=?", (sid,))
     conn.execute("DELETE FROM posts WHERE id=?", (pid,))
     conn.commit()
     conn.close()
@@ -7057,6 +7371,24 @@ def _album_photos(viewer, owner_id, owner_on=False, limit=None):
         if ext not in IMG_EXTS:
             continue
         if not can_view_post(viewer, d, owner_on):
+            continue
+        # Build LOCKED CONTENT: a locked photo joins the album only
+        # for viewers entitled to open it, and then only through the
+        # /locked gate — never a public uploads URL.
+        if d.get("lock_price"):
+            entitled = bool(owner_on or viewer["id"] == d["user_id"])
+            if not entitled:
+                _lc = db()
+                entitled = _has_unlock(_lc, viewer["id"], "post",
+                                       d["id"])
+                _lc.close()
+            if not entitled:
+                continue
+            out.append({"url": "/locked/post/%d" % d["id"],
+                        "post_id": d["id"],
+                        "when": fancy_time(d["created_at"])})
+            if limit is not None and len(out) >= limit:
+                break
             continue
         out.append({"url": "/uploads/" + media, "post_id": d["id"],
                     "when": fancy_time(d["created_at"])})
@@ -8095,7 +8427,8 @@ async def unblock_user(request: Request, uid: int):
 # ---------------- messages ----------------
 def _deliver_message(sender, receiver_id, body, story_id=None,
                      story_media="", ama=0, listing_id=None,
-                     listing_title=None, listing_price_cents=None):
+                     listing_title=None, listing_price_cents=None,
+                     lock_media="", lock_price=0, lock_adult=0):
     """THE message insert path. POST /messages/{fid} and the story
     reply/react endpoints all land here, so every message gets the
     identical treatment: the row insert, the moderation scan, the bell
@@ -8112,9 +8445,11 @@ def _deliver_message(sender, receiver_id, body, story_id=None,
     cur = conn.execute(
         "INSERT INTO messages(sender_id, receiver_id, body, created_at, "
         "story_id, story_media, ama, listing_id, listing_title, "
-        "listing_price_cents) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "listing_price_cents, lock_media, lock_price, lock_adult) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (sender["id"], receiver_id, body, now_iso(), story_id, story_media,
-         1 if ama else 0, listing_id, listing_title, listing_price_cents))
+         1 if ama else 0, listing_id, listing_title, listing_price_cents,
+         lock_media or "", lock_price or 0, 1 if lock_adult else 0))
     mid = cur.lastrowid
     conn.commit()
     conn.close()
@@ -8122,21 +8457,27 @@ def _deliver_message(sender, receiver_id, body, story_id=None,
     notify(receiver_id, "message", f"New message from {sender['name']}.",
            f"/messages/{sender['id']}", actor_id=sender["id"])
     preview = body if len(body) <= 80 else body[:79] + "…"
+    if lock_price:
+        # A locked message's caption never rides the push either.
+        preview = "🔒 Locked content"
     if notifications_allowed(receiver_id, sender["id"]):
         send_push(receiver_id, f"💬 {sender['name']}", preview,
                   f"/messages/{sender['id']}", tag=f"msg-{sender['id']}")
     return mid
 
 
-def _msg_preview(body, story_id, ama=0, listing_id=None):
+def _msg_preview(body, story_id, ama=0, listing_id=None, lock_price=0):
     """Inbox/Sent preview text for one message row. Story-linked
     messages announce themselves: a reply reads "📖 Story reply: …"
     and a reaction (body is exactly one reaction emoji) reads
     "📖 {emoji} reacted to a story". A story AMA question reads
     "❓ Question about your story: …" (checked first — an AMA message
     is story-linked too, but the question label wins). Plain messages
-    preview as-is."""
+    preview as-is. A LOCKED message previews as the lock itself —
+    its caption stays hidden until the recipient pays."""
     b = (body or "").strip()
+    if lock_price:
+        return "🔒 Locked content"
     if ama:
         return f"❓ Question about your story: {b}"
     if listing_id:
@@ -8199,7 +8540,8 @@ async def inbox(request: Request):
                  "body": _msg_preview(
                      r["body"], r["story_id"],
                      r["ama"] if "ama" in r.keys() else 0,
-                     r["listing_id"] if "listing_id" in r.keys() else None),
+                     r["listing_id"] if "listing_id" in r.keys() else None,
+                     r["lock_price"] if "lock_price" in r.keys() else 0),
                  "created_at": fancy_time(r["created_at"])}
                 for r in rows if r["receiver_id"] not in blocked]
         return render(request, "inbox.html",
@@ -8221,7 +8563,7 @@ async def inbox(request: Request):
             "SELECT id,name,avatar,last_seen_at,status_mode,inbox_status "
             "FROM users WHERE id=?", (fid,)).fetchone()
         last = conn.execute(
-            "SELECT m.body, m.created_at, m.story_id, m.ama, m.listing_id FROM messages m WHERE "
+            "SELECT m.body, m.created_at, m.story_id, m.ama, m.listing_id, m.lock_price FROM messages m WHERE "
             "((m.sender_id=? AND m.receiver_id=?) OR "
             "(m.sender_id=? AND m.receiver_id=?))" + _vis_frag("m") +
             " ORDER BY m.created_at DESC LIMIT 1",
@@ -8240,7 +8582,8 @@ async def inbox(request: Request):
             "last_body": _msg_preview(
                 last["body"], last["story_id"],
                 last["ama"] if "ama" in last.keys() else 0,
-                last["listing_id"] if "listing_id" in last.keys() else None)
+                last["listing_id"] if "listing_id" in last.keys() else None,
+                last["lock_price"] if "lock_price" in last.keys() else 0)
             if last else "",
             "last_at": fancy_time(last["created_at"]) if last else "",
             "unread": unread,
@@ -8304,7 +8647,31 @@ async def thread(request: Request, fid: int):
         d = {"id": r["id"], "sender_id": r["sender_id"], "body": r["body"],
              "created_at": fancy_time(r["created_at"]),
              "mine": r["sender_id"] == user["id"], "story": None,
-             "listing": None}
+             "listing": None, "locked": None}
+        if "lock_price" in r.keys() and r["lock_price"]:
+            # Build LOCKED CONTENT: the sender always sees their own
+            # content open; the recipient sees it open only after
+            # unlocking. Until then the caption is blanked HERE and
+            # no media URL is emitted — the thread renders a lock
+            # card. The media itself serves only via /locked/dm/{id}.
+            _lopen = bool(d["mine"])
+            if not _lopen:
+                _lc = db()
+                _lopen = _has_unlock(_lc, user["id"], "dm", r["id"])
+                _lc.close()
+            _lkey = r["lock_media"] or ""
+            _lext = (_lkey.rsplit(".", 1)[-1].lower()
+                     if "." in _lkey else "")
+            d["locked"] = {
+                "price": r["lock_price"],
+                "adult": bool(r["lock_adult"]),
+                "open": _lopen,
+                "is_video": _lext in VID_EXTS,
+                "media_url": (f"/locked/dm/{r['id']}" if _lopen
+                              else ""),
+            }
+            if not _lopen:
+                d["body"] = ""
         if "listing_id" in r.keys() and r["listing_id"]:
             d["listing"] = {
                 "id": r["listing_id"],
@@ -8361,6 +8728,40 @@ async def send_message(request: Request, fid: int):
     if blocked_either_way(user["id"], fid):
         return redir("/messages", "You can't message this person.")
     form = await request.form()
+    # --- Build LOCKED CONTENT: a lock_media file in the form makes
+    # this a paid attachment instead of a plain text message. Gated
+    # + priced BEFORE the file is saved, so a refusal stores
+    # nothing. The caption (the form's body field) is stored on the
+    # row but stays hidden from the recipient until they unlock. ---
+    _lock_up = form.get("lock_media")
+    if _lock_up is not None and getattr(_lock_up, "filename", ""):
+        if not user.get("creator_mode"):
+            return redir(f"/messages/{fid}",
+                         "Turn on Creator Mode to sell locked content.")
+        _lraw = (form.get("lock_price") or "").strip()
+        try:
+            _lprice = int(_lraw)
+        except (TypeError, ValueError):
+            return redir(f"/messages/{fid}",
+                         "Lock price must be a whole number of tickets.")
+        if _lprice < 5 or _lprice > 5000:
+            return redir(f"/messages/{fid}",
+                         "Lock price must be between 5 and 5,000 "
+                         "tickets.")
+        _lname = _lock_up.filename or ""
+        _lext = _lname.rsplit(".", 1)[-1].lower() if "." in _lname else ""
+        _lcap = POST_VIDEO_MAX_MB if _lext in VID_EXTS else 0
+        try:
+            _lkey = save_locked_upload(_lock_up, "dm",
+                                       IMG_EXTS | VID_EXTS, max_mb=_lcap)
+        except ValueError as e:
+            return redir(f"/messages/{fid}", str(e))
+        _ladult = 1 if (form.get("lock_adult") or "").strip() in (
+            "1", "on", "true") else 0
+        _deliver_message(user, fid, (form.get("body") or "").strip(),
+                         lock_media=_lkey, lock_price=_lprice,
+                         lock_adult=_ladult)
+        return redir(f"/messages/{fid}")
     body = (form.get("body") or "").strip()
     if not body:
         return redir(f"/messages/{fid}")
@@ -13552,6 +13953,234 @@ def credit_purchase(user_id, tickets, session_id):
     return True
 
 
+# ---------------------------------------------------------------------------
+# Build LOCKED CONTENT — purchases. Creators (Creator Mode ON) sell
+# locked posts and locked DM attachments for tickets; the money lands
+# in the seller's gift_earned wallet (the same cash-out as gifts).
+# The ledger marker is note='unlock' with kinds 'unlock_spend'
+# (buyer) / 'unlock_receive' (seller) and gift_key 'post:{id}' /
+# 'dm:{id}' — deliberately NOT gift_receive, so the live-gift
+# "Earlier streams" bucket and the note='page' Page-gifts bucket
+# stay bit-for-bit what they were. Unlocks are forever.
+# ---------------------------------------------------------------------------
+
+def _unlock_core(user, ctype, cid, confirm_adult):
+    """The one guarded unlock transaction, shared by posts and DMs.
+    Returns (ok, message). Check order is deliberate: existence +
+    visibility FIRST (post privacy runs before a lock can even be
+    attempted), then own-content, then the existing-unlock
+    short-circuit (never a second charge), then the 18+ confirm,
+    then the money: guarded debit (rowcount checked) → seller
+    gift_earned AND gift_lifetime credit → content_unlocks row
+    (UNIQUE(content_type, content_id, buyer_id) is the hard
+    double-charge backstop) → both ticket_txns rows sharing ONE
+    timestamp so _txn_line can pair them back up."""
+    conn = db()
+    if ctype == "post":
+        row = conn.execute("SELECT * FROM posts WHERE id=?",
+                           (cid,)).fetchone()
+        if not row:
+            conn.close()
+            return False, "That content isn't available."
+        row = dict(row)
+        if not can_view_post(user, row, False):
+            conn.close()
+            return False, "That content isn't available."
+        seller_id = row["user_id"]
+        price = row.get("lock_price") or 0
+        adult = bool(row.get("lock_adult"))
+        noun = "post"
+    else:
+        row = conn.execute("SELECT * FROM messages WHERE id=?",
+                           (cid,)).fetchone()
+        if not row:
+            conn.close()
+            return False, "That content isn't available."
+        row = dict(row)
+        # Only the message's RECIPIENT can unlock it. The sender's
+        # own content is always open to them; a third party gets the
+        # same plain refusal as a missing message.
+        if row["receiver_id"] != user["id"]:
+            conn.close()
+            if row["sender_id"] == user["id"]:
+                return False, "Your own content is always open to you."
+            return False, "That content isn't available."
+        seller_id = row["sender_id"]
+        price = row.get("lock_price") or 0
+        adult = bool(row.get("lock_adult"))
+        noun = "message"
+    if not price:
+        conn.close()
+        return False, "That content isn't locked."
+    if seller_id == user["id"]:
+        conn.close()
+        return False, "Your own content is always open to you."
+    if _has_unlock(conn, user["id"], ctype, cid):
+        conn.close()
+        return True, "You've already unlocked this."
+    if adult and not confirm_adult:
+        conn.close()
+        return False, "Confirm you're 18+ to unlock this."
+    stamp = now_iso()
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? "
+        "AND COALESCE(tickets_balance,0) >= ?",
+        (price, user["id"], price))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return False, "Not enough tickets — grab a pack first 🎟️"
+    conn.execute(
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ?, "
+        "gift_lifetime = COALESCE(gift_lifetime,0) + ? WHERE id=?",
+        (price, price, seller_id))
+    try:
+        conn.execute(
+            "INSERT INTO content_unlocks(content_type, content_id, "
+            "buyer_id, seller_id, price, created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (ctype, cid, user["id"], seller_id, price, stamp))
+    except sqlite3.IntegrityError:
+        # A twin tap won the race: the unlock row already exists, so
+        # this buyer already owns it — roll the money back whole.
+        conn.rollback()
+        conn.close()
+        return True, "You've already unlocked this."
+    gkey = f"{ctype}:{cid}"
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, stripe_session, note, created_at) "
+        "VALUES(?, 'unlock_spend', ?, NULL, ?, NULL, 'unlock', ?)",
+        (user["id"], -price, gkey, stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, stripe_session, note, created_at) "
+        "VALUES(?, 'unlock_receive', ?, NULL, ?, NULL, 'unlock', ?)",
+        (seller_id, price, gkey, stamp))
+    conn.commit()
+    conn.close()
+    notify(seller_id, "content_unlock",
+           f"{user['name']} unlocked your {noun} (+{price} 🎟️)",
+           f"/post/{cid}" if ctype == "post" else f"/messages/{user['id']}",
+           user["id"])
+    return True, "Unlocked — it's yours forever 🔓"
+
+
+async def _unlock_confirm(request):
+    """The buyer's explicit 18+ confirmation, from a JSON body or a
+    classic form field (confirm_adult=1)."""
+    if "application/json" in (request.headers.get("content-type")
+                               or ""):
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        return data.get("confirm_adult") in (1, True, "1", "true", "on")
+    form = await request.form()
+    return (form.get("confirm_adult") or "") in ("1", "on", "true")
+
+
+def _unlock_reply(request, ok, msg, fallback):
+    """JSON for API callers, redirect-with-flash for the classic
+    lock-card forms (the gift routes' dual-shape precedent)."""
+    if "application/json" in (request.headers.get("content-type")
+                              or ""):
+        return JSONResponse(
+            {"ok": ok, "error": "" if ok else msg, "message": msg},
+            status_code=200 if ok else 400)
+    # Same same-origin rule as back(): a relative Referer wins, the
+    # fallback otherwise; the message rides as the flash.
+    ref = request.headers.get("referer", "")
+    return redir(ref if ref.startswith("/") else fallback, msg)
+
+
+@app.post("/post/{pid}/unlock")
+async def unlock_post(request: Request, pid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    confirm = await _unlock_confirm(request)
+    ok, msg = _unlock_core(user, "post", pid, confirm)
+    return _unlock_reply(request, ok, msg, f"/post/{pid}")
+
+
+@app.post("/messages/{mid}/unlock")
+async def unlock_message(request: Request, mid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    confirm = await _unlock_confirm(request)
+    ok, msg = _unlock_core(user, "dm", mid, confirm)
+    conn = db()
+    m = conn.execute("SELECT sender_id FROM messages WHERE id=?",
+                     (mid,)).fetchone()
+    conn.close()
+    fallback = f"/messages/{m['sender_id']}" if m else "/messages"
+    return _unlock_reply(request, ok, msg, fallback)
+
+
+@app.get("/locked/post/{pid}")
+async def locked_post_media(request: Request, pid: int):
+    """The ONLY route that serves a locked post's media. Login
+    required; post privacy runs first (can_view_post); then the
+    viewer must be the author, the owner context, or a buyer.
+    Everyone else: 404 (can't view / doesn't exist) or 403 (can see
+    the post exists, hasn't paid)."""
+    user = current_user(request)
+    if not user:
+        return HTMLResponse("Not found", status_code=404)
+    owner_on = is_owner(request)
+    conn = db()
+    row = conn.execute("SELECT * FROM posts WHERE id=?",
+                       (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return HTMLResponse("Not found", status_code=404)
+    p = dict(row)
+    media = p.get("media") or ""
+    if not (p.get("lock_price") and media.startswith("locked/")):
+        conn.close()
+        return HTMLResponse("Not found", status_code=404)
+    if not can_view_post(user, p, owner_on):
+        conn.close()
+        return HTMLResponse("Not found", status_code=404)
+    entitled = bool(owner_on or user["id"] == p["user_id"]
+                    or _has_unlock(conn, user["id"], "post", pid))
+    conn.close()
+    if not entitled:
+        return HTMLResponse("Locked content", status_code=403)
+    return _serve_locked_media(media)
+
+
+@app.get("/locked/dm/{mid}")
+async def locked_dm_media(request: Request, mid: int):
+    """The ONLY route that serves a locked DM attachment. Only the
+    two conversation participants can ever reach it: the sender
+    always, the recipient after unlocking. Non-participants get
+    404 (the message may as well not exist); an un-unlocked
+    recipient gets 403."""
+    user = current_user(request)
+    if not user:
+        return HTMLResponse("Not found", status_code=404)
+    conn = db()
+    row = conn.execute("SELECT * FROM messages WHERE id=?",
+                       (mid,)).fetchone()
+    if not row or not row["lock_media"]:
+        conn.close()
+        return HTMLResponse("Not found", status_code=404)
+    m = dict(row)
+    if user["id"] not in (m["sender_id"], m["receiver_id"]):
+        conn.close()
+        return HTMLResponse("Not found", status_code=404)
+    entitled = bool(user["id"] == m["sender_id"]
+                    or _has_unlock(conn, user["id"], "dm", mid))
+    conn.close()
+    if not entitled:
+        return HTMLResponse("Locked content", status_code=403)
+    return _serve_locked_media(m["lock_media"])
+
+
 def _txn_line(t):
     """One ticket history row -> plain-English text."""
     k = t["kind"]
@@ -13572,6 +14201,50 @@ def _txn_line(t):
                     f"(+{t['tickets']} 🎟️)")
         face = (g["emoji"] + " ") if g["emoji"] else ""
         return f"Received {face}{g['name']} (+{t['tickets']} 🎟️)"
+    if k in ("unlock_spend", "unlock_receive"):
+        # Build LOCKED CONTENT lines. gift_key is 'post:{id}' /
+        # 'dm:{id}'; the spend side names the seller (the content's
+        # author/sender — a fixed fact), the receive side names the
+        # buyer via the content_unlocks row written in the SAME
+        # transaction (matched on the shared created_at stamp).
+        ctype, _, cid = (t["gift_key"] or "").partition(":")
+        noun = "post" if ctype == "post" else "message"
+        n = abs(t["tickets"])
+        conn = db()
+        if k == "unlock_spend":
+            other = None
+            if ctype == "post":
+                r = conn.execute(
+                    "SELECT user_id FROM posts WHERE id=?",
+                    (cid,)).fetchone()
+                other = r["user_id"] if r else None
+            elif ctype == "dm":
+                r = conn.execute(
+                    "SELECT sender_id FROM messages WHERE id=?",
+                    (cid,)).fetchone()
+                other = r["sender_id"] if r else None
+            nm = ""
+            if other:
+                u = conn.execute("SELECT name FROM users WHERE id=?",
+                                 (other,)).fetchone()
+                nm = u["name"] if u else ""
+            conn.close()
+            if nm:
+                return f"Unlocked {nm}'s {noun} (−{n} 🎟️)"
+            return f"Unlocked locked content (−{n} 🎟️)"
+        r = conn.execute(
+            "SELECT buyer_id FROM content_unlocks WHERE "
+            "content_type=? AND content_id=? AND created_at=?",
+            (ctype, cid, t["created_at"])).fetchone()
+        nm = ""
+        if r:
+            u = conn.execute("SELECT name FROM users WHERE id=?",
+                             (r["buyer_id"],)).fetchone()
+            nm = u["name"] if u else ""
+        conn.close()
+        if nm:
+            return f"{nm} unlocked your {noun} (+{n} 🎟️)"
+        return f"Received unlock payment (+{n} 🎟️)"
     if k == "shout":
         return f"Pinned a shout-out (−{abs(t['tickets'])} 🎟️)"
     if k == "cashout_hold":
@@ -13879,6 +14552,18 @@ async def earnings_page(request: Request):
     page_gifts = ({"gifts": page_g["c"] or 0,
                    "tickets": page_g["s"] or 0}
                   if page_g and page_g["c"] else None)
+    # Build LOCKED CONTENT: unlock credits are their own kind
+    # ('unlock_receive', note='unlock') — never gift_receive — so
+    # they can't leak into the stream buckets above; they get their
+    # own line here, counted straight off content_unlocks' twin
+    # ledger rows.
+    lock_r = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s FROM "
+        "ticket_txns WHERE user_id=? AND kind='unlock_receive' AND "
+        "COALESCE(note,'') = 'unlock'", (user["id"],)).fetchone()
+    locked_content = ({"sales": lock_r["c"] or 0,
+                       "tickets": lock_r["s"] or 0}
+                      if lock_r and lock_r["c"] else None)
     pending = conn.execute(
         "SELECT * FROM payout_requests WHERE user_id=? AND "
         "status IN ('pending','sending') ORDER BY id DESC LIMIT 1",
@@ -13915,6 +14600,7 @@ async def earnings_page(request: Request):
             _earned_dollars(CASHOUT_MIN_TICKETS)),
         "streams": streams, "earlier": earlier,
         "page_gifts": page_gifts,
+        "locked_content": locked_content,
         "pending": ({"tickets": pending["tickets"],
                      "dollars": _money2(pending["dollars_cents"]),
                      "when": fancy_time(pending["created_at"])}
