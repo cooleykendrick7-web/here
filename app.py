@@ -1234,6 +1234,36 @@ def init_db():
         expires_at TEXT NOT NULL, created_at TEXT NOT NULL)""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_live_shouts_room "
               "ON live_shouts(live_id, id)")
+    # Build PAGE GIFTS / Creator Mode: the per-user switch that
+    # turns a profile (and its Pages) into a creator surface —
+    # Creator Mode ON is what makes the 🎁 Gift button appear and
+    # the gift routes accept sends (Locked Content will ride the
+    # same flag in the next build). Default off; a NULL on a
+    # pre-creator row reads as off.
+    _ucols_cm = [r["name"] for r in
+                 c.execute("PRAGMA table_info(users)").fetchall()]
+    if "creator_mode" not in _ucols_cm:
+        c.execute("ALTER TABLE users ADD COLUMN creator_mode "
+                  "INTEGER DEFAULT 0")
+    # --- Build PAGE GIFTS: gifts sent to a profile or a Page ---
+    # One row per gift sent OUTSIDE a live (the 🎁 Gift button on
+    # profiles + Pages). recipient_id is always the USER who earns
+    # (a profile's owner, or a Page's owner_id — never anyone else);
+    # page_id is NULL for a profile gift and names the Page for a
+    # page gift, so the Recent-gifts strips read one table. The
+    # money itself moves through the same two ledgers as live
+    # gifts; the gift_receive ledger row carries note='page' (and
+    # live_id NULL) so /earnings can show page gifts as their own
+    # line instead of the "Earlier streams" bucket.
+    c.execute("""CREATE TABLE IF NOT EXISTS page_gifts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL,
+        page_id INTEGER, gift_key TEXT NOT NULL,
+        tickets INTEGER NOT NULL, created_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_page_gifts_recipient "
+              "ON page_gifts(recipient_id, page_id, id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_page_gifts_sender "
+              "ON page_gifts(sender_id, recipient_id, id)")
     # --- Live Showdown battles (Build W2) ---
     # A battle LINKS two existing live rooms; it never merges them.
     # Scores are ticket-points added by the gift handler in the same
@@ -7129,6 +7159,9 @@ async def profile(request: Request, uid: int):
         "viewer_follows": bool(user["id"] != uid
                                and is_following(user["id"], uid)),
         "is_self": user["id"] == uid,
+        # Build PAGE GIFTS / Creator Mode: the owner's own profile
+        # shows the switch state as a small line (no badge).
+        "creator_mode": 1 if prof.get("creator_mode") else 0,
         "req_status": status,
         "tap_count": tcount,
         "is_verified": bool(prof.get("is_verified")),
@@ -7221,6 +7254,19 @@ async def profile(request: Request, uid: int):
             "AND status!='deleted'", (uid,)).fetchone()["c"]
         _mconn.close()
         selling = [_listing_card(r) for r in _mrows]
+    # Build PAGE GIFTS: the 🎁 Gift button + sheet ride on every
+    # profile except your own (you can't gift yourself) and except
+    # locked private profiles; Creator Mode gates it too — the
+    # button only exists while the profile owner is a creator.
+    # The Recent gifts strip shows unless the profile is locked.
+    # A blocked pair never reaches here.
+    page_gift = None
+    if (user["id"] != uid and not locked
+            and prof.get("creator_mode")):
+        page_gift = _page_gift_ctx(user, f"/user/{uid}/gift",
+                                   prof["name"])
+    recent_page_gifts = ([] if locked
+                         else _recent_page_gifts(uid, None))
     return render(request, "profile.html",
                   {"profile": profile_ctx, "posts": posts,
                    "pending_wall_posts": pending_wall,
@@ -7228,6 +7274,8 @@ async def profile(request: Request, uid: int):
                    "wall_closed_note": wall_closed_note,
                    "wall_open": wall_open,
                    "wall_approve_first": wall_approve_first,
+                   "page_gift": page_gift,
+                   "recent_page_gifts": recent_page_gifts,
                    "composer_friends": composer_friends,
                    "album_photos": album_photos,
                    "album_count": album_count,
@@ -7370,6 +7418,10 @@ async def profile_edit_page(request: Request):
                                         else 0)),
                     "wall_approve_first": (1 if user.get(
                         "wall_approve_first") else 0),
+                    # Build PAGE GIFTS / Creator Mode: the 🎨 card's
+                    # switch (default off).
+                    "creator_mode": 1 if user.get("creator_mode")
+                    else 0,
                     "inbox_status": 1 if user.get("inbox_status") is None
                     else (1 if user.get("inbox_status") else 0),
                     "status_label": status_label,
@@ -7452,6 +7504,34 @@ async def settings_wall(request: Request):
     if not (nxt.startswith("/") and not nxt.startswith("//")):
         nxt = "/settings/profile"
     return redir(nxt, "Your wall settings were saved.")
+
+
+@app.post("/settings/creator")
+async def settings_creator(request: Request):
+    """Build PAGE GIFTS / Creator Mode: save the 🎨 Creator Mode
+    switch. ON makes you a creator — your profile and your Pages
+    get the 🎁 Gift button and the gift routes accept sends to
+    you (Locked Content will ride the same flag in a later build).
+    Fans need nothing to gift. One route serves the Settings 🎨
+    Creator Mode card; a same-origin 'next' field picks where you
+    land (anything else falls back to Settings)."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    on = 1 if (form.get("creator_mode") or "") == "1" else 0
+    conn = db()
+    conn.execute("UPDATE users SET creator_mode=? WHERE id=?",
+                 (on, user["id"]))
+    conn.commit()
+    conn.close()
+    nxt = (form.get("next") or "").strip()
+    if not (nxt.startswith("/") and not nxt.startswith("//")):
+        nxt = "/settings/profile"
+    msg = ("Creator Mode is on 🎨 — your profile and Pages can "
+           "take gifts now." if on else
+           "Creator Mode is off — your gift buttons are hidden.")
+    return redir(nxt, msg)
 
 
 @app.post("/settings/spot")
@@ -10936,6 +11016,247 @@ async def live_comment_delete(request: Request, lid: int, cid: int):
     return JSONResponse({"ok": True})
 
 
+# ---------------- Build PAGE GIFTS: gift a profile or a Page --------
+# Ken's order: the gift economy leaves the live room. A 🎁 Gift
+# button on every profile and every Page sends the SAME catalog
+# gifts at the SAME prices; the recipient — a profile's owner, or
+# a Page's owner_id, never anyone else — earns into the SAME
+# gift_earned wallet as live money. One core (_page_gift_core) runs
+# both routes: the same guarded atomic debit as the live handler,
+# the recipient's gift_earned + gift_lifetime credited, one
+# page_gifts row, and two ledger rows stamped note='page' (with
+# live_id NULL) so /earnings shows a 🎁 Page gifts line and
+# /tickets reads "Received … on your page". Rules mirror the live
+# path: no self-gifts, a block in either direction refuses, the
+# sender must be able to VIEW the target (a private profile is
+# friends-only; a Page must exist), and the FREE neon_heart rides
+# the same 1-per-2s guard — scoped per sender+recipient and checked
+# against the page_gifts row the last free gift wrote (the live
+# guard checks live_gifts; the two never share a table, and neither
+# is weakened by the other).
+
+
+def _page_gift_ctx(user, endpoint, recipient_name):
+    """Template context for the 🎁 Gift button + sheet (the shared
+    partials/page_gift.html): the viewer's balance and the full
+    catalog copy (prices live server-side in GIFT_CATALOG; the
+    sheet renders from this, sends keys only)."""
+    me = get_user(user["id"]) or {}
+    gifts = []
+    for k in GIFT_ORDER:
+        g = GIFT_CATALOG[k]
+        gifts.append({"key": k, "name": g["name"],
+                      "tickets": g["tickets"],
+                      "category": g["category"], "img": g["img"],
+                      "anim": g["anim"]})
+    return {"endpoint": endpoint, "recipient_name": recipient_name,
+            "balance": me.get("tickets_balance") or 0,
+            "gifts": gifts}
+
+
+def _recent_page_gifts(recipient_id, page_id, limit=6):
+    """The Recent gifts strip rows for one profile (page_id NULL)
+    or one Page: latest first, sender face + gift face, ready for
+    templates/partials/recent_gifts.html."""
+    conn = db()
+    if page_id is None:
+        rows = conn.execute(
+            "SELECT g.*, u.name AS sender_name, "
+            "u.avatar AS sender_avatar FROM page_gifts g "
+            "LEFT JOIN users u ON u.id = g.sender_id "
+            "WHERE g.recipient_id=? AND g.page_id IS NULL "
+            "ORDER BY g.id DESC LIMIT ?",
+            (recipient_id, limit)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT g.*, u.name AS sender_name, "
+            "u.avatar AS sender_avatar FROM page_gifts g "
+            "LEFT JOIN users u ON u.id = g.sender_id "
+            "WHERE g.page_id=? ORDER BY g.id DESC LIMIT ?",
+            (page_id, limit)).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        out.append({
+            "sender_id": r["sender_id"],
+            "sender_name": r["sender_name"] or "Someone",
+            "sender_avatar": avatar_url(r["sender_avatar"] or ""),
+            "gift": _gift_public(r["gift_key"], r["tickets"]),
+            "when": fancy_time(r["created_at"])})
+    return out
+
+
+def _page_gift_core(user, recipient_id, recipient_name, page_id,
+                    gift):
+    """The one money-moving transaction for a page gift, entered
+    only after every view/self/block gate has passed. Returns
+    (status_code, payload) — the routes just JSON it."""
+    cost = gift["tickets"]
+    conn = db()
+    if cost == 0:
+        # FREE gift anti-spam: free gifts move no ledger, so the
+        # balance guard can't slow a spam tap — cap them at one
+        # per sender per recipient per 2 seconds instead (checked
+        # against the page_gifts row the last one wrote).
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(seconds=2)).isoformat()
+        recent = conn.execute(
+            "SELECT COUNT(*) c FROM page_gifts WHERE sender_id=? "
+            "AND recipient_id=? AND tickets=0 AND created_at>?",
+            (user["id"], recipient_id, cutoff)).fetchone()["c"]
+        if recent:
+            conn.close()
+            return 429, {"ok": False,
+                         "error": "Easy — one free gift every "
+                                  "couple of seconds 💜"}
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
+        "COALESCE(tickets_balance,0) >= ?", (cost, user["id"], cost))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return 400, {"ok": False,
+                     "error": "Not enough tickets — grab a pack "
+                              "first 🎟️"}
+    conn.execute(
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ?, "
+        "gift_lifetime = COALESCE(gift_lifetime,0) + ? WHERE id=?",
+        (cost, cost, recipient_id))
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO page_gifts(sender_id, recipient_id, page_id, "
+        "gift_key, tickets, created_at) VALUES(?,?,?,?,?,?)",
+        (user["id"], recipient_id, page_id, gift["key"], cost,
+         stamp))
+    gift_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
+        (user["id"], "gift_send", -cost, None, gift["key"], "page",
+         stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
+        (recipient_id, "gift_receive", cost, None, gift["key"],
+         "page", stamp))
+    conn.commit()
+    bal = conn.execute(
+        "SELECT tickets_balance FROM users WHERE id=?",
+        (user["id"],)).fetchone()["tickets_balance"]
+    conn.close()
+    notify(recipient_id, "page_gift",
+           f"{user['name']} sent you {gift['name']} 🎁",
+           f"/user/{user['id']}", actor_id=user["id"])
+    return 200, {"ok": True, "balance": bal or 0,
+                 "gift_id": gift_id, "recipient_id": recipient_id,
+                 "recipient_name": recipient_name}
+
+
+async def _page_gift_parse(request):
+    """(user, gift) or (None, error_response) — the shared front
+    door of both page-gift routes: login + a known catalog key."""
+    user = current_user(request)
+    if not user:
+        return None, None, JSONResponse(
+            {"ok": False, "error": "Log in first."},
+            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    gift_key = str((data or {}).get("gift_key") or "")
+    gift = GIFT_CATALOG.get(gift_key)
+    if not gift:
+        return None, None, JSONResponse(
+            {"ok": False, "error": "Unknown gift."},
+            status_code=400)
+    return user, gift, None
+
+
+@app.post("/user/{uid}/gift")
+async def user_page_gift(request: Request, uid: int):
+    """🎁 Gift a profile: the profile's owner earns. Creator Mode
+    gates it first — no creator flag, no gifts. The other gates
+    mirror the profile itself — a blocked pair gets the
+    unavailable answer, a private profile is friends-only (the
+    owner context sees through both, like the steal-look
+    route)."""
+    user, gift, err = await _page_gift_parse(request)
+    if err:
+        return err
+    prof = get_user(uid)
+    if not prof:
+        return JSONResponse(
+            {"ok": False, "error": "That profile isn't available."},
+            status_code=400)
+    if not prof.get("creator_mode"):
+        return JSONResponse(
+            {"ok": False,
+             "error": "That profile can't take gifts — Creator "
+                      "Mode is off."},
+            status_code=403)
+    if uid == user["id"]:
+        return JSONResponse(
+            {"ok": False, "error": "You can't gift yourself."},
+            status_code=400)
+    owner_on = is_owner(request)
+    if not owner_on and blocked_either_way(user["id"], uid):
+        return JSONResponse(
+            {"ok": False, "error": "That profile isn't available."},
+            status_code=400)
+    if prof.get("private_profile") and not owner_on \
+            and not is_friend(user["id"], uid):
+        return JSONResponse(
+            {"ok": False,
+             "error": "That profile is private — only their "
+                      "friends can send them gifts."},
+            status_code=403)
+    code, payload = _page_gift_core(user, uid, prof["name"], None,
+                                    gift)
+    return JSONResponse(payload, status_code=code)
+
+
+@app.post("/page/{pid}/gift")
+async def page_page_gift(request: Request, pid: int):
+    """🎁 Gift a Page: the PAGE'S OWNER earns — never an admin,
+    a member, or anyone else. Creator Mode gates it on the PAGE
+    OWNER's flag. A Page has no privacy gate (anyone signed in
+    can view one), so the view gate is existence, plus the
+    shared block rule against the owner."""
+    user, gift, err = await _page_gift_parse(request)
+    if err:
+        return err
+    conn = db()
+    pg = conn.execute("SELECT * FROM pages WHERE id=?",
+                      (pid,)).fetchone()
+    conn.close()
+    if not pg:
+        return JSONResponse(
+            {"ok": False, "error": "That page isn't available."},
+            status_code=400)
+    owner_id = pg["owner_id"]
+    _pg_owner = get_user(owner_id) or {}
+    if not _pg_owner.get("creator_mode"):
+        return JSONResponse(
+            {"ok": False,
+             "error": "That Page can't take gifts — its owner "
+                      "hasn't turned on Creator Mode."},
+            status_code=403)
+    if owner_id == user["id"]:
+        return JSONResponse(
+            {"ok": False, "error": "You can't gift yourself."},
+            status_code=400)
+    if not is_owner(request) \
+            and blocked_either_way(user["id"], owner_id):
+        return JSONResponse(
+            {"ok": False, "error": "That page isn't available."},
+            status_code=400)
+    code, payload = _page_gift_core(user, owner_id, pg["name"], pid,
+                                    gift)
+    return JSONResponse(payload, status_code=code)
+
+
 # ---------------- live tickets: gifts + shout-out pins ----------------
 # The money-moving pair of the gift economy. Both endpoints are
 # single-transaction and guarded: the spendable balance is debited
@@ -12550,8 +12871,24 @@ async def page_view(request: Request, pid: int):
         if card:
             posts.append(card)
     cfriends, cpages = composer_choices(user)
+    # Build PAGE GIFTS: the 🎁 Gift button + sheet ride on every
+    # Page except for the Page's owner (a gift to your own page
+    # would be a gift to yourself); Creator Mode gates it on the
+    # PAGE OWNER's flag — a member's flag never opens a Page. The
+    # strip shows the PAGE's recent gifts (credited to the owner,
+    # displayed here).
+    pg_ctx = page_ctx(dict(pg), user)
+    page_gift = None
+    _pg_owner = get_user(pg["owner_id"]) or {}
+    if (pg["owner_id"] != user["id"]
+            and _pg_owner.get("creator_mode")):
+        page_gift = _page_gift_ctx(user, f"/page/{pid}/gift",
+                                   pg["name"])
+    recent_page_gifts = _recent_page_gifts(pg["owner_id"], pid)
     return render(request, "page.html",
-                  {"page": page_ctx(dict(pg), user), "posts": posts,
+                  {"page": pg_ctx, "posts": posts,
+                   "page_gift": page_gift,
+                   "recent_page_gifts": recent_page_gifts,
                    "composer_friends": cfriends, "composer_pages": cpages})
 
 
@@ -13229,6 +13566,10 @@ def _txn_line(t):
         if note == "shout":
             return f"Received a shout-out pin (+{t['tickets']} 🎟️)"
         g = _gift_public(t["gift_key"])
+        if note == "page":
+            face = (g["emoji"] + " ") if g["emoji"] else ""
+            return (f"Received {face}{g['name']} on your page "
+                    f"(+{t['tickets']} 🎟️)")
         face = (g["emoji"] + " ") if g["emoji"] else ""
         return f"Received {face}{g['name']} (+{t['tickets']} 🎟️)"
     if k == "shout":
@@ -13520,11 +13861,24 @@ async def earnings_page(request: Request):
         "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s, "
         "SUM(CASE WHEN COALESCE(note,'')='shout' THEN 0 ELSE 1 "
         "END) g FROM ticket_txns WHERE user_id=? AND "
-        "kind='gift_receive' AND live_id IS NULL",
+        "kind='gift_receive' AND live_id IS NULL AND "
+        "COALESCE(note,'') != 'page'",
         (user["id"],)).fetchone()
     earlier = ({"gifts": (legacy["g"] or 0) if legacy else 0,
                 "tickets": (legacy["s"] or 0) if legacy else 0}
                if legacy and legacy["c"] else None)
+    # Build PAGE GIFTS: page/profile gift credits also carry a
+    # NULL live_id, but they are NOT "Earlier streams" — they get
+    # their own line (the note='page' marker the page-gift writer
+    # stamps), so a creator who never goes live still sees exactly
+    # what their page earned.
+    page_g = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s FROM "
+        "ticket_txns WHERE user_id=? AND kind='gift_receive' AND "
+        "COALESCE(note,'') = 'page'", (user["id"],)).fetchone()
+    page_gifts = ({"gifts": page_g["c"] or 0,
+                   "tickets": page_g["s"] or 0}
+                  if page_g and page_g["c"] else None)
     pending = conn.execute(
         "SELECT * FROM payout_requests WHERE user_id=? AND "
         "status IN ('pending','sending') ORDER BY id DESC LIMIT 1",
@@ -13560,6 +13914,7 @@ async def earnings_page(request: Request):
         "cashout_min_dollars": _money2(
             _earned_dollars(CASHOUT_MIN_TICKETS)),
         "streams": streams, "earlier": earlier,
+        "page_gifts": page_gifts,
         "pending": ({"tickets": pending["tickets"],
                      "dollars": _money2(pending["dollars_cents"]),
                      "when": fancy_time(pending["created_at"])}
