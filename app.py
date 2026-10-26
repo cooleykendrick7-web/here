@@ -1480,6 +1480,11 @@ def render(request: Request, name, ctx=None):
         ctx.setdefault("viewer_glass_rgb", look_rgb_str_for(u))
         ctx.setdefault("viewer_look_accent", look_accent_for(u))
         ctx.setdefault("viewer_look_classes", look_scope_class_for(u))
+        # Build SHINE: the accent as rgba() components (for glows)
+        # + the scheme gate class for the lit-glass finish.
+        ctx.setdefault("viewer_look_accent_rgb",
+                       look_accent_rgb_str_for(u))
+        ctx.setdefault("viewer_scheme_class", look_scheme_class_for(u))
         ctx.setdefault("viewer_gold", is_gold_inviter(u["id"]))
     else:
         ctx["user"] = None
@@ -1496,6 +1501,9 @@ def render(request: Request, name, ctx=None):
         ctx.setdefault("viewer_glass_rgb", look_rgb_str_for(None))
         ctx.setdefault("viewer_look_accent", LOOK_DEFAULT_ACCENT)
         ctx.setdefault("viewer_look_classes", "")
+        ctx.setdefault("viewer_look_accent_rgb",
+                       look_accent_rgb_str_for(None))
+        ctx.setdefault("viewer_scheme_class", "scheme-glass")
     ctx.setdefault("flash", request.query_params.get("flash", ""))
     return templates.TemplateResponse(request, name, ctx)
 
@@ -3219,7 +3227,10 @@ async def public_profile(request: Request, user_id: int):
                 # Build LOOKS: even logged-out visitors see the
                 # profile in its owner's look.
                 "look_style": look_scope_style_for(prof),
-                "look_classes": look_scope_class_for(prof)}
+                "look_classes": look_scope_class_for(prof),
+                # Build SHINE: the owner's scheme gates the public
+                # card's lit-glass finish too.
+                "look_scheme_class": look_scheme_class_for(prof)}
     og_image = (_abs_url(request, prof_ctx["avatar"])
                 if prof_ctx["avatar"] else "")
     return render(request, "public_profile.html", {
@@ -6624,6 +6635,24 @@ def look_accent_for(u):
     return _look_accent_hex(u) or LOOK_DEFAULT_ACCENT
 
 
+def look_accent_rgb_str_for(u):
+    """The accent as an 'r,g,b' triplet for --look-accent-rgb: the
+    Build SHINE glows ride rgba() and need the accent in components.
+    look_accent_for always yields a valid hex, so this never fails;
+    a guest (None) gets the HERE red triplet."""
+    return ",".join(str(c) for c in _hex_to_rgb(look_accent_for(u)))
+
+
+def look_scheme_class_for(u):
+    """'scheme-glass' / 'scheme-solid' / 'scheme-mix' — the Build
+    SHINE gate class for any scope ruled by u's look: <body> for the
+    viewer, the profile .spot-scope for its owner. A guest (None)
+    lives in the default glass."""
+    if not u:
+        return "scheme-glass"
+    return "scheme-" + look_scheme_for(u)
+
+
 def _hex_luminance(rgb):
     """Relative luminance (sRGB coefficients) of an (r, g, b) triplet,
     0.0 (black) .. 1.0 (white). Drives the readability guardrail."""
@@ -6656,12 +6685,14 @@ def look_vars_for(u):
 
 def look_scope_style_for(u):
     """The owner's look vars as an inline style for a profile scope:
-    their --glass-alpha (by scheme), --glass-rgb and --look-accent,
-    always all three, so a viewer's own vars can never cascade into
+    their --glass-alpha + --glass-alpha-soft (by scheme), --glass-rgb,
+    --look-accent and its --look-accent-rgb triplet (Build SHINE),
+    always all of them, so a viewer's own vars can never cascade into
     somebody else's profile (the spot_scope_style_for discipline)."""
     alpha, soft, rgb, accent, _cls = look_vars_for(u)
     return (f"--glass-alpha:{alpha};--glass-alpha-soft:{soft}"
-            f";--glass-rgb:{rgb};--look-accent:{accent}")
+            f";--glass-rgb:{rgb};--look-accent:{accent}"
+            f";--look-accent-rgb:{look_accent_rgb_str_for(u)}")
 
 
 def apply_look(conn, user_id, values):
@@ -6889,6 +6920,8 @@ async def profile(request: Request, uid: int):
         # while their own chrome keeps their own look.
         "look_style": look_scope_style_for(prof),
         "look_classes": look_scope_class_for(prof),
+        # Build SHINE: the .spot-scope shines by the OWNER's scheme.
+        "look_scheme_class": look_scheme_class_for(prof),
         "can_steal_look": bool(user["id"] != uid and not locked),
     }
     posts = []
@@ -7009,7 +7042,8 @@ async def user_photos(request: Request, uid: int):
            "spot_style": spot_scope_style_for(prof),
            "spot_classes": spot_classes,
            "look_style": look_scope_style_for(prof),
-           "look_classes": look_scope_class_for(prof)}
+           "look_classes": look_scope_class_for(prof),
+           "look_scheme_class": look_scheme_class_for(prof)}
     if locked:
         return render(request, "photos.html",
                       {"profile": ctx, "cover": [], "photos": [],
