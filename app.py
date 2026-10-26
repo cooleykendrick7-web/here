@@ -1189,6 +1189,15 @@ def init_db():
         tickets INTEGER NOT NULL, created_at TEXT NOT NULL)""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_live_gifts_room "
               "ON live_gifts(live_id, id)")
+    _lg_cols = [r["name"] for r in
+                c.execute("PRAGMA table_info(live_gifts)").fetchall()]
+    if "recipient_id" not in _lg_cols:
+        # Build PANEL GIFTS: who ACTUALLY received the gift (any
+        # panelist), as opposed to host_id (the room's host, kept
+        # for its historical meaning). NULL on pre-build rows —
+        # readers treat NULL as "the host received it".
+        c.execute("ALTER TABLE live_gifts ADD COLUMN recipient_id "
+                  "INTEGER")
     c.execute("""CREATE TABLE IF NOT EXISTS live_shouts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
@@ -10069,11 +10078,19 @@ async def live_state(request: Request, lid: int):
         {"id": r["id"], "sender_id": r["sender_id"],
          "sender_name": r["sender_name"] or "Deleted user",
          "sender_rank": _rank_of(r["sender_id"]),
+         # Build PANEL GIFTS: who the gift landed on (recipient_id
+         # is NULL on pre-build rows — those went to the host).
+         "recipient_id": r["recipient_id"] or r["host_id"],
+         "recipient_name": r["recipient_name"] or "Deleted user",
          "gift_key": r["gift_key"],
          **_gift_public(r["gift_key"], r["tickets"])}
         for r in conn.execute(
-            "SELECT g.*, u.name AS sender_name FROM live_gifts g "
-            "LEFT JOIN users u ON u.id=g.sender_id WHERE g.live_id=? "
+            "SELECT g.*, u.name AS sender_name, "
+            "ru.name AS recipient_name FROM live_gifts g "
+            "LEFT JOIN users u ON u.id=g.sender_id "
+            "LEFT JOIN users ru ON "
+            "ru.id=COALESCE(g.recipient_id, g.host_id) "
+            "WHERE g.live_id=? "
             "AND g.created_at>=? ORDER BY g.id ASC",
             (lid, gift_cutoff)).fetchall()]
     out["top_gifters"] = [
@@ -10638,8 +10655,8 @@ async def live_comment_delete(request: Request, lid: int, cid: int):
 # single-transaction and guarded: the spendable balance is debited
 # with a WHERE balance>=cost UPDATE whose rowcount is checked, so a
 # balance can never go negative and a double-tap can't double-spend.
-# The host's side lands in gift_earned (the earned ledger); every
-# move writes its ticket_txns rows in the same transaction.
+# The recipient's side lands in gift_earned (the earned ledger);
+# every move writes its ticket_txns rows in the same transaction.
 
 
 def _live_present(conn, lid, uid, host_id):
@@ -10659,10 +10676,13 @@ def _live_present(conn, lid, uid, host_id):
 
 @app.post("/live/{lid}/gift")
 async def live_gift(request: Request, lid: int):
-    """Send a character gift to the host of a live. Body: {gift_key}.
-    Prices come ONLY from GIFT_CATALOG (server-side). Atomic: sender
-    spendable -= cost (guarded), host earned += cost, one live_gifts
-    row + two ledger rows, all in one commit."""
+    """Send a character gift on a live. Body: {gift_key} plus an
+    optional {target_user_id} (Build PANEL GIFTS): absent/null aims
+    at the host — the historical behavior; a target aims at that
+    PANELIST (host, admin, or on-stage guest) and pays THEM. Prices
+    come ONLY from GIFT_CATALOG (server-side). Atomic: sender
+    spendable -= cost (guarded), recipient earned += cost, one
+    live_gifts row + two ledger rows, all in one commit."""
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
@@ -10680,6 +10700,17 @@ async def live_gift(request: Request, lid: int):
         return JSONResponse(
             {"ok": False, "error": "You can't gift your own live."},
             status_code=400)
+    # Build PANEL GIFTS: resolve the recipient. Panel membership
+    # itself is validated below, once the conn is open.
+    raw_target = (data or {}).get("target_user_id")
+    recipient_id = host_id
+    if raw_target is not None:
+        try:
+            recipient_id = int(raw_target)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"ok": False, "error": "Unknown gift target."},
+                status_code=400)
     cost = gift["tickets"]
     conn = db()
     # Build W2: a battle whose clock already ran out finishes
@@ -10692,6 +10723,28 @@ async def live_gift(request: Request, lid: int):
             {"ok": False,
              "error": "Join the live before sending gifts."},
             status_code=403)
+    # Build PANEL GIFTS: the recipient must be ON THE PANEL right
+    # now — the host always qualifies; anyone else needs an ACTIVE
+    # live_members row (left_at NULL), which is the roster the
+    # panel itself renders from. A plain watcher, a guest who
+    # already left, or a stranger is refused here, before any
+    # money moves — commenters can never receive gifts.
+    if recipient_id == user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't gift yourself."},
+            status_code=400)
+    _rrow = conn.execute("SELECT name FROM users WHERE id=?",
+                         (recipient_id,)).fetchone()
+    if _rrow is None or (recipient_id != host_id
+                         and not _live_member_row(conn, lid,
+                                                  recipient_id)):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "That person isn't on the panel anymore."},
+            status_code=400)
+    recipient_name = _rrow["name"]
     if cost == 0:
         # FREE gift anti-spam: free gifts move no ledger, so the
         # balance guard can't slow a spam tap — cap them at one
@@ -10724,12 +10777,14 @@ async def live_gift(request: Request, lid: int):
     conn.execute(
         "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ?, "
         "gift_lifetime = COALESCE(gift_lifetime,0) + ? WHERE id=?",
-        (cost, cost, host_id))
+        (cost, cost, recipient_id))
     stamp = now_iso()
     cur = conn.execute(
         "INSERT INTO live_gifts(live_id, sender_id, host_id, "
-        "gift_key, tickets, created_at) VALUES(?,?,?,?,?,?)",
-        (lid, user["id"], host_id, gift_key, cost, stamp))
+        "recipient_id, gift_key, tickets, created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (lid, user["id"], host_id, recipient_id, gift_key, cost,
+         stamp))
     gift_id = cur.lastrowid
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
@@ -10738,7 +10793,7 @@ async def live_gift(request: Request, lid: int):
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, created_at) VALUES(?,?,?,?,?,?)",
-        (host_id, "gift_receive", cost, lid, gift_key, stamp))
+        (recipient_id, "gift_receive", cost, lid, gift_key, stamp))
     # Build W2: Showdown scoring — inside THIS gift's transaction,
     # so a gift scores exactly once, by exactly its ticket cost
     # (the free gift costs 0 = cheers only, scores nothing). The
@@ -10748,18 +10803,30 @@ async def live_gift(request: Request, lid: int):
         "(challenger_live_id=? OR opponent_live_id=?)",
         (lid, lid)).fetchone()
     if _bb and cost:
-        _col = ("challenger_score" if _bb["challenger_live_id"] == lid
-                else "opponent_score")
-        conn.execute(
-            f"UPDATE live_battles SET {_col}={_col}+? WHERE id=? "
-            "AND status='active'", (cost, _bb["id"]))
+        # Build PANEL GIFTS: points follow the RECIPIENT. A gift
+        # scores only when it lands on one of the two battle hosts
+        # — for THEIR side, whichever room the sender is standing
+        # in; gifts to other panelists pay them but score zero.
+        # The default target (this room's host) reduces to exactly
+        # the room-side rule this replaces.
+        _col = None
+        if recipient_id == _bb["challenger_user_id"]:
+            _col = "challenger_score"
+        elif recipient_id == _bb["opponent_user_id"]:
+            _col = "opponent_score"
+        if _col:
+            conn.execute(
+                f"UPDATE live_battles SET {_col}={_col}+? WHERE id=? "
+                "AND status='active'", (cost, _bb["id"]))
     conn.commit()
     bal = conn.execute(
         "SELECT tickets_balance FROM users WHERE id=?",
         (user["id"],)).fetchone()["tickets_balance"]
     conn.close()
     return JSONResponse({"ok": True, "balance": bal or 0,
-                         "gift_id": gift_id})
+                         "gift_id": gift_id,
+                         "recipient_id": recipient_id,
+                         "recipient_name": recipient_name})
 
 
 @app.post("/live/{lid}/shout")
