@@ -331,13 +331,21 @@ def current_streak(uid):
 # init_db for the table + the one-time video backfill). A tag is '#'
 # followed by 1-50 of [A-Za-z0-9_]; stored normalized: lowercase, no '#'.
 HASHTAG_RE = re.compile(r"#([A-Za-z0-9_]{1,50})")
+# Bare-URL pattern, defined HERE (above its first use): parse_hashtags
+# blanks URLs out, and init_db's backfill calls parse_hashtags while
+# the module is still importing — a definition further down the file
+# would not exist yet on a populated DB.
+_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 
 def parse_hashtags(body):
     """Normalized hashtags from a post body, de-duplicated in
-    first-seen order."""
+    first-seen order. Build TAGS: bare URLs are blanked out first —
+    a '#fragment' inside a link is part of the link, never a hashtag
+    (the renderer, linkify_body, has always treated it that way; the
+    indexer, trends and tag pages now share this one definition)."""
     out = []
-    for m in HASHTAG_RE.finditer(body or ""):
+    for m in HASHTAG_RE.finditer(_URL_RE.sub(" ", body or "")):
         t = m.group(1).lower()
         if t not in out:
             out.append(t)
@@ -961,6 +969,27 @@ def init_db():
                     c.execute("PRAGMA table_info(posts)").fetchall()]
     if "challenge_date" not in _post_cols_w:
         c.execute("ALTER TABLE posts ADD COLUMN challenge_date TEXT")
+    # --- Build WALL (safe on existing DBs) ---
+    # users.wall_open: 1 = friends may write on your profile wall
+    # (DEFAULT 1 — every existing and new account starts OPEN).
+    # users.wall_approve_first: 1 = wall posts wait for your approval.
+    _user_cols_wall = [r["name"] for r in
+                       c.execute("PRAGMA table_info(users)").fetchall()]
+    if "wall_open" not in _user_cols_wall:
+        c.execute("ALTER TABLE users ADD COLUMN wall_open "
+                  "INTEGER DEFAULT 1")
+    if "wall_approve_first" not in _user_cols_wall:
+        c.execute("ALTER TABLE users ADD COLUMN wall_approve_first "
+                  "INTEGER DEFAULT 0")
+    # posts.wall_user_id: the profile wall this post was written on
+    # (NULL = an ordinary post on the author's own profile).
+    # posts.wall_pending: 1 = an approve-first wall post still waiting
+    # for the wall owner's approval — invisible to everyone but them.
+    if "wall_user_id" not in _post_cols_w:
+        c.execute("ALTER TABLE posts ADD COLUMN wall_user_id INTEGER")
+    if "wall_pending" not in _post_cols_w:
+        c.execute("ALTER TABLE posts ADD COLUMN wall_pending "
+                  "INTEGER DEFAULT 0")
     # user_activity_days: one row per (user, Chicago day) the user did
     # something streak-worthy (visited home, posted, reacted, commented).
     c.execute("""CREATE TABLE IF NOT EXISTS user_activity_days (
@@ -2126,7 +2155,6 @@ def _tags_from_json(form, body, user):
     return uids, pids
 
 
-_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 _URL_TAIL = ".,;:!?"
 
 
@@ -2145,11 +2173,16 @@ def _split_url_tail(s):
 
 def linkify_body(body, tagged_users=(), tagged_pages=()):
     """HTML for post/comment text: the text is HTML-escaped FIRST, then
-    bare URLs become clickable links and '@Name' mentions of this post's
-    actual tags become profile/page links (Facebook-style). A single
-    regex pass means inserted links are never re-matched, and a tag name
-    inside a URL is never linkified separately. Longest tag names match
-    first so 'Anna' wins over 'Ann'."""
+    bare URLs become clickable links, '@Name' mentions of this post's
+    actual tags become profile/page links (Facebook-style), and
+    #hashtags become links to their tag page (Build TAGS). A single
+    regex pass means inserted links are never re-matched, and a tag
+    name inside a URL is never linkified separately. Longest tag names
+    match first so 'Anna' wins over 'Ann'. The hashtag alternative
+    sits LAST and carries a (?<![\\w&]) guard: a '#' glued to a word
+    (or to the '&' of an escaped entity like &#x27;) is never a
+    hashtag, and a '#fragment' inside a bare URL is consumed by the
+    URL alternative before the hashtag one can see it."""
     if not body:
         return ""
     text = html.escape(body)
@@ -2162,10 +2195,14 @@ def linkify_body(body, tagged_users=(), tagged_pages=()):
     if targets:
         needles = sorted(targets, key=len, reverse=True)
         alts.append("|".join(re.escape(n) for n in needles))
+    alts.append(r"(?<![\w&])#(?P<htag>[A-Za-z0-9_]{1,50})")
     pat = re.compile("|".join(alts))
 
     def repl(m):
         s = m.group(0)
+        if m.groupdict().get("htag"):
+            return (f'<a class="tag-link" href="/tag/'
+                    f'{m.group("htag").lower()}">{s}</a>')
         if s in targets:
             return f'<a class="tag-link" href="{targets[s]}">{s}</a>'
         core, tail = _split_url_tail(s)
@@ -2252,8 +2289,9 @@ def trending_topics(limit=10, viewer_id=None):
         rows = [r for r in rows if r["user_id"] not in excluded]
     tags = {}
     for r in rows:
-        for m in re.findall(r"#(\w+)", r["body"] or ""):
-            t = m.lower()
+        # Build TAGS: count with parse_hashtags — the same definition
+        # the indexer and the renderer use (no URL #fragments).
+        for t in parse_hashtags(r["body"]):
             if len(t) >= 2:
                 tags[t] = tags.get(t, 0) + 1
     if tags:
@@ -2271,6 +2309,42 @@ def trending_topics(limit=10, viewer_id=None):
     return [{"label": w, "q": w, "count": c} for w, c in top]
 
 
+def trending_tags(limit=10, viewer=None, min_count=2):
+    """Build TAGS: the Trending Tags strip — top hashtags of the last
+    7 days, counted from the post_hashtags index over exactly the
+    posts THIS viewer may see (can_view_post gates + posts the viewer
+    hid + silenced authors never count), so a tag's number never
+    leaks a post the viewer couldn't open. A tag needs at least
+    min_count visible posts so the strip is never one-off junk.
+    Returns [{tag, label, count}] — the raw material a future
+    interest ranking can weight by the viewer's own tags."""
+    if not viewer:
+        return []
+    conn = db()
+    rows = conn.execute(
+        "SELECT ph.tag AS tag, p.* FROM post_hashtags ph "
+        "JOIN posts p ON p.id = ph.post_id "
+        "WHERE p.created_at > datetime('now','-7 days')").fetchall()
+    hidden = {r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM hidden_posts WHERE user_id=?",
+        (viewer["id"],)).fetchall()}
+    conn.close()
+    muted = muted_id_set(viewer["id"])
+    counts = {}
+    for r in rows:
+        d = dict(r)
+        if d["user_id"] in muted:
+            continue
+        if (d.get("shared_post_id") or d["id"]) in hidden:
+            continue
+        if not can_view_post(viewer, d):
+            continue
+        counts[d["tag"]] = counts.get(d["tag"], 0) + 1
+    top = sorted(((t, c) for t, c in counts.items() if c >= min_count),
+                 key=lambda kv: (-kv[1], kv[0]))[:limit]
+    return [{"tag": t, "label": "#" + t, "count": c} for t, c in top]
+
+
 def can_view_post(viewer, p, owner_on=False):
     """Privacy gate. viewer: user dict or None. p: post row dict.
     Page posts follow page visibility (unchanged behavior); personal posts
@@ -2283,10 +2357,31 @@ def can_view_post(viewer, p, owner_on=False):
     privacy setting. The owner context bypasses both pair rules."""
     if not viewer:
         return False
+    # Build WALL: a PENDING wall post is visible to NOBODY but the
+    # wall owner (and the owner context) — not even its author.
+    if p.get("wall_pending"):
+        return bool(owner_on or viewer["id"] == p.get("wall_user_id"))
     if viewer["id"] == p["user_id"]:
         return True
     if not owner_on and blocked_either_way(viewer["id"], p["user_id"]):
         return False
+    # Build WALL, approved posts: (a) a block between the viewer and
+    # the WALL OWNER hides the post just like a block with the author
+    # does; (b) the wall owner always sees posts on their own wall —
+    # the post sits on their profile — ahead of the post's own privacy
+    # and the author's hide-from list; (c) a PRIVATE wall owner's wall
+    # is friends-only, exactly like their profile.
+    if p.get("wall_user_id"):
+        if not owner_on and blocked_either_way(viewer["id"],
+                                                p["wall_user_id"]):
+            return False
+        if viewer["id"] == p["wall_user_id"]:
+            return True
+        if not owner_on:
+            _wo = get_user(p["wall_user_id"])
+            if _wo and _wo.get("private_profile") \
+                    and viewer["id"] not in friend_id_set(_wo["id"]):
+                return False
     if not owner_on and viewer["id"] in hidden_from_ids(p["id"]):
         return False
     if p.get("page_id"):
@@ -2433,6 +2528,15 @@ def post_card(p, viewer, owner_on=False):
                           (p["page_id"],)).fetchone()
         if pg:
             page_name, page_id, is_page = pg["name"], pg["id"], True
+    # Build WALL: a wall post carries its wall owner for the banner;
+    # shares resolve to the original post above, whose own wall target
+    # (if any) is what shows.
+    wall_owner_id = p.get("wall_user_id") or 0
+    wall_owner_name = ""
+    if wall_owner_id:
+        wu = conn.execute("SELECT name FROM users WHERE id=?",
+                          (wall_owner_id,)).fetchone()
+        wall_owner_name = wu["name"] if wu else "Deleted user"
     shared_by_name = ""
     if share:
         s = conn.execute("SELECT name FROM users WHERE id=?",
@@ -2511,7 +2615,14 @@ def post_card(p, viewer, owner_on=False):
         "can_unshare": bool(share and viewer and
                             (viewer["id"] == share["by_id"] or owner_on)),
         "can_delete": bool(not share and viewer and
-                            (viewer["id"] == p["user_id"] or owner_on)),
+                            (viewer["id"] == p["user_id"] or owner_on
+                             or (wall_owner_id
+                                 and viewer["id"] == wall_owner_id))),
+        # Build WALL card fields.
+        "is_wall_post": bool(wall_owner_id),
+        "wall_owner_id": wall_owner_id,
+        "wall_owner_name": wall_owner_name,
+        "wall_pending": bool(p.get("wall_pending")),
         "is_page_post": is_page, "page_name": page_name, "page_id": page_id,
         "tagged_users": tagged_users, "tagged_pages": tagged_pages,
         "hidden_from_count": hidden_from_count,
@@ -3125,7 +3236,16 @@ async def public_post(request: Request, post_id: int):
         arow = conn.execute("SELECT * FROM users WHERE id=?",
                             (p["user_id"],)).fetchone()
         author = dict(arow) if arow else None
+    # Build WALL: a pending wall post never renders publicly, and a
+    # wall post on a PRIVATE profile's wall stays behind that wall's
+    # privacy even when the post itself is public.
+    wall_owner_private = False
+    if p and p.get("wall_user_id"):
+        wrow = conn.execute("SELECT private_profile FROM users "
+                            "WHERE id=?", (p["wall_user_id"],)).fetchone()
+        wall_owner_private = bool(wrow and wrow["private_profile"])
     if not p or p.get("shared_post_id") or not author \
+            or p.get("wall_pending") or wall_owner_private \
             or (p.get("privacy") or "public") != "public" \
             or author.get("private_profile"):
         conn.close()
@@ -3781,6 +3901,41 @@ def create_post_from_form(user, form, page_id=None):
         privacy = "public"
     if page_id:
         privacy = "public"  # page posts are visible to page viewers
+    # --- Build WALL: a wall_user_id form field targets another user's
+    # profile wall. ONE pipeline: the post stays an ordinary post (any
+    # kind, music, hide-from, privacy, @tags, moderation) with a wall
+    # target stamped on it. The gate runs BEFORE any upload is saved,
+    # so a refusal creates nothing and leaves no files behind. Page
+    # posts never target a wall, and the author writing on their OWN
+    # profile is just a normal post (no gate, wall_user_id NULL).
+    # Gate order: target exists → blocked either way → wall closed →
+    # writer must be the owner's friend. ---
+    wall_user_id = None
+    wall_pending = 0
+    if not page_id:
+        _wraw = (form.get("wall_user_id") or "").strip()
+        if _wraw:
+            try:
+                _wt = int(_wraw)
+            except (TypeError, ValueError):
+                _wt = 0
+            if _wt and _wt != user["id"]:
+                _wo = get_user(_wt)
+                if not _wo:
+                    return None, "That wall isn't available."
+                if blocked_either_way(user["id"], _wt):
+                    return None, "You can't write on that wall."
+                _wopen = _wo.get("wall_open")
+                if _wopen is None:
+                    _wopen = 1  # pre-WALL rows: open by default
+                if not _wopen:
+                    return None, (f"{_wo['name']}'s wall is closed — "
+                                  "friends can't write on it right now.")
+                if _wt not in friend_id_set(user["id"]):
+                    return None, (f"Only {_wo['name']}'s friends can "
+                                  "write on their wall.")
+                wall_user_id = _wt
+                wall_pending = 1 if _wo.get("wall_approve_first") else 0
     body = (form.get("body") or "").strip()
     feeling = (form.get("feeling") or "").strip()
     link_url = (form.get("link_url") or "").strip()
@@ -3847,8 +4002,9 @@ def create_post_from_form(user, form, page_id=None):
     cur = conn.execute(
         "INSERT INTO posts(user_id, page_id, kind, body, feeling, link_url, "
         "video_url, media, privacy, music_video_id, music_title, "
-        "music_artist, music_thumb, music_start, created_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "music_artist, music_thumb, music_start, created_at, "
+        "wall_user_id, wall_pending) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], page_id, kind, body, feeling, link_url, video_url,
          media, privacy,
          music["video_id"] if music else "",
@@ -3856,7 +4012,7 @@ def create_post_from_form(user, form, page_id=None):
          music["artist"] if music else "",
          music["thumb"] if music else "",
          music_start if music else 0,
-         now_iso()))
+         now_iso(), wall_user_id, wall_pending))
     pid = cur.lastrowid
     # Hashtags: parsed from the body of EVERY new post (any kind) into
     # post_hashtags. My Views consumes them now; the wall may later.
@@ -3910,6 +4066,20 @@ def create_post_from_form(user, form, page_id=None):
     flag_item("post", pid, user["id"], user["name"],
               " ".join(x for x in (body, feeling, link_url, video_url) if x))
     record_activity(user["id"])
+    # Build WALL: the wall owner hears about it either way — a live
+    # wall post links straight to the post; a pending one links to
+    # their profile, where the Approve / Delete buttons live. (Owner
+    # notifications only — approving sends the author nothing.)
+    if wall_user_id:
+        if wall_pending:
+            notify(wall_user_id, "wall_pending",
+                   f"{user['name']} wants to write on your wall — "
+                   "approve it from your profile.",
+                   f"/user/{wall_user_id}", actor_id=user["id"])
+        else:
+            notify(wall_user_id, "wall",
+                   f"{user['name']} wrote on your wall.",
+                   f"/post/{pid}", actor_id=user["id"])
     return pid, None
 
 
@@ -6206,14 +6376,60 @@ async def delete_post(request: Request, pid: int):
     if err:
         return err
     conn = db()
-    p = conn.execute("SELECT user_id FROM posts WHERE id=?", (pid,)).fetchone()
+    p = conn.execute("SELECT user_id, wall_user_id FROM posts WHERE id=?",
+                     (pid,)).fetchone()
     conn.close()
     if not p:
         return back(request)
-    if p["user_id"] != user["id"] and not is_owner(request):
+    # Build WALL: the wall owner may delete ANY post sitting on their
+    # own wall, on top of the author + owner-context permissions.
+    if p["user_id"] != user["id"] and p["wall_user_id"] != user["id"] \
+            and not is_owner(request):
         return back(request, "/home")
     _delete_post(pid)
     return back(request, "/home")
+
+
+@app.post("/wall/{pid}/approve")
+async def wall_approve(request: Request, pid: int):
+    """Build WALL: the wall owner approves a pending wall post — it
+    becomes a normal visible wall post. Wall-owner (or owner context)
+    only; anything else is a quiet no-op back."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    p = conn.execute("SELECT wall_user_id, wall_pending FROM posts "
+                     "WHERE id=?", (pid,)).fetchone()
+    if not p or not p["wall_pending"] \
+            or (p["wall_user_id"] != user["id"]
+                and not is_owner(request)):
+        conn.close()
+        return back(request, "/home")
+    conn.execute("UPDATE posts SET wall_pending=0 WHERE id=?", (pid,))
+    conn.commit()
+    conn.close()
+    return back(request, f"/user/{p['wall_user_id']}")
+
+
+@app.post("/wall/{pid}/delete")
+async def wall_delete_pending(request: Request, pid: int):
+    """Build WALL: the wall owner deletes a pending wall post without
+    approving it. Same gate as approve; approved wall posts are
+    removed through the normal /post/{pid}/delete route instead."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    p = conn.execute("SELECT wall_user_id, wall_pending FROM posts "
+                     "WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    if not p or not p["wall_pending"] \
+            or (p["wall_user_id"] != user["id"]
+                and not is_owner(request)):
+        return back(request, "/home")
+    _delete_post(pid)
+    return back(request, f"/user/{p['wall_user_id']}")
 
 
 # ---------------- share / hide / pin ----------------
@@ -6863,9 +7079,16 @@ async def profile(request: Request, uid: int):
     # visited a tapper's profile or tapped them back, that tapper's
     # taps stop counting and the number shrinks or vanishes entirely.
     tcount = _unacked_tap_count(conn, uid)
+    # Build WALL: the profile's post list is the owner's own posts
+    # PLUS approved posts written on their wall. Only the owner's own
+    # pins float (a pinned wall post keeps its natural place); pending
+    # wall posts are skipped here and rendered in the owner's pending
+    # section instead.
     prows = conn.execute(
-        "SELECT * FROM posts WHERE user_id=? AND page_id IS NULL "
-        "ORDER BY pinned DESC, created_at DESC LIMIT 100", (uid,)).fetchall()
+        "SELECT * FROM posts WHERE (user_id=? OR wall_user_id=?) "
+        "AND page_id IS NULL "
+        "ORDER BY (pinned=1 AND user_id=?) DESC, created_at DESC "
+        "LIMIT 100", (uid, uid, uid)).fetchall()
     hidden = {r["post_id"] for r in conn.execute(
         "SELECT post_id FROM hidden_posts WHERE user_id=?", (user["id"],)).fetchall()}
     conn.close()
@@ -6937,11 +7160,37 @@ async def profile(request: Request, uid: int):
     if not locked:
         for r in prows:
             d = dict(r)
+            if d.get("wall_pending"):
+                continue  # the owner's pending section below owns these
             if (d.get("shared_post_id") or d["id"]) in hidden:
                 continue
             card = post_card(d, user, owner_on)
             if card:
                 posts.append(card)
+    # Build WALL: pending wall posts, visible ONLY to the wall owner
+    # (or the owner context) on their own profile.
+    pending_wall = []
+    if not locked and (user["id"] == uid or owner_on):
+        _pconn = db()
+        _prows = _pconn.execute(
+            "SELECT * FROM posts WHERE wall_user_id=? AND wall_pending=1 "
+            "ORDER BY created_at DESC LIMIT 50", (uid,)).fetchall()
+        _pconn.close()
+        for r in _prows:
+            card = post_card(dict(r), user, owner_on)
+            if card:
+                pending_wall.append(card)
+    # Build WALL: who may write here, and the owner's wall switches.
+    _wall_open = prof.get("wall_open")
+    wall_open = 1 if _wall_open is None else (1 if _wall_open else 0)
+    wall_approve_first = 1 if prof.get("wall_approve_first") else 0
+    can_write_wall = bool(user["id"] != uid and not locked
+                          and status == "friends" and wall_open)
+    wall_closed_note = bool(user["id"] != uid and not locked
+                            and status == "friends" and not wall_open)
+    composer_friends = []
+    if user["id"] == uid or can_write_wall:
+        composer_friends, _pages = composer_choices(user)
     if locked:
         album_photos = []
         album_count = 0
@@ -6974,6 +7223,12 @@ async def profile(request: Request, uid: int):
         selling = [_listing_card(r) for r in _mrows]
     return render(request, "profile.html",
                   {"profile": profile_ctx, "posts": posts,
+                   "pending_wall_posts": pending_wall,
+                   "can_write_wall": can_write_wall,
+                   "wall_closed_note": wall_closed_note,
+                   "wall_open": wall_open,
+                   "wall_approve_first": wall_approve_first,
+                   "composer_friends": composer_friends,
                    "album_photos": album_photos,
                    "album_count": album_count,
                    "selling": selling, "selling_count": selling_count,
@@ -7108,6 +7363,13 @@ async def profile_edit_page(request: Request):
                     "status_mode": mode,
                     "private_profile": 1 if user.get("private_profile")
                     else 0,
+                    # Build WALL: the 🧱 Wall card's switches (a NULL
+                    # wall_open on a pre-WALL row reads as OPEN).
+                    "wall_open": (1 if user.get("wall_open") is None
+                                  else (1 if user.get("wall_open")
+                                        else 0)),
+                    "wall_approve_first": (1 if user.get(
+                        "wall_approve_first") else 0),
                     "inbox_status": 1 if user.get("inbox_status") is None
                     else (1 if user.get("inbox_status") else 0),
                     "status_label": status_label,
@@ -7166,6 +7428,30 @@ async def settings_privacy(request: Request):
                  "Your profile is now private — only your friends can "
                  "see it." if on else
                  "Your profile is now public.")
+
+
+@app.post("/settings/wall")
+async def settings_wall(request: Request):
+    """Build WALL: save the wall switches — wall_open (friends can
+    write on your wall) and wall_approve_first (each wall post waits
+    for your approval). One route serves the Settings 🧱 Wall card AND
+    the quick toggle on your own profile; a same-origin 'next' field
+    picks where you land (anything else falls back to Settings)."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    open_ = 1 if (form.get("wall_open") or "") == "1" else 0
+    approve = 1 if (form.get("wall_approve_first") or "") == "1" else 0
+    conn = db()
+    conn.execute("UPDATE users SET wall_open=?, wall_approve_first=? "
+                 "WHERE id=?", (open_, approve, user["id"]))
+    conn.commit()
+    conn.close()
+    nxt = (form.get("next") or "").strip()
+    if not (nxt.startswith("/") and not nxt.startswith("//")):
+        nxt = "/settings/profile"
+    return redir(nxt, "Your wall settings were saved.")
 
 
 @app.post("/settings/spot")
@@ -12028,6 +12314,45 @@ async def notifications_clear(request: Request):
 
 
 # ---------------- discover ----------------
+@app.get("/tag/{tag}", response_class=HTMLResponse)
+async def tag_page(request: Request, tag: str):
+    """Build TAGS: the hashtag page — every post carrying this tag
+    that the viewer may see, newest first. Visibility is EXACTLY the
+    standard rules: the post_hashtags index picks the candidates,
+    then post_card/can_view_post decide (post privacy, private
+    profiles, blocks, pending wall posts), posts the viewer hid stay
+    hidden, and silenced authors stay out — no friends-only leaks."""
+    user, err = require_login(request)
+    if err:
+        return err
+    t = (tag or "").strip().lstrip("#").lower()
+    if not re.fullmatch(r"[a-z0-9_]{1,50}", t or ""):
+        return redir("/discover", "That hashtag isn't valid.")
+    conn = db()
+    rows = conn.execute(
+        "SELECT p.* FROM post_hashtags ph JOIN posts p ON p.id=ph.post_id "
+        "WHERE ph.tag=? ORDER BY p.created_at DESC LIMIT 100",
+        (t,)).fetchall()
+    hidden = {r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM hidden_posts WHERE user_id=?",
+        (user["id"],)).fetchall()}
+    conn.close()
+    owner_on = is_owner(request)
+    muted = muted_id_set(user["id"])
+    cards = []
+    for r in rows:
+        d = dict(r)
+        if d["user_id"] in muted:
+            continue
+        if (d.get("shared_post_id") or d["id"]) in hidden:
+            continue
+        card = post_card(d, user, owner_on)
+        if card:
+            cards.append(card)
+    return render(request, "tag.html",
+                  {"tag": t, "posts": cards, "count": len(cards)})
+
+
 @app.get("/discover", response_class=HTMLResponse)
 async def discover(request: Request):
     user, err = require_login(request)
@@ -12048,6 +12373,7 @@ async def discover(request: Request):
     return render(request, "discover.html",
                   {"people": discover_people(user["id"], 20),
                    "trends": trending_topics(15, user["id"]),
+                   "tags": trending_tags(10, user),
                    "insiders": insiders})
 
 
