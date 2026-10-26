@@ -3151,8 +3151,8 @@ async def public_post(request: Request, post_id: int):
     og_image = ""
     if media_kind == "photo" and media_url:
         og_image = _abs_url(request, media_url)
-    elif author_ctx["avatar"]:
-        og_image = _abs_url(request, author_ctx["avatar"])
+    # No avatar fallback: share previews use the HERE logo
+    # (template fallback og-logo.jpg) — Ken's call, 2026-10-25.
     return render(request, "public_post.html", {
         "author": author_ctx,
         "body": p.get("body") or "",
@@ -3183,8 +3183,8 @@ async def public_live(request: Request, live_id: int):
     conn.close()
     host_ctx = {"id": host["id"], "name": host["name"],
                 "avatar": avatar_url(host.get("avatar", ""))}
-    og_image = (_abs_url(request, host_ctx["avatar"])
-                if host_ctx["avatar"] else "")
+    # Share preview = HERE logo (template fallback), never the host's face.
+    og_image = ""
     return render(request, "public_live.html", {
         "live": {"id": live["id"], "title": live.get("title") or ""},
         "host": host_ctx, "viewers": viewers,
@@ -3231,8 +3231,8 @@ async def public_profile(request: Request, user_id: int):
                 # Build SHINE: the owner's scheme gates the public
                 # card's lit-glass finish too.
                 "look_scheme_class": look_scheme_class_for(prof)}
-    og_image = (_abs_url(request, prof_ctx["avatar"])
-                if prof_ctx["avatar"] else "")
+    # Share preview = HERE logo (template fallback), never the person's face.
+    og_image = ""
     return render(request, "public_profile.html", {
         "profile": prof_ctx, "photos": photos,
         "og_image": og_image,
@@ -13997,8 +13997,7 @@ async def public_listing(request: Request, lid: int):
     og_image = ""
     if card["first_photo"]:
         og_image = _abs_url(request, card["first_photo"])
-    elif card["seller_avatar"]:
-        og_image = _abs_url(request, card["seller_avatar"])
+    # No seller-avatar fallback: share previews use the HERE logo.
     return render(request, "public_listing.html", {
         "listing": card,
         "seller": {"name": row["sname"],
