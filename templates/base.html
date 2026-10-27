@@ -141,11 +141,11 @@ img{max-width:100%}
 /* ===== MySpace-style full profile backgrounds ===== */
 body.has-profile-bg{background-color:#0b0b0e;background-size:cover;
   background-position:center top;background-repeat:no-repeat;background-attachment:scroll}
-body.has-profile-bg .card{background:rgba(232,232,238,.55);
+body.has-profile-bg .card{background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));
   backdrop-filter:blur(10px) saturate(1.25);-webkit-backdrop-filter:blur(10px) saturate(1.25);
   border:1px solid rgba(255,255,255,.35);
   box-shadow:0 2px 16px rgba(0,0,0,.35)}
-body.has-profile-bg .comment .cbub{background:rgba(240,242,245,.65);
+body.has-profile-bg .comment .cbub{background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha-soft,0.65));
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 body.has-profile-bg .flashmsg div{background:rgba(253,238,240,.95)}
 body.has-profile-bg .menu-item{color:#f2f2f2}

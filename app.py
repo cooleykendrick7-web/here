@@ -7341,14 +7341,16 @@ def look_scope_style_for(u):
     somebody else's profile (the spot_scope_style_for discipline)."""
     alpha, soft, rgb, accent, _cls = look_vars_for(u)
     # Transparency (Ken's order): a profile with a custom
-    # background must SHOW it. An owner who never touched the
-    # transparency slider gets a clearer scope default (0.55)
-    # so visitors see the background through the profile's
-    # boxes; an explicit slider choice always wins, and only
+    # background must SHOW it — CLEAR GLASS, Ken's picture of
+    # his own profile (Oct 25 shot, sent again Oct 27): the
+    # pattern plainly visible through every box, text still
+    # readable on the frost. An owner who never touched the
+    # transparency slider gets that clear scope default
+    # (0.35); an explicit slider choice always wins, and only
     # the Glass scheme is see-through by design.
     if (u and u.get("background") and not u.get("glass_set")
             and look_scheme_for(u) == "glass"):
-        alpha = "0.55"
+        alpha = "0.35"
     return (f"--glass-alpha:{alpha};--glass-alpha-soft:{soft}"
             f";--glass-rgb:{rgb};--look-accent:{accent}"
             f";--look-accent-rgb:{look_accent_rgb_str_for(u)}")
