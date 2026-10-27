@@ -315,6 +315,11 @@
    banner/takeover art gets the same keyframes inline. Particles
    (burst) and rain pieces (shower) are children of the fx node. */
 .gift-fx{position:absolute;pointer-events:none;z-index:7}
+/* Gift Spectacle canvas: full-stage, above the tiles and the
+   hearts layer, below the sheets. Every gift's cinematic —
+   cross-screen flight + explosion — is drawn here. */
+.gift-spectacle{position:absolute;inset:0;width:100%;height:100%;
+  pointer-events:none;z-index:9}
 .gift-fx .gift-art-wrap{display:inline-block;will-change:transform,opacity}
 .gift-particle{position:absolute;left:50%;top:50%;width:9px;height:9px;
   border-radius:50%;background:#ffd97a;pointer-events:none;
@@ -654,6 +659,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   </div>
   <div class="live-statusline" id="live-status">Connecting…</div>
   <div class="live-hearts" id="live-hearts"></div>
+  <canvas id="gift-spectacle" class="gift-spectacle"></canvas>
   <div class="live-gift-banner" id="live-gift-banner" hidden>
     <img class="gb-img" id="live-gift-banner-img" alt="" hidden>
     <div class="gb-emoji" id="live-gift-banner-emoji">🎁</div>
@@ -2189,7 +2195,8 @@ function liveRoomDiff(prev, next){
     canvas: null, ctx: null, stream: null, track: null, raf: 0,
     mainVid: null, faceVid: null, faceStream: null,
     keyCanvas: null, keyCtx: null, mainTrackId: null, frame: 0,
-    bgCache: {}, fun: 'off', parts: [], alphaBuf: null
+    bgCache: {}, fun: 'off', parts: [], alphaBuf: null,
+    giftSprites: [], lastGiftSpawn: 0, giftImgCache: {}
   };
   var studioSheetOpen = false;
   var STUDIO_FILTERS = {
@@ -2846,66 +2853,317 @@ function liveRoomDiff(prev, next){
      every viewer sees them too. Confetti rains, sparkles
      twinkle over the frame, hearts float up, flames lick the
      bottom edge. */
+  /* ===== Custom drawn art — NO emoji glyphs (Ken's order).
+     Every Studio effect and sticker is vector-drawn from
+     scratch: bezier hearts, 4-point sparkle stars, procedural
+     flame tongues, a crown, shades, a star. They render the
+     same on every phone (no emoji-font roulette) and read
+     professional at stream size. */
+  function studioHeartPath(ctx, s){
+    ctx.beginPath();
+    ctx.moveTo(0, s * 0.34);
+    ctx.bezierCurveTo(s * 0.52, -s * 0.22, s * 0.3, -s * 0.82,
+                      0, -s * 0.34);
+    ctx.bezierCurveTo(-s * 0.3, -s * 0.82, -s * 0.52, -s * 0.22,
+                      0, s * 0.34);
+    ctx.closePath();
+  }
+  function studioSparklePath(ctx, s){
+    ctx.beginPath();
+    ctx.moveTo(0, -s);
+    ctx.quadraticCurveTo(s * 0.13, -s * 0.13, s, 0);
+    ctx.quadraticCurveTo(s * 0.13, s * 0.13, 0, s);
+    ctx.quadraticCurveTo(-s * 0.13, s * 0.13, -s, 0);
+    ctx.quadraticCurveTo(-s * 0.13, -s * 0.13, 0, -s);
+    ctx.closePath();
+  }
+  function studioFlamePath(ctx, w, h){
+    ctx.beginPath();
+    ctx.moveTo(0, -h * 0.5);
+    ctx.bezierCurveTo(w * 0.52, -h * 0.08, w * 0.42, h * 0.3,
+                      0, h * 0.5);
+    ctx.bezierCurveTo(-w * 0.42, h * 0.3, -w * 0.52, -h * 0.08,
+                      0, -h * 0.5);
+    ctx.closePath();
+  }
+  function studioDrawFlame(ctx, w, h, seed){
+    var fl = 1 + Math.sin(performance.now() / 90 + seed * 9)
+      * 0.14;
+    ctx.save();
+    ctx.scale(1, fl);
+    var g1 = ctx.createLinearGradient(0, -h / 2, 0, h / 2);
+    g1.addColorStop(0, '#ff7b24');
+    g1.addColorStop(1, '#d61f2c');
+    ctx.fillStyle = g1;
+    studioFlamePath(ctx, w, h);
+    ctx.fill();
+    ctx.fillStyle = '#ffb52e';
+    studioFlamePath(ctx, w * 0.62, h * 0.66);
+    ctx.fill();
+    ctx.fillStyle = '#fff3c4';
+    studioFlamePath(ctx, w * 0.32, h * 0.38);
+    ctx.fill();
+    ctx.restore();
+  }
+  function studioDrawCrown(ctx, s){
+    var g = ctx.createLinearGradient(0, -s * 0.4, 0, s * 0.5);
+    g.addColorStop(0, '#ffe9a8');
+    g.addColorStop(0.55, '#ffb52e');
+    g.addColorStop(1, '#c77f0a');
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.5, s * 0.34);
+    ctx.lineTo(-s * 0.52, -s * 0.14);
+    ctx.lineTo(-s * 0.26, s * 0.06);
+    ctx.lineTo(0, -s * 0.34);
+    ctx.lineTo(s * 0.26, s * 0.06);
+    ctx.lineTo(s * 0.52, -s * 0.14);
+    ctx.lineTo(s * 0.5, s * 0.34);
+    ctx.closePath();
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120,70,0,.55)';
+    ctx.lineWidth = Math.max(1, s * 0.03);
+    ctx.stroke();
+    ctx.fillStyle = '#a86e08';
+    ctx.fillRect(-s * 0.5, s * 0.36, s, s * 0.14);
+    [['#59b7ff', -s * 0.27, s * 0.2], ['#e02b20', 0, s * 0.13],
+     ['#7dff9a', s * 0.27, s * 0.2]].forEach(function(gm){
+      ctx.beginPath();
+      ctx.arc(gm[1], gm[2], s * 0.055, 0, 6.3);
+      ctx.fillStyle = gm[0];
+      ctx.fill();
+    });
+  }
+  function studioDrawShades(ctx, s){
+    ctx.fillStyle = '#14161a';
+    ctx.strokeStyle = '#14161a';
+    ctx.lineWidth = Math.max(1.4, s * 0.07);
+    [-0.26, 0.26].forEach(function(cx){
+      studioRoundBox(ctx, (cx - 0.21) * s, -s * 0.2,
+                     s * 0.42, s * 0.36, s * 0.09);
+      ctx.fill();
+    });
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.05, -s * 0.12);
+    ctx.quadraticCurveTo(0, -s * 0.24, s * 0.05, -s * 0.12);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.47, -s * 0.16);
+    ctx.lineTo(-s * 0.62, -s * 0.3);
+    ctx.moveTo(s * 0.47, -s * 0.16);
+    ctx.lineTo(s * 0.62, -s * 0.3);
+    ctx.stroke();
+    ctx.save();
+    ctx.globalAlpha = 0.32;
+    ctx.fillStyle = '#ffffff';
+    [-0.26, 0.26].forEach(function(cx){
+      ctx.save();
+      ctx.translate(cx * s, -s * 0.02);
+      ctx.rotate(0.5);
+      ctx.fillRect(-s * 0.05, -s * 0.2, s * 0.07, s * 0.34);
+      ctx.restore();
+    });
+    ctx.restore();
+  }
+  function studioDrawStar(ctx, s){
+    var g = ctx.createLinearGradient(0, -s * 0.5, 0, s * 0.5);
+    g.addColorStop(0, '#ffe9a8');
+    g.addColorStop(1, '#e79a12');
+    ctx.beginPath();
+    for (var i = 0; i < 10; i++){
+      var r = i % 2 ? s * 0.21 : s * 0.5;
+      var a = -Math.PI / 2 + i * Math.PI / 5;
+      var px = Math.cos(a) * r, py = Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(120,70,0,.5)';
+    ctx.lineWidth = Math.max(1, s * 0.03);
+    ctx.stroke();
+  }
+  /* The GIFT PARADE: real catalog gifts drift across the
+     Studio picture itself — the same art viewers see in the
+     tray, floating through the stream. */
+  function studioParadeGifts(){
+    var all = (typeof B !== 'undefined' && B && B.gifts) || [];
+    var big = all.filter(function(g){ return g.img
+      && (g.tickets || 0) >= 500; });
+    var pool = big.length ? big : all.filter(function(g){
+      return g.img; });
+    return pool.slice(0, 14);
+  }
+  function studioGiftImg(src){
+    var im = studio.giftImgCache[src];
+    if (!im){
+      im = new Image();
+      im.src = src;
+      studio.giftImgCache[src] = im;
+    }
+    return (im.complete && im.naturalWidth) ? im : null;
+  }
+  function studioDrawParade(ctx, W, H){
+    var now = performance.now();
+    if (now - studio.lastGiftSpawn > 2100
+        && studio.giftSprites.length < 3){
+      var pool = studioParadeGifts();
+      if (pool.length){
+        studio.lastGiftSpawn = now;
+        var g = pool[(Math.random() * pool.length) | 0];
+        studio.giftSprites.push({
+          src: g.img, x: -190, y: H * (0.1 + Math.random() * 0.55),
+          vx: 46 + Math.random() * 30,
+          size: 104 + Math.random() * 62,
+          ph: Math.random() * 6.28});
+      }
+    }
+    studio.giftSprites = studio.giftSprites.filter(function(sp){
+      sp.x += sp.vx / 30;
+      if (sp.x - sp.size > W) return false;
+      var im = studioGiftImg(sp.src);
+      if (im){
+        ctx.save();
+        ctx.globalAlpha = 0.94;
+        var bob = Math.sin(now / 620 + sp.ph) * 9;
+        ctx.translate(sp.x, sp.y + bob);
+        ctx.rotate(Math.sin(now / 900 + sp.ph) * 0.07);
+        ctx.drawImage(im, -sp.size / 2, -sp.size / 2,
+                      sp.size, sp.size);
+        ctx.restore();
+      }
+      return true;
+    });
+  }
+  function studioDrawNeon(ctx, W, H){
+    var t = performance.now() / 1000;
+    ctx.save();
+    ctx.shadowColor = 'rgba(255,181,46,.9)';
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = 'rgba(255,190,70,.9)';
+    ctx.lineWidth = 3;
+    studioRoundBox(ctx, 14, 14, W - 28, H - 28, 24);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255,255,255,.85)';
+    ctx.lineWidth = 2.4;
+    ctx.setLineDash([150, W + H]);
+    ctx.lineDashOffset = -t * 340;
+    studioRoundBox(ctx, 14, 14, W - 28, H - 28, 24);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
   function studioSpawn(mode, W, H){
     var R = Math.random;
+    var base = {ph: R() * 6.28, seed: R()};
     if (mode === 'confetti')
-      return {x: R() * W, y: -20, vx: (R() - 0.5) * 1.6,
-        vy: 2.2 + R() * 2.4, grav: 0.012, rot: R() * 6.28,
-        vr: (R() - 0.5) * 0.25, life: 3.4, rect: true,
+      return Object.assign(base, {x: R() * W, y: -20,
+        vx: (R() - 0.5) * 1.6, vy: 2.2 + R() * 2.4, grav: 0.012,
+        rot: R() * 6.28, vr: (R() - 0.5) * 0.25, life: 3.4,
+        kind: 'confetti', round: R() < 0.3,
         size: 10 + R() * 10,
         color: ['#f43f5e', '#f59e0b', '#10b981', '#3b82f6',
-                '#a855f7', '#facc15'][(R() * 6) | 0]};
+                '#a855f7', '#facc15'][(R() * 6) | 0]});
     if (mode === 'sparkles')
-      return {x: R() * W, y: R() * H, vx: 0, vy: -0.2, grav: 0,
-        rot: 0, vr: 0, life: 0.9 + R() * 0.8, rect: false,
-        ch: R() < 0.5 ? '✨' : '⭐', size: 16 + R() * 22};
+      return Object.assign(base, {x: R() * W, y: R() * H, vx: 0,
+        vy: -0.2, grav: 0, rot: 0, vr: 0,
+        life: 0.9 + R() * 0.8, kind: 'sparkle',
+        size: 15 + R() * 20});
     if (mode === 'hearts')
-      return {x: R() * W, y: H + 20, vx: (R() - 0.5) * 0.8,
-        vy: -(1.2 + R() * 1.6), grav: -0.004,
-        rot: Math.sin(R() * 6.28) * 0.3, vr: 0, life: 4.2,
-        rect: false, ch: '❤️', size: 20 + R() * 20};
-    return {x: R() * W, y: H - 6, vx: (R() - 0.5) * 0.6,
-      vy: -(1.6 + R() * 2.2), grav: -0.01, rot: 0, vr: 0,
-      life: 1.1 + R() * 0.7, rect: false, ch: '🔥',
-      size: 22 + R() * 26};
+      return Object.assign(base, {x: R() * W, y: H + 20,
+        vx: (R() - 0.5) * 0.8, vy: -(1.2 + R() * 1.6),
+        grav: -0.004, rot: 0, vr: 0, life: 4.2, kind: 'heart',
+        size: 21 + R() * 19});
+    if (mode === 'bokeh')
+      return Object.assign(base, {x: R() * W, y: R() * H,
+        vx: (R() - 0.5) * 0.5, vy: -0.18, grav: 0, rot: 0, vr: 0,
+        life: 5.5 + R() * 2, kind: 'bokeh',
+        size: 30 + R() * 55,
+        color: ['#f43f5e', '#f59e0b', '#10b981', '#3b82f6',
+                '#a855f7', '#facc15'][(R() * 6) | 0]});
+    return Object.assign(base, {x: R() * W, y: H - 6,
+      vx: (R() - 0.5) * 0.6, vy: -(1.6 + R() * 2.2), grav: -0.01,
+      rot: 0, vr: 0, life: 1.1 + R() * 0.7, kind: 'flame',
+      size: 22 + R() * 24});
   }
   function studioDrawFun(ctx, W, H){
     var mode = studio.fun;
     if (!mode || mode === 'off'){
       if (studio.parts.length) studio.parts = [];
+      if (studio.giftSprites.length) studio.giftSprites = [];
       return;
     }
+    if (mode === 'neon'){ studioDrawNeon(ctx, W, H); return; }
+    if (mode === 'parade'){ studioDrawParade(ctx, W, H); return; }
     var want = mode === 'confetti' ? 3 : 1;
+    var prob = mode === 'bokeh' ? 0.16 : 0.65;
     for (var s = 0; s < want; s++){
       if (studio.parts.length > 160) break;
-      if (Math.random() < 0.65)
+      if (Math.random() < prob)
         studio.parts.push(studioSpawn(mode, W, H));
     }
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    var nowMs = performance.now();
     studio.parts = studio.parts.filter(function(pt){
       pt.life -= 1 / 30;
       if (pt.life <= 0) return false;
       pt.x += pt.vx; pt.y += pt.vy;
       pt.vy += pt.grav; pt.rot += pt.vr;
-      if (pt.y > H + 50 || pt.y < -70) return false;
+      if (pt.y > H + 60 || pt.y < -80) return false;
       ctx.save();
-      ctx.globalAlpha = Math.min(1, pt.life);
       ctx.translate(pt.x, pt.y);
-      ctx.rotate(pt.rot);
-      if (pt.rect){
+      var a = Math.min(1, pt.life);
+      if (pt.kind === 'confetti'){
+        ctx.globalAlpha = a;
+        ctx.rotate(pt.rot);
         ctx.fillStyle = pt.color;
-        ctx.fillRect(-pt.size / 2, -pt.size / 4,
-                     pt.size, pt.size / 2);
+        if (pt.round){
+          ctx.beginPath();
+          ctx.arc(0, 0, pt.size * 0.32, 0, 6.3);
+          ctx.fill();
+        } else {
+          ctx.fillRect(-pt.size / 2, -pt.size / 4,
+                       pt.size, pt.size / 2);
+        }
+      } else if (pt.kind === 'sparkle'){
+        var tw = 0.55 + 0.45
+          * Math.sin((5 - pt.life) * 14 + pt.ph);
+        ctx.globalAlpha = a * Math.max(0.2, tw);
+        ctx.rotate(Math.sin(pt.ph + pt.life * 2) * 0.4);
+        ctx.shadowColor = 'rgba(255,220,130,.95)';
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = '#ffe9a8';
+        studioSparklePath(ctx, pt.size * (0.7 + 0.3 * tw));
+        ctx.fill();
+      } else if (pt.kind === 'heart'){
+        ctx.rotate(Math.sin(nowMs / 480 + pt.ph) * 0.24);
+        ctx.globalAlpha = a * 0.94;
+        var hg = ctx.createLinearGradient(0, -pt.size,
+                                          0, pt.size * 0.4);
+        hg.addColorStop(0, '#ff7ba9');
+        hg.addColorStop(1, '#e0218a');
+        ctx.fillStyle = hg;
+        studioHeartPath(ctx, pt.size);
+        ctx.fill();
+      } else if (pt.kind === 'bokeh'){
+        ctx.globalAlpha = a * 0.15;
+        var bg2 = ctx.createRadialGradient(0, 0, 1,
+                                           0, 0, pt.size);
+        bg2.addColorStop(0, pt.color);
+        bg2.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = bg2;
+        ctx.beginPath();
+        ctx.arc(0, 0, pt.size, 0, 6.3);
+        ctx.fill();
       } else {
-        ctx.font = pt.size + 'px serif';
-        try { ctx.fillText(pt.ch, 0, 0); } catch (e) {}
+        ctx.globalAlpha = a * 0.97;
+        studioDrawFlame(ctx, pt.size * 1.05, pt.size * 1.4,
+                        pt.seed);
       }
       ctx.restore();
       return true;
     });
-    ctx.restore();
   }
   function studioDrawSticker(ctx, cx, cy, size){
     var st = STUDIO_STICKERS[studio.sticker];
@@ -2920,10 +3178,15 @@ function liveRoomDiff(prev, next){
     ctx.translate(cx + dx, cy + dy);
     ctx.rotate(rot);
     ctx.scale(sc, sc);
-    ctx.font = size + 'px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    try { ctx.fillText(st, 0, 0); } catch (e) {}
+    /* Drawn vector stickers — no emoji glyphs, so they look
+       identical and sharp on every device. */
+    if (studio.sticker === 'crown') studioDrawCrown(ctx, size);
+    else if (studio.sticker === 'shades')
+      studioDrawShades(ctx, size);
+    else if (studio.sticker === 'star') studioDrawStar(ctx, size);
+    else if (studio.sticker === 'fire')
+      studioDrawFlame(ctx, size * 0.8, size * 1.05,
+                      performance.now() / 3000);
     ctx.restore();
   }
   /* The sticker's animated pose for this instant — shared by
@@ -3061,22 +3324,25 @@ function liveRoomDiff(prev, next){
                ['noir', '🖤 Noir']],
       studio.effect,
       function(v){ studio.effect = v; studioSaveSettings(); studioRerender(); });
-    studioNote('Sticker — they MOVE now: the crown bobs, the '
-               + 'star spins, the fire flickers.');
+    studioNote('Sticker — they MOVE: the crown bobs, the '
+               + 'star spins, the fire flickers. Drawn in code, '
+               + 'not emoji — sharp on every phone.');
     studioSeg([['none', 'None'], ['crown', '👑 Crown'],
                ['shades', '😎 Shades'], ['star', '⭐ Star'],
                ['fire', '🔥 Fire']],
       studio.sticker,
       function(v){ studio.sticker = v; studioSaveSettings(); studioRerender(); });
     studioSection('🎉 Animated fun');
-    studioSeg([['off', 'Off'], ['confetti', '🎉 Confetti'],
-               ['sparkles', '✨ Sparkles'], ['hearts', '❤️ Hearts'],
-               ['flames', '🔥 Flames']],
+    studioSeg([['off', 'Off'], ['confetti', 'Confetti'],
+               ['sparkles', 'Sparkles'], ['hearts', 'Hearts'],
+               ['flames', 'Flames'], ['neon', 'Neon frame'],
+               ['bokeh', 'Bokeh'], ['parade', 'Gift parade']],
       studio.fun,
       function(v){ studio.fun = v; studioSaveSettings(); studioRerender(); });
-    studioNote('Animated overlays on your picture — you see '
-               + 'them on your own screen too, and so does '
-               + 'everybody watching.');
+    studioNote('All drawn in code — no emojis — and they play '
+               + 'on your picture itself: you see them on your '
+               + 'own screen too. Gift parade drifts real gifts '
+               + 'from the tray across your stream.');
     studioSection('🟩 Background — green screen');
     studioSeg([['off', 'Off'], ['on', '🟩 Green screen on']],
       studio.keyOn ? 'on' : 'off',
@@ -3218,6 +3484,7 @@ function liveRoomDiff(prev, next){
               frames: studio.frame,
               funMode: studio.fun,
               parts: studio.parts.length,
+              giftSprites: studio.giftSprites.length,
               stickerPose: studioStickerPose(),
               canvasAttached: !!(studio.canvas
                 && studio.canvas.isConnected),
@@ -5511,16 +5778,328 @@ function liveRoomDiff(prev, next){
       });
     }, 3200);
   }
+  /* ================= GIFT SPECTACLE =================
+     Ken's order: the old float/pop/banner animations were
+     "very basic". Now EVERY gift gets a full-stage cinematic:
+     its real art flies ACROSS the whole screen at 2-3x the old
+     size, a touch transparent, on a flight path owned by the
+     gift's OWN catalog animation — rise ascends, flyby streaks,
+     bounce hops, spin spirals, shower descends with rain,
+     burst detonates center-stage, zoomin warps, pulse throbs —
+     and EVERY flight ends in an explosion: a flash, a
+     shockwave ring, and a burst of sparks tinted by the gift's
+     category. One canvas, one rAF loop that only runs while a
+     spectacle is alive. Reduced-motion viewers keep the older
+     DOM animations (the fallback routing below). */
+  var specCanvas = $('gift-spectacle');
+  var specCtx = specCanvas && specCanvas.getContext
+    ? specCanvas.getContext('2d') : null;
+  var specFlights = [], specParts = [], specRings = [];
+  var specFlash = null, specRaf = 0, specLast = 0;
+  var specImgCache = {};
+  var SPEC_PALETTES = {
+    money: ['#ffd97a', '#fff3c4', '#ffb52e', '#7dff9a'],
+    love: ['#ff8fb3', '#ffd1e3', '#ff4d6d', '#fff0f5'],
+    luxury: ['#e6c8ff', '#ffd97a', '#b388ff', '#ffffff']
+  };
+  function specHash(s){
+    var h = 7;
+    s = String(s || '');
+    for (var i = 0; i < s.length; i++)
+      h = (h * 31 + s.charCodeAt(i)) | 0;
+    return Math.abs(h);
+  }
+  function specImg(src){
+    if (!src) return null;
+    var im = specImgCache[src];
+    if (!im){
+      im = new Image();
+      im.src = src;
+      specImgCache[src] = im;
+    }
+    return (im.complete && im.naturalWidth) ? im : null;
+  }
+  function specDims(){
+    var r = stageEl.getBoundingClientRect();
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    var W = Math.max(2, Math.round(r.width));
+    var H = Math.max(2, Math.round(r.height));
+    if (specCanvas.width !== Math.round(W * dpr)
+        || specCanvas.height !== Math.round(H * dpr)){
+      specCanvas.width = Math.round(W * dpr);
+      specCanvas.height = Math.round(H * dpr);
+    }
+    specCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return {W: W, H: H};
+  }
+  /* Position/scale/rotation of a flight at progress u. */
+  function specPose(f, u, W, H){
+    var s = f.size, d = f.dir, seed = f.seed;
+    var x0 = d > 0 ? -s * 0.6 : W + s * 0.6;
+    var x1 = d > 0 ? W - s * 0.55 : s * 0.55;
+    var cross = x0 + (x1 - x0) * u;
+    var sway = Math.sin(u * 5.2 + seed) * 14;
+    switch (f.style){
+      case 'rise':
+        return {x: W * (0.32 + 0.3 * f.r1) + sway * 1.6,
+                y: (H + s * 0.5) + (-s * 0.6 - H) * u,
+                rot: Math.sin(u * 4 + seed) * 0.18,
+                sc: 0.72 + u * 0.36};
+      case 'flyby':
+        return {x: cross, y: H * (0.24 + 0.22 * f.r1)
+                + Math.sin(u * 6 + seed) * 10,
+                rot: d * -0.06, sc: 1};
+      case 'bounce': {
+        var hops = 3, ph = Math.abs(Math.sin(u * Math.PI * hops));
+        return {x: cross, y: H * 0.8 - ph * H * 0.34,
+                rot: Math.sin(u * 9 + seed) * 0.1,
+                sc: 1, sq: 1 - 0.16 * Math.max(0, 1 - ph * 4)};
+      }
+      case 'spin':
+        return {x: cross, y: H * 0.44 + Math.sin(u * 6.4 + seed)
+                * H * 0.13,
+                rot: d * u * Math.PI * 4, sc: 0.9 + u * 0.2};
+      case 'shower':
+        return {x: x0 + (x1 - x0) * u * 0.82,
+                y: -s * 0.5 + (H * 0.86 + s * 0.5) * u,
+                rot: Math.sin(u * 3 + seed) * 0.24,
+                sc: 0.8 + u * 0.25};
+      case 'burst': {
+        var e = 1 - Math.pow(1 - Math.min(1, u / 0.45), 3);
+        var px = x0 + (W / 2 - x0) * e;
+        var py = H * 0.9 + (H * 0.42 - H * 0.9) * e;
+        var pulse = u > 0.45
+          ? 1 + Math.sin((u - 0.45) * 22) * 0.09 : 1;
+        return {x: px, y: py, rot: Math.sin(u * 3 + seed) * 0.08,
+                sc: (0.5 + e * 0.6) * pulse};
+      }
+      case 'zoomin': {
+        var zx = d > 0 ? W * 0.16 : W * 0.84;
+        var zy = H * (0.3 + 0.3 * f.r1);
+        var tx = d > 0 ? W * 0.86 : W * 0.14;
+        return {x: zx + (tx - zx) * u,
+                y: zy + Math.sin(u * Math.PI) * -H * 0.1,
+                rot: Math.sin(u * 4 + seed) * 0.12,
+                sc: 0.16 + Math.sin(Math.min(1, u * 1.15)
+                    * Math.PI * 0.5) * 0.98};
+      }
+      case 'pulse':
+      default:
+        return {x: cross, y: H * (0.4 + 0.18 * f.r1) + sway,
+                rot: Math.sin(u * 3 + seed) * 0.1,
+                sc: 1 + Math.sin(u * Math.PI * 6) * 0.13};
+    }
+  }
+  function specExplode(f, x, y){
+    var pal = SPEC_PALETTES[f.g.category] || SPEC_PALETTES.luxury;
+    var n = 26 + f.tier * 9;
+    for (var i = 0; i < n; i++){
+      var a = Math.random() * Math.PI * 2;
+      var sp = 60 + Math.random() * (190 + f.tier * 40);
+      specParts.push({
+        x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40,
+        life: 0.7 + Math.random() * 0.6, t: 0,
+        size: 2 + Math.random() * 3.4,
+        color: pal[(Math.random() * pal.length) | 0], img: null});
+    }
+    var im = specImg(f.g.img);
+    if (im){
+      for (var j = 0; j < 6; j++){
+        var a2 = (Math.PI * 2 * j) / 6 + Math.random() * 0.6;
+        var sp2 = 90 + Math.random() * 120;
+        specParts.push({
+          x: x, y: y, vx: Math.cos(a2) * sp2,
+          vy: Math.sin(a2) * sp2 - 30,
+          life: 0.85, t: 0, size: f.size * 0.34,
+          color: null, img: im,
+          rot: Math.random() * 3, vr: (Math.random() - 0.5) * 6});
+      }
+    }
+    specRings.push({x: x, y: y, r: f.size * 0.3,
+                    vr: 330 + f.tier * 70, a: 0.85});
+    specFlash = {x: x, y: y, r: f.size * (0.9 + f.tier * 0.16),
+                 a: 0.5};
+  }
+  function specLaunch(g){
+    if (!specCtx || !g || !g.img) return false;
+    if (specFlights.length >= 3) return false;
+    var tier = giftTierOf(g.tickets);
+    var h = specHash(g.key || g.gift_key || g.name || '');
+    var f = {
+      g: g, style: giftAnimName(g), tier: tier,
+      size: [0, 118, 158, 214, 272][tier],
+      t0: performance.now(), dur: 2500 + tier * 320,
+      dir: h % 2 ? 1 : -1, seed: (h % 628) / 100,
+      r1: ((h >> 3) % 100) / 100, trail: [], burstAt: -1,
+      lastMini: 0
+    };
+    if (f.style === 'burst') f.dur = 2100 + tier * 260;
+    specFlights.push(f);
+    specRun();
+    return true;
+  }
+  function specRun(){
+    if (!specRaf){
+      specLast = performance.now();
+      specRaf = requestAnimationFrame(specTick);
+    }
+  }
+  function specTick(now){
+    specRaf = 0;
+    if (!specCtx) return;
+    var dt = Math.min(0.05, (now - specLast) / 1000);
+    specLast = now;
+    var dim = specDims(), W = dim.W, H = dim.H;
+    var ctx = specCtx;
+    ctx.clearRect(0, 0, W, H);
+    /* flights */
+    specFlights = specFlights.filter(function(f){
+      var u = (now - f.t0) / f.dur;
+      var burstU = f.style === 'burst' ? 0.8 : 0.97;
+      if (u >= burstU && f.burstAt < 0){
+        var bp = specPose(f, Math.min(1, u), W, H);
+        f.burstAt = now;
+        specExplode(f, bp.x, bp.y);
+        if (f.style === 'burst') return false;
+      }
+      if (u >= 1) return false;
+      var im = specImg(f.g.img);
+      var pos = specPose(f, u, W, H);
+      /* motion trail for the fast styles */
+      if (f.style === 'flyby' || f.style === 'spin'
+          || f.style === 'zoomin'){
+        f.trail.push({x: pos.x, y: pos.y, rot: pos.rot,
+                      sc: pos.sc});
+        if (f.trail.length > 9) f.trail.shift();
+        if (im){
+          f.trail.forEach(function(tp, i){
+            ctx.save();
+            ctx.globalAlpha = 0.05 + 0.13 * (i / f.trail.length);
+            ctx.translate(tp.x, tp.y);
+            ctx.rotate(tp.rot);
+            var tw = f.size * tp.sc;
+            ctx.drawImage(im, -tw / 2, -tw / 2, tw, tw);
+            ctx.restore();
+          });
+        }
+      }
+      /* shower rains mini copies as it descends */
+      if (f.style === 'shower' && im
+          && now - f.lastMini > 150 && u > 0.1){
+        f.lastMini = now;
+        specParts.push({
+          x: pos.x + (Math.random() - 0.5) * f.size,
+          y: pos.y, vx: (Math.random() - 0.5) * 24,
+          vy: 130 + Math.random() * 90, life: 1.05, t: 0,
+          size: f.size * 0.3, color: null, img: im,
+          rot: Math.random() * 3, vr: (Math.random() - 0.5) * 4,
+          rain: true});
+      }
+      if (im){
+        ctx.save();
+        ctx.globalAlpha = 0.92;
+        ctx.translate(pos.x, pos.y);
+        ctx.rotate(pos.rot);
+        ctx.scale(pos.sc, pos.sc * (pos.sq || 1));
+        var w = f.size;
+        ctx.drawImage(im, -w / 2, -w / 2, w, w);
+        ctx.restore();
+      }
+      return true;
+    });
+    /* explosion sparks + mini art */
+    specParts = specParts.filter(function(pt){
+      pt.t += dt;
+      if (pt.t >= pt.life) return false;
+      if (!pt.rain) pt.vy += 260 * dt;
+      pt.x += pt.vx * dt;
+      pt.y += pt.vy * dt;
+      var a = 1 - pt.t / pt.life;
+      ctx.save();
+      ctx.globalAlpha = pt.img ? a * 0.95 : a;
+      if (pt.img){
+        ctx.translate(pt.x, pt.y);
+        ctx.rotate(pt.rot + pt.vr * pt.t);
+        ctx.drawImage(pt.img, -pt.size / 2, -pt.size / 2,
+                      pt.size, pt.size);
+      } else {
+        ctx.fillStyle = pt.color;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, pt.size * a + 0.6, 0, 6.3);
+        ctx.fill();
+      }
+      ctx.restore();
+      return true;
+    });
+    /* shockwave rings */
+    specRings = specRings.filter(function(rg){
+      rg.r += rg.vr * dt;
+      rg.a -= dt * 0.95;
+      if (rg.a <= 0) return false;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, rg.a);
+      ctx.strokeStyle = '#ffe9a8';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(rg.x, rg.y, rg.r, 0, 6.3);
+      ctx.stroke();
+      ctx.restore();
+      return true;
+    });
+    /* explosion flash */
+    if (specFlash){
+      var fl = specFlash;
+      ctx.save();
+      var grad = ctx.createRadialGradient(fl.x, fl.y, 4,
+                                          fl.x, fl.y, fl.r);
+      grad.addColorStop(0, 'rgba(255,244,200,' + fl.a + ')');
+      grad.addColorStop(1, 'rgba(255,244,200,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(fl.x, fl.y, fl.r, 0, 6.3);
+      ctx.fill();
+      ctx.restore();
+      fl.a -= dt * 1.5;
+      if (fl.a <= 0) specFlash = null;
+    }
+    if (specFlights.length || specParts.length
+        || specRings.length || specFlash)
+      specRaf = requestAnimationFrame(specTick);
+    else
+      ctx.clearRect(0, 0, W, H);
+  }
+  /* Test/debug surface — same precedent as __liveStudio. */
+  window.__liveSpectacle = {
+    launch: function(g){ return specLaunch(g); },
+    catalog: function(){
+      return (typeof B !== 'undefined' && B && B.gifts) || [];
+    },
+    styleFor: function(g){ return giftAnimName(g); },
+    state: function(){
+      return {flights: specFlights.length,
+              parts: specParts.length,
+              rings: specRings.length,
+              styles: specFlights.map(function(f){
+                return f.style; })};
+    }
+  };
   function handleGiftEvent(g){
     if (!g || !g.id || seenGiftIds[g.id]) return;
     seenGiftIds[g.id] = 1;
     lastGiftId = Math.max(lastGiftId, g.id);
-    var tier = (typeof g.anim === 'number') ? g.anim
-      : giftTierOf(g.tickets);
-    if (tier >= 4) showGiftTakeover(g);
-    else if (tier === 3 || (g.tickets || 0) >= 100) showGiftBanner(g);
-    else if (tier === 2) spawnGiftPop(g);
-    else spawnGiftFloat(g);
+    /* The cinematic IS the gift animation now. Reduced-motion
+       viewers keep the older DOM routing (float/banner/
+       takeover) — same events, gentler pictures. */
+    var launched = !REDUCED_MOTION && specLaunch(g);
+    if (!launched){
+      var tier = (typeof g.anim === 'number') ? g.anim
+        : giftTierOf(g.tickets);
+      if (tier >= 4) showGiftTakeover(g);
+      else if (tier === 3 || (g.tickets || 0) >= 100)
+        showGiftBanner(g);
+      else if (tier === 2) spawnGiftPop(g);
+      else spawnGiftFloat(g);
+    }
     addNotice('🎁 ' + giftSenderLabel(g) + ' sent ' + g.name
       + (g.recipient_name ? ' to ' + g.recipient_name : ''));
     flashGiftTile(g.recipient_id);
