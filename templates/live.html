@@ -2126,7 +2126,7 @@ function liveRoomDiff(prev, next){
     faceOn: false, faceId: null, facePos: 'br', faceSize: 'm',
     effect: 'none', sticker: 'none',
     keyOn: false, keyColor: 'green', keySens: 60, backdrop: 'game',
-    picImg: null, picPos: 'tl', picSize: 'm',
+    picImg: null, picPos: 'tl', picSize: 'm', bgImg: null,
     canvas: null, ctx: null, stream: null, track: null, raf: 0,
     mainVid: null, faceVid: null, faceStream: null,
     keyCanvas: null, keyCtx: null, mainTrackId: null, frame: 0,
@@ -2227,6 +2227,16 @@ function liveRoomDiff(prev, next){
     studio.canvas = document.createElement('canvas');
     studio.canvas.width = 1280; studio.canvas.height = 720;
     studio.ctx = studio.canvas.getContext('2d');
+    /* The canvas MUST live in the document: iOS WebViews (the
+       HERE app) refuse to stream frames from a detached canvas —
+       captureStream then yields a live-looking but frozen/black
+       track, which reads exactly like "Studio does nothing".
+       It sits as a 2px invisible speck; the picture it makes is
+       what the tile shows, never the speck itself. */
+    studio.canvas.style.cssText = 'position:fixed;left:0;bottom:0;'
+      + 'width:2px;height:2px;opacity:0.01;z-index:-1;'
+      + 'pointer-events:none';
+    document.body.appendChild(studio.canvas);
     studio.keyCanvas = document.createElement('canvas');
     studio.keyCanvas.width = 640; studio.keyCanvas.height = 360;
     studio.keyCtx = studio.keyCanvas.getContext('2d',
@@ -2348,6 +2358,26 @@ function liveRoomDiff(prev, next){
       if (studio.on){
         toast('🎬 Studio is ON — viewers see your Studio picture.');
         if (studioSheetOpen) renderStudioSheet();
+        /* Self-check: if the finished picture is not actually
+           flowing 1.5s in (a browser that yields a live-looking
+           but frozen Studio track), fall back to the plain
+           camera and SAY so — never strand anyone on a dead
+           picture that only looks switched on. */
+        var f0 = studio.frame;
+        setTimeout(function(){
+          if (!studio.on) return;
+          var flowing = studio.frame > f0 + 5
+            && studio.mainVid
+            && (studio.mainVid.videoWidth > 0
+                || studio.mainVid.readyState >= 2);
+          if (!flowing){
+            studioStop(true);
+            toast("⚠️ Studio's picture isn't flowing in this "
+                  + 'browser — you are back on your plain camera. '
+                  + 'On iPhone, open HERE in Safari; on PC, '
+                  + 'Chrome or Edge.');
+          }
+        }, 1500);
       }
     }).catch(function(){
       studio.on = false;
@@ -2460,18 +2490,24 @@ function liveRoomDiff(prev, next){
     return c;
   }
   function studioDrawBackdrop(ctx, W, H){
-    if (studio.backdrop === 'pic' && studio.picImg){
-      if (studioDrawFit(ctx, studio.picImg, 0, 0, W, H, false)) return;
+    if (studio.backdrop === 'pic' && (studio.bgImg || studio.picImg)){
+      if (studioDrawFit(ctx, studio.bgImg || studio.picImg,
+                         0, 0, W, H, false)) return;
     }
     var kind = studio.backdrop === 'game' ? 'space' : studio.backdrop;
     try { ctx.drawImage(studioBackdrop(kind), 0, 0, W, H); }
     catch (e) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); }
   }
   function studioKeyed(vid){
-    /* Chroma-key the face layer into keyCanvas (throttled to
-       every 2nd frame — the canvas persists between passes).
-       Key colour channel dominance over a sensitivity threshold;
-       a soft band + despill keep edges from fringing. */
+    /* Key the person layer into keyCanvas (throttled to every
+       2nd frame — the canvas persists between passes).
+       CHROMA (green/blue): NORMALIZED dominance — how much of the
+       pixel's own brightness the key colour owns — instead of a
+       raw channel gap, so a green screen in shadow (dim green,
+       small raw gap) still keys; the first build's raw-gap test
+       needed bright studio-lit green and silently keyed nothing
+       in a normal room. ANY WALL: border flood-fill below. */
+    if (studio.keyColor === 'wall') return studioWallKeyed(vid);
     if (studio.frame % 2 === 0){
       var kx = studio.keyCtx, W2 = 640, H2 = 360;
       kx.save();
@@ -2483,25 +2519,109 @@ function liveRoomDiff(prev, next){
       try { img = kx.getImageData(0, 0, W2, H2); }
       catch (e) { return studio.keyCanvas; }
       var d = img.data;
-      var T = 150 - studio.keySens;         /* 50..140 */
-      var soft = T * 0.55, green = studio.keyColor === 'green';
+      var green = studio.keyColor === 'green';
+      /* strength needed to key: sens 10 -> .57 (strict),
+         60 -> .32, 100 -> .12 (aggressive). */
+      var Ts = 0.62 - studio.keySens * 0.005, soft = Ts * 0.55;
       for (var i = 0; i < d.length; i += 4){
         var r = d[i], g = d[i + 1], b = d[i + 2];
-        var dom = green ? g - Math.max(r, b) : b - Math.max(r, g);
-        if (dom > T) d[i + 3] = 0;
-        else if (dom > soft)
+        var kc = green ? g : b;
+        var other = green ? Math.max(r, b) : Math.max(r, g);
+        var s = (kc - other) / Math.max(1, kc);
+        if (s > Ts) d[i + 3] = 0;
+        else if (s > soft)
           d[i + 3] = Math.round(d[i + 3]
-            * (1 - (dom - soft) / Math.max(1, T - soft)));
+            * (1 - (s - soft) / Math.max(0.01, Ts - soft)));
         if (d[i + 3] > 0){
           if (green && g > Math.max(r, b)) d[i + 1] = Math.max(r, b);
           if (!green && b > Math.max(r, g)) d[i + 2] = Math.max(r, g);
         }
         /* Compat mode (no ctx.filter): the effect rides THIS
-           pass — key dominance above was judged on the ORIGINAL
+           pass — key strength above was judged on the ORIGINAL
            pixels, so noir+key still keys correctly. */
         if (!studioFilterOK && studio.effect !== 'none'
             && d[i + 3] > 0)
           studioPixelFilter(d, i, studio.effect);
+      }
+      kx.putImageData(img, 0, 0);
+    }
+    return studio.keyCanvas;
+  }
+  /* ANY WALL: background removal WITHOUT any green screen.
+     The background is whatever touches the frame's edges: take
+     the average border colour as the wall, then flood inward —
+     a pixel joins the background when it is wall-coloured AND
+     close to an already-background neighbour (so shading and
+     gradients are followed, but the person — a different colour
+     island — is never crossed). Joined pixels go transparent. */
+  function studioWallKeyed(vid){
+    if (studio.frame % 2 === 0){
+      var kx = studio.keyCtx, W2 = 640, H2 = 360;
+      kx.save();
+      kx.filter = 'none';
+      kx.clearRect(0, 0, W2, H2);
+      studioDrawFit(kx, vid, 0, 0, W2, H2, false);
+      kx.restore();
+      var img;
+      try { img = kx.getImageData(0, 0, W2, H2); }
+      catch (e) { return studio.keyCanvas; }
+      var d = img.data, N = W2 * H2;
+      var sr = 0, sg = 0, sb = 0, cnt = 0, x, y, p, i4;
+      for (x = 0; x < W2; x++){
+        i4 = x * 4;
+        sr += d[i4]; sg += d[i4 + 1]; sb += d[i4 + 2]; cnt++;
+        i4 = ((H2 - 1) * W2 + x) * 4;
+        sr += d[i4]; sg += d[i4 + 1]; sb += d[i4 + 2]; cnt++;
+      }
+      for (y = 0; y < H2; y++){
+        i4 = (y * W2) * 4;
+        sr += d[i4]; sg += d[i4 + 1]; sb += d[i4 + 2]; cnt++;
+        i4 = (y * W2 + W2 - 1) * 4;
+        sr += d[i4]; sg += d[i4 + 1]; sb += d[i4 + 2]; cnt++;
+      }
+      var rr = sr / cnt, rg = sg / cnt, rb = sb / cnt;
+      var stepTol = 14 + studio.keySens * 0.22;
+      var refTol = 50 + studio.keySens * 0.6;
+      function distRef(pp){
+        var j = pp * 4;
+        var dr = d[j] - rr, dg = d[j + 1] - rg, db = d[j + 2] - rb;
+        return Math.sqrt(dr * dr + dg * dg + db * db);
+      }
+      function distPx(a, b2){
+        var ja = a * 4, jb = b2 * 4;
+        var dr = d[ja] - d[jb], dg = d[ja + 1] - d[jb + 1],
+            db = d[ja + 2] - d[jb + 2];
+        return Math.sqrt(dr * dr + dg * dg + db * db);
+      }
+      var joined = new Uint8Array(N), stack = [];
+      function seed(pp){
+        if (!joined[pp] && distRef(pp) < refTol * 1.2){
+          joined[pp] = 1; stack.push(pp);
+        }
+      }
+      for (x = 0; x < W2; x++){ seed(x); seed((H2 - 1) * W2 + x); }
+      for (y = 0; y < H2; y++){ seed(y * W2); seed(y * W2 + W2 - 1); }
+      while (stack.length){
+        p = stack.pop();
+        var px = p % W2, py = (p / W2) | 0;
+        var nb = [];
+        if (px > 0) nb.push(p - 1);
+        if (px < W2 - 1) nb.push(p + 1);
+        if (py > 0) nb.push(p - W2);
+        if (py < H2 - 1) nb.push(p + W2);
+        for (var k = 0; k < nb.length; k++){
+          var q = nb[k];
+          if (joined[q]) continue;
+          if (distRef(q) < refTol && distPx(q, p) < stepTol){
+            joined[q] = 1; stack.push(q);
+          }
+        }
+      }
+      for (p = 0; p < N; p++){
+        i4 = p * 4;
+        if (joined[p]) d[i4 + 3] = 0;
+        else if (!studioFilterOK && studio.effect !== 'none')
+          studioPixelFilter(d, i4, studio.effect);
       }
       kx.putImageData(img, 0, 0);
     }
@@ -2754,11 +2874,20 @@ function liveRoomDiff(prev, next){
         studioRerender();
       });
     if (studio.keyOn){
-      studioNote('My screen color');
-      studioSeg([['green', '🟩 Green'], ['blue', '🟦 Blue']],
+      studioNote('What is behind you right now?');
+      studioSeg([['green', '🟩 Green screen'], ['blue', '🟦 Blue screen'],
+                 ['wall', '🧱 Any plain wall']],
         studio.keyColor,
         function(v){ studio.keyColor = v; studioSaveSettings(); studioRerender(); });
-      studioNote('Key strength (higher eats more of the color)');
+      studioNote(studio.keyColor === 'wall'
+        ? 'No green screen needed — sit in front of a plain wall '
+          + 'and HERE takes the wall away. Works best when the '
+          + 'wall is one colour and nothing behind you moves.'
+        : 'Key strength (higher eats more of the color)');
+      if (studio.keyColor === 'wall')
+        studioNote('How hard to chase the wall colour (raise it '
+                   + 'if bits of wall stay, lower it if it eats '
+                   + 'your shirt)');
       var rng = document.createElement('input');
       rng.type = 'range';
       rng.min = '10'; rng.max = '100';
@@ -2775,7 +2904,33 @@ function liveRoomDiff(prev, next){
                  ['rainbow', '🌈 Rainbow'], ['pic', '🖼️ My picture']],
         studio.backdrop,
         function(v){ studio.backdrop = v; studioSaveSettings(); studioRerender(); });
-      studioNote('Green screen works on your facecam — or on your '
+      if (studio.backdrop === 'pic'){
+        var bgLbl = document.createElement('label');
+        bgLbl.className = 'cmenu-item';
+        bgLbl.style.cssText = 'display:block;cursor:pointer';
+        bgLbl.textContent = studio.bgImg
+          ? '🖼️ Change my background picture'
+          : '🖼️ Pick my background picture';
+        var bgInp = document.createElement('input');
+        bgInp.type = 'file';
+        bgInp.accept = 'image/*';
+        bgInp.hidden = true;
+        bgInp.addEventListener('change', function(){
+          var f = bgInp.files && bgInp.files[0];
+          if (!f) return;
+          var url = URL.createObjectURL(f);
+          var img = new Image();
+          img.onload = function(){
+            studio.bgImg = img;
+            toast('🖼️ Background picture set.');
+            studioRerender();
+          };
+          img.src = url;
+        });
+        bgLbl.appendChild(bgInp);
+        sheetActions.appendChild(bgLbl);
+      }
+      studioNote('Background works on your facecam — or on your '
                  + 'plain camera when no facecam is on.');
     }
     studioSection('🖼️ Picture on screen');
@@ -2848,6 +3003,12 @@ function liveRoomDiff(prev, next){
                 && studio.track.readyState === 'live'),
               trackId: studio.track ? studio.track.id : null,
               filterOK: studioFilterOK,
+              frames: studio.frame,
+              canvasAttached: !!(studio.canvas
+                && studio.canvas.isConnected),
+              mainReady: studio.mainVid
+                ? studio.mainVid.readyState : -1,
+              mainW: studio.mainVid ? studio.mainVid.videoWidth : 0,
               faceLive: !!(studio.faceStream
                 && studio.faceStream.getVideoTracks().some(
                   function(tr){ return tr.readyState === 'live'; }))};
