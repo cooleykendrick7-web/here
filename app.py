@@ -6353,7 +6353,13 @@ def _clean_story_edit(raw):
 def _story_edit_of(s):
     """A story row's cleaned editor payload ({} when none/garbled)."""
     import json as _json
-    raw = (s.get("edit_json") if isinstance(s, dict) else None) or ""
+    if isinstance(s, dict):
+        raw = s.get("edit_json") or ""
+    else:
+        try:
+            raw = s["edit_json"] or ""
+        except Exception:
+            raw = ""
     if not raw:
         return {}
     try:
@@ -6419,6 +6425,16 @@ def prune_stories():
     conn.close()
 
 
+STORY_TEXT_GRADS = {
+    "dusk": "linear-gradient(160deg,#23233a,#4a1942 55%,#8f1d22)",
+    "ember": "linear-gradient(160deg,#1c0f0a,#7a2408 55%,#e04707)",
+    "ocean": "linear-gradient(160deg,#04141f,#0a4d5c 55%,#0e86a0)",
+    "forest": "linear-gradient(160deg,#0a1a10,#14532d 55%,#3f9e4d)",
+    "grape": "linear-gradient(160deg,#170a26,#4c1d95 55%,#9333ea)",
+    "mono": "linear-gradient(160deg,#0a0a0c,#26262c 55%,#52525b)",
+}
+
+
 def stories_tray(viewer_id):
     """Tray entries for viewer + friends with active stories. Self first, then newest."""
     prune_stories()
@@ -6443,11 +6459,28 @@ def stories_tray(viewer_id):
         seen = {r["story_id"] for r in conn.execute(
             f"SELECT story_id FROM story_views WHERE user_id=? AND story_id IN ({ph})",
             (viewer_id, *sids)).fetchall()}
-        thumb = ""
+        # Card preview = the NEWEST story's own face: a photo
+        # story shows its photo, a video story its video, a text
+        # story its gradient. Media is stored RELATIVE ('stories/
+        # x.jpg') — the URL needs the /uploads/ prefix or the tray
+        # <img> 404s and shows the broken-image icon (Ken's report
+        # Oct 27: 'Your story' card black with a ? in the middle).
+        thumb, thumb_video, thumb_grad = "", "", ""
         for s in ss:
-            m = (s["media"] or "").lower()
-            if m.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
-                thumb = s["media"]
+            m = (s["media"] or "")
+            ml = m.lower()
+            url = m if m.startswith(("http://", "https://", "/")) \
+                else ("/uploads/" + m if m else "")
+            if ml.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                thumb = url
+                break
+            if ml.endswith((".mp4", ".mov", ".webm")):
+                thumb_video = url
+                break
+            ed = _story_edit_of(s)
+            if ed.get("mode") == "text":
+                thumb_grad = STORY_TEXT_GRADS.get(
+                    ed.get("textbg") or "dusk", STORY_TEXT_GRADS["dusk"])
                 break
         entry = {
             "user_id": u["id"], "name": u["name"],
@@ -6456,7 +6489,8 @@ def stories_tray(viewer_id):
             "first_id": ss[-1]["id"], "count": len(ss),
             "all_viewed": all(s in seen for s in sids),
             "latest": ss[0]["created_at"] or "",
-            "thumb": thumb,
+            "thumb": thumb, "thumb_video": thumb_video,
+            "thumb_grad": thumb_grad,
         }
         (tray if fid == viewer_id else others).append(entry)
     conn.close()

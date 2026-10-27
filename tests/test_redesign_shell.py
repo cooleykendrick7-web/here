@@ -172,7 +172,7 @@ check("reels: guests are bounced to login",
 tray = here.stories_tray(AID)
 mine = [x for x in tray if x["is_self"]]
 check("server: stories_tray carries the image thumb",
-      bool(mine and mine[0]["thumb"] == story_media),
+      bool(mine and mine[0]["thumb"] == "/uploads/" + story_media),
       str(mine))
 
 # ---- transparency: the owner's choice rules their profile ----

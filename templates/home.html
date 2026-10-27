@@ -11,7 +11,7 @@
   </a>
   {% for t in stories_tray %}
   <a class="story-card" href="/story/{{ t.first_id }}" title="{{ t.name|e }}{% if t.count > 1 %} ({{ t.count }}){% endif %}">
-    {% if t.thumb %}<img class="sc-bg" src="{{ t.thumb|e }}" alt="">{% elif t.avatar %}<img class="sc-bg" src="{{ t.avatar|e }}" alt="">{% else %}<span class="sc-bg" style="background:linear-gradient(160deg,#4a2b30,#1c1e21)"></span>{% endif %}
+    {% if t.thumb %}<img class="sc-bg" src="{{ t.thumb|e }}" alt="">{% elif t.thumb_video %}<video class="sc-bg" src="{{ t.thumb_video|e }}" muted playsinline preload="metadata"></video>{% elif t.thumb_grad %}<span class="sc-bg" style="background:{{ t.thumb_grad }}"></span>{% elif t.avatar %}<img class="sc-bg" src="{{ t.avatar|e }}" alt="">{% else %}<span class="sc-bg" style="background:linear-gradient(160deg,#4a2b30,#1c1e21)"></span>{% endif %}
     <span class="sc-shade"></span>
     {% if t.avatar %}<img class="sc-av{% if t.all_viewed %} viewed{% endif %}" src="{{ t.avatar|e }}" alt="">{% else %}<span class="sc-ph{% if t.all_viewed %} viewed{% endif %}">{{ t.name[:1]|upper|e }}</span>{% endif %}
     {% if t.count > 1 %}<span class="sc-count">{{ t.count }}</span>{% endif %}

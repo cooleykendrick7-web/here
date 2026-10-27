@@ -286,6 +286,40 @@ r = A.get("/stories/new?prompt=Night%20in%20your%20city")
 check("editor page: add-yours prompt arrives from the link",
       "Night in your city" in r.text)
 
+# ---------------- 9. tray previews (Ken's bug Oct 27) ----------------
+# The tray card used the RAW stored path ('stories/x.jpg') as the
+# <img> src — no /uploads/ prefix — so every photo story card
+# rendered as a broken-image icon. Preview = newest story's face.
+MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 64
+P, PID = signup("Tray Pam", "pam@tray.io")
+V, VID = signup("Tray Vic", "vic@tray.io")
+T, TID = signup("Tray Tex", "tex@tray.io")
+r = P.post("/stories/new", data={"caption": "pam photo"},
+           files={"media": ("p.png", PNG, "image/png")})
+assert r.status_code == 303, r.status_code
+r = V.post("/stories/new", data={"caption": "vic video"},
+           files={"media": ("v.mp4", MP4, "video/mp4")})
+assert r.status_code == 303, r.status_code
+r = T.post("/stories/new", data={
+    "caption": "", "edit_json": json.dumps(
+        {"mode": "text", "textbg": "ocean",
+         "texts": [{"t": "words only", "x": 50, "y": 50, "scale": 1.5}]})})
+assert r.status_code == 303, r.status_code
+tp = here.stories_tray(PID)[0]
+check("tray: photo story preview is a working /uploads/ URL",
+      tp["thumb"].startswith("/uploads/stories/")
+      and tp["thumb"].endswith(".png"), tp["thumb"])
+tv = here.stories_tray(VID)[0]
+check("tray: video story preview is the video file",
+      tv["thumb_video"].startswith("/uploads/stories/")
+      and tv["thumb"] == "", tv["thumb_video"])
+tt = here.stories_tray(TID)[0]
+check("tray: text story preview is its gradient",
+      "#0a4d5c" in tt["thumb_grad"], tt["thumb_grad"])
+home = P.get("/home").text
+check("tray: home renders the photo preview img",
+      f'<img class="sc-bg" src="{tp["thumb"]}"' in home)
+
 failed = [n for n, ok in RESULTS if not ok]
 print()
 print(f"{len(RESULTS) - len(failed)}/{len(RESULTS)} passed")
