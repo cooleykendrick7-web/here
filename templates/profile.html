@@ -57,24 +57,35 @@
         {% if profile.live_id %}
         <a class="btn" href="/live/{{ profile.live_id }}" style="background:var(--red);animation:livepulse 1.2s infinite">{{ ic('lives') }} LIVE — watch now</a>
         {% endif %}
+        {% if profile.is_self %}
+        {# Build PROFILE TOOLS (Ken's order Oct 27): the whole stack
+           of owner buttons was cluttered — now ONE neat pill opens
+           a tidy panel with every action as a full-width row, the
+           same pattern as Post options. Everything still one tap
+           away, nothing lost. #}
+        <button type="button" class="post-options-btn profile-tools-toggle" style="flex:1 1 100%" aria-expanded="false" aria-controls="profile-tools">{{ ic('gear') }} Profile tools</button>
+        <div class="post-options" id="profile-tools" style="flex:1 1 100%" hidden>
+          <a class="post-opt-item" href="/lives">{{ ic('lives') }} Lives</a>
+          <button type="button" class="post-opt-item" data-copy-path="/u/{{ profile.id }}">{{ ic('link') }} Share profile</button>
+          <a class="post-opt-item" href="/invite">{{ ic('tickets') }} Invite friends</a>
+          <a class="post-opt-item" href="/settings/profile">{{ ic('post') }} Edit Profile</a>
+          <a class="post-opt-item" href="/earnings">{{ ic('poll') }} My earnings</a>
+          <a class="post-opt-item" href="/settings/profile#spot">{{ ic('home') }} Customize my spot</a>
+          <a class="post-opt-item" href="/settings/profile#creator-mode">{{ ic('palette') }} Creator Mode: {% if profile.creator_mode %}On{% else %}Off{% endif %}</a>
+          {% if profile.is_private %}<span class="post-opt-item">{{ ic('lock') }} Private profile</span>{% endif %}
+          {% if profile.is_verified %}
+          <span class="post-opt-item"><span class="verified-star">{{ ic('verified') }}</span> Verified</span>
+          {% elif profile.verification_status == 'pending' %}
+          <span class="post-opt-item">{{ ic('hourglass') }} Verification pending</span>
+          {% else %}
+          <form class="post-opt-form" action="/verify/user/request" method="post"><button type="submit" class="post-opt-item">{{ ic('star2') }} Verify me</button></form>
+          {% endif %}
+        </div>
+        {% else %}
         <a class="btn-ghost" href="/lives">{{ ic('lives') }} Lives</a>
         <button type="button" class="btn-ghost btn-sm" data-copy-path="/u/{{ profile.id }}">{{ ic('link') }} Share profile</button>
-        {% if profile.is_self %}
-        <a class="btn-ghost" href="/invite">{{ ic('tickets') }} Invite friends</a>
-        <a class="btn-ghost" href="/settings/profile">{{ ic('post') }} Edit Profile</a>
-        <a class="btn-ghost" href="/earnings">{{ ic('poll') }} My earnings</a>
-        <a class="btn-ghost" href="/settings/profile#spot">{{ ic('home') }} Customize my spot</a>
-        {% if profile.is_private %}<span class="kind-tag">🔒 Private</span>{% endif %}
-        <a class="kind-tag" href="/settings/profile#creator-mode" style="text-decoration:none">{{ ic('palette') }} Creator Mode: {% if profile.creator_mode %}On{% else %}Off{% endif %}</a>
-        {% if profile.is_verified %}
-        <span class="kind-tag"><span class="verified-star">{{ ic('verified') }}</span> Verified</span>
-        {% elif profile.verification_status == 'pending' %}
-        <span class="kind-tag">{{ ic('hourglass') }} Verification pending</span>
-        {% else %}
-        <form class="inline-form" action="/verify/user/request" method="post">
-          <button type="submit" class="btn btn-sm">{{ ic('star2') }} Verify me</button>
-        </form>
         {% endif %}
+        {% if profile.is_self %}
         {% elif profile.req_status == 'none' %}
         <form class="inline-form" action="/friends/request/{{ profile.id }}" method="post">
           <button type="submit" class="btn btn-sm">➕ Add Friend</button>
@@ -327,6 +338,20 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+(function(){
+  // Profile tools: one neat pill opens the owner action panel.
+  var ptBtn = document.querySelector('.profile-tools-toggle');
+  var ptPanel = document.getElementById('profile-tools');
+  if (ptBtn && ptPanel){
+    ptBtn.addEventListener('click', function(){
+      var opening = ptPanel.hidden;
+      ptPanel.hidden = !opening;
+      ptBtn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+    });
+  }
+})();
+</script>
 <script>
 (function(){
   // Build WALL: the profile wall composer is the same block as the
