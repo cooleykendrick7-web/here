@@ -285,7 +285,8 @@ check("permalink: bubbles prefer the showcase soft in CSS",
 # visitors keep Lives + Share out in the open.
 ownp = C.get(f"/user/{CID}")
 check("profile tools: ONE Profile tools pill on own profile",
-      ownp.text.count("profile-tools-toggle") == 1
+      ownp.text.count('class="post-options-btn '
+                      'profile-tools-toggle"') == 1
       and "Profile tools" in ownp.text)
 check("profile tools: panel starts hidden",
       'id="profile-tools" style="flex:1 1 100%" hidden'
@@ -299,7 +300,9 @@ check("profile tools: no loose owner buttons left",
       and 'class="btn-ghost" href="/invite"' not in ownp.text)
 visp = B.get(f"/user/{CID}")
 check("profile tools: visitors get NO tools panel",
-      "profile-tools-toggle" not in visp.text)
+      'class="post-options-btn profile-tools-toggle"'
+      not in visp.text
+      and 'id="profile-tools"' not in visp.text)
 check("profile tools: visitors keep Lives + Share visible",
       'class="btn-ghost" href="/lives"' in visp.text
       and "Share profile" in visp.text)

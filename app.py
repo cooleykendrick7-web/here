@@ -542,6 +542,14 @@ def init_db():
             ("music_thumb", "ALTER TABLE stories ADD COLUMN music_thumb TEXT DEFAULT ''")):
         if _col not in _story_cols:
             c.execute(_ddl)
+    # --- story editor (Build STORY EDITOR): the visual editor's
+    # element list + per-story audience ride two more columns.
+    for _col, _ddl in (
+            ("edit_json", "ALTER TABLE stories ADD COLUMN edit_json TEXT DEFAULT ''"),
+            ("audience", "ALTER TABLE stories ADD COLUMN audience TEXT DEFAULT 'friends'")):
+        if _col not in _story_cols:
+            c.execute(_ddl)
+            _story_cols.append(_col)
     # Backfill: any story with no expiry gets created_at + 24h (the old
     # fixed TTL), computed in Python so ISO offsets parse exactly.
     for _r in c.execute(
@@ -6017,6 +6025,185 @@ async def game_match_forfeit(request: Request, mid: int):
 
 
 # ---------------- stories (friends-only, custom lifetimes) ----------------
+STORY_FONTS = ("classic", "deco", "bubble", "typewriter", "meme",
+               "strong", "neon")
+STORY_FILTERS = ("original", "vivid", "noir", "gold", "cool", "fade",
+                 "glow", "punch")
+STORY_ART = ("heart", "star", "flame", "crown", "bolt", "moon",
+             "music", "rose", "gem", "like", "party", "eyes")
+STORY_TEXT_BGS = ("dusk", "ember", "ocean", "forest", "grape", "mono")
+
+
+def _clean_story_edit(raw):
+    """Validate the visual editor's JSON payload. Anything malformed
+    is dropped piece by piece; the result is always a safe dict the
+    viewer can render without trusting the client."""
+    import json as _json
+    try:
+        d = _json.loads(raw or "{}")
+    except Exception:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+
+    def _f(v, lo, hi, default):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, v))
+
+    out = {}
+    if d.get("mode") == "text":
+        out["mode"] = "text"
+        bg = str(d.get("textbg") or "dusk")
+        out["textbg"] = bg if bg in STORY_TEXT_BGS else "dusk"
+    if d.get("filter") in STORY_FILTERS and d["filter"] != "original":
+        out["filter"] = d["filter"]
+    if isinstance(d.get("trim"), dict):
+        st = _f(d["trim"].get("start"), 0, 3600, 0)
+        en = _f(d["trim"].get("end"), 0, 3600, 0)
+        if en > st + 0.4:
+            out["trim"] = {"start": round(st, 2), "end": round(en, 2)}
+    if d.get("boomerang"):
+        out["boomerang"] = True
+    texts = []
+    for tx in (d.get("texts") or [])[:6]:
+        if not isinstance(tx, dict):
+            continue
+        body = str(tx.get("t") or "").strip()[:120]
+        if not body:
+            continue
+        color = str(tx.get("color") or "#ffffff")
+        if not _spot_hex_ok(color):
+            color = "#ffffff"
+        texts.append({
+            "t": body,
+            "font": tx.get("font") if tx.get("font") in STORY_FONTS
+                    else "classic",
+            "color": color, "bg": bool(tx.get("bg")),
+            "align": tx.get("align") if tx.get("align") in
+                     ("left", "center", "right") else "center",
+            "x": _f(tx.get("x"), 0, 100, 50), "y": _f(tx.get("y"), 0,
+                                                      100, 50),
+            "scale": _f(tx.get("scale"), 0.4, 4, 1),
+            "rot": _f(tx.get("rot"), -180, 180, 0)})
+    if texts:
+        out["texts"] = texts
+    stickers = []
+    for sk in (d.get("stickers") or [])[:12]:
+        if not isinstance(sk, dict):
+            continue
+        kind = str(sk.get("kind") or "")
+        item = {"x": _f(sk.get("x"), 0, 100, 50),
+                "y": _f(sk.get("y"), 0, 100, 50),
+                "scale": _f(sk.get("scale"), 0.4, 4, 1),
+                "rot": _f(sk.get("rot"), -180, 180, 0)}
+        if kind in STORY_ART:
+            item["kind"] = kind
+        elif kind == "location":
+            label = str(sk.get("label") or "").strip()[:60]
+            if not label:
+                continue
+            item.update(kind="location", label=label)
+        elif kind == "time":
+            item["kind"] = "time"
+        elif kind == "link":
+            url = str(sk.get("url") or "").strip()[:300]
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            item.update(kind="link", url=url,
+                        label=str(sk.get("label") or "Visit link")[:40])
+        elif kind == "mention":
+            try:
+                uid = int(sk.get("uid"))
+            except (TypeError, ValueError):
+                continue
+            name = str(sk.get("name") or "").strip()[:80]
+            if uid <= 0 or not name:
+                continue
+            item.update(kind="mention", uid=uid, name=name)
+        elif kind in ("question", "addyours"):
+            prompt = str(sk.get("prompt") or "").strip()[:120]
+            if not prompt:
+                continue
+            item.update(kind=kind, prompt=prompt)
+        else:
+            continue
+        stickers.append(item)
+    if stickers:
+        out["stickers"] = stickers
+    caps = str(d.get("captions") or "").strip()[:500]
+    if caps:
+        out["captions"] = caps
+    mentions = []
+    for mid in (d.get("mentions") or [])[:10]:
+        try:
+            mid = int(mid)
+        except (TypeError, ValueError):
+            continue
+        if mid > 0 and mid not in mentions:
+            mentions.append(mid)
+    if mentions:
+        out["mentions"] = mentions
+    return out
+
+
+def _story_edit_of(s):
+    """A story row's cleaned editor payload ({} when none/garbled)."""
+    import json as _json
+    raw = (s.get("edit_json") if isinstance(s, dict) else None) or ""
+    if not raw:
+        return {}
+    try:
+        d = _json.loads(raw)
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _story_row_viewable(viewer_id, s):
+    """May viewer see this story row? Own + friends (the classic rule),
+    plus the editor era: PUBLIC stories for anyone signed in, and any
+    story that MENTIONS the viewer."""
+    if not s or (s["expires_at"] or "") < now_iso():
+        return False
+    if s["user_id"] == viewer_id:
+        return True
+    if s["user_id"] in friend_id_set(viewer_id):
+        return True
+    if (s["audience"] or "friends") == "public":
+        return True
+    edit = _story_edit_of(dict(s))
+    return viewer_id in (edit.get("mentions") or [])
+
+
+def _story_extra_authors(viewer_id):
+    """Authors outside the friend set whose stories may still reach
+    this viewer: anyone with a PUBLIC live story + anyone who mentioned
+    the viewer in a live story."""
+    conn = db()
+    now = now_iso()
+    rows = conn.execute(
+        "SELECT user_id, audience, edit_json FROM stories "
+        "WHERE expires_at > ?", (now,)).fetchall()
+    conn.close()
+    out = set()
+    for r in rows:
+        if r["user_id"] in out:
+            continue
+        if (r["audience"] or "friends") == "public":
+            # Public means public: the author joins the viewer's tray
+            # and queue (their friends-only stories still filter out
+            # per-story in _story_row_viewable).
+            out.add(r["user_id"])
+            continue
+        edit = _story_edit_of(dict(r))
+        if viewer_id in (edit.get("mentions") or []):
+            out.add(r["user_id"])
+    return out
+
+
 def story_expires_at(minutes=STORY_TTL_HOURS * 60):
     return (datetime.now(timezone.utc)
             + timedelta(minutes=minutes)).isoformat()
@@ -6037,13 +6224,17 @@ def stories_tray(viewer_id):
     conn = db()
     now = now_iso()
     tray, others = [], []
-    for fid in friend_id_set(viewer_id) | {viewer_id}:
+    _authors = friend_id_set(viewer_id) | {viewer_id} \
+        | _story_extra_authors(viewer_id)
+    for fid in _authors:
         u = conn.execute("SELECT id,name,avatar FROM users WHERE id=?", (fid,)).fetchone()
         if not u:
             continue
         ss = conn.execute(
-            "SELECT id, media, created_at FROM stories WHERE user_id=? AND expires_at > ? "
+            "SELECT id, media, created_at, audience, edit_json, expires_at, user_id FROM stories WHERE user_id=? AND expires_at > ? "
             "ORDER BY created_at DESC", (fid, now)).fetchall()
+        if fid not in friend_id_set(viewer_id) and fid != viewer_id:
+            ss = [s for s in ss if _story_row_viewable(viewer_id, s)]
         if not ss:
             continue
         sids = [s["id"] for s in ss]
@@ -6080,11 +6271,9 @@ def _get_story(sid):
 
 
 def _can_view_story(user, s):
-    if not s or s["expires_at"] < now_iso():
+    if not user or not s:
         return False
-    if s["user_id"] == user["id"]:
-        return True
-    return s["user_id"] in friend_id_set(user["id"])
+    return _story_row_viewable(user["id"], s)
 
 
 # ---- YouTube music helpers ----
@@ -6248,6 +6437,8 @@ def _story_payload(conn, s, viewer_id, seen):
         "caption": s["caption"] or "",
         "created_at": s["created_at"], "expires_at": s["expires_at"],
         "mine": s["user_id"] == viewer_id, "seen": bool(seen),
+        "audience": s["audience"] or "friends",
+        "edit": _story_edit_of(dict(s)),
         "overlay": overlay, "music": music,
         "poll": poll,
         "ama": bool(s["ama"]) if "ama" in s.keys() else False,
@@ -6263,7 +6454,9 @@ def _story_queue(viewer_id):
     conn = db()
     now = now_iso()
     groups = []
-    for fid in friend_id_set(viewer_id) | {viewer_id}:
+    _qauthors = friend_id_set(viewer_id) | {viewer_id} \
+        | _story_extra_authors(viewer_id)
+    for fid in _qauthors:
         u = conn.execute("SELECT id,name,avatar FROM users WHERE id=?",
                          (fid,)).fetchone()
         if not u:
@@ -6271,6 +6464,8 @@ def _story_queue(viewer_id):
         ss = conn.execute(
             "SELECT * FROM stories WHERE user_id=? AND expires_at > ? "
             "ORDER BY created_at ASC", (fid, now)).fetchall()
+        if fid not in friend_id_set(viewer_id) and fid != viewer_id:
+            ss = [s for s in ss if _story_row_viewable(viewer_id, s)]
         if not ss:
             continue
         sids = [s["id"] for s in ss]
@@ -6370,12 +6565,146 @@ async def music_popular(request: Request):
          "uses": r["uses"]} for r in rows]})
 
 
+def _own_media_path(uid, path):
+    """True when `path` is one of THIS user's own uploads (a post's or
+    story's media, their avatar or background) with a story-legal
+    extension - the picker grid may only reference media the user
+    already owns on HERE."""
+    path = (path or "").strip()
+    if not path or ".." in path or path.startswith("/"):
+        return False
+    if ("." + path.rsplit(".", 1)[-1].lower()) not in \
+            {"." + e for e in STORY_EXTS}:
+        return False
+    conn = db()
+    hit = conn.execute(
+        "SELECT 1 FROM posts WHERE user_id=? AND media=?", (uid, path)
+    ).fetchone() or conn.execute(
+        "SELECT 1 FROM stories WHERE user_id=? AND media=?", (uid, path)
+    ).fetchone() or conn.execute(
+        "SELECT 1 FROM users WHERE id=? AND (avatar=? OR background=?)",
+        (uid, path, path)).fetchone()
+    conn.close()
+    return bool(hit)
+
+
 @app.get("/stories/new", response_class=HTMLResponse)
 async def story_new_page(request: Request):
     user, err = require_login(request)
     if err:
         return err
-    return render(request, "story_new.html", {})
+    prompt = (request.query_params.get("prompt") or "").strip()[:120]
+    return render(request, "story_new.html", {"addyours_prompt": prompt})
+
+
+@app.get("/stories/media")
+async def story_media_recent(request: Request):
+    """The editor picker's grid: the signed-in user's own recent media
+    on HERE (posts + stories + avatar/background), newest first."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    conn = db()
+    items, seen_paths = [], set()
+
+    def _add(path):
+        if not path or path in seen_paths:
+            return
+        ext = ("." + path.rsplit(".", 1)[-1].lower()) if "." in path \
+            else ""
+        if ext not in {"." + e for e in STORY_EXTS}:
+            return
+        if not _upload_exists(path):
+            return
+        seen_paths.add(path)
+        items.append({
+            "path": path, "url": "/uploads/" + path,
+            "video": ext in (".mp4", ".mov", ".webm")})
+
+    for r in conn.execute(
+            "SELECT media FROM posts WHERE user_id=? AND page_id IS NULL "
+            "AND media != '' ORDER BY id DESC LIMIT 48",
+            (user["id"],)).fetchall():
+        _add(r["media"])
+    for r in conn.execute(
+            "SELECT media FROM stories WHERE user_id=? AND media != '' "
+            "ORDER BY id DESC LIMIT 24", (user["id"],)).fetchall():
+        _add(r["media"])
+    me = conn.execute("SELECT avatar, background FROM users WHERE id=?",
+                      (user["id"],)).fetchone()
+    if me:
+        _add(me["avatar"])
+        _add(me["background"])
+    conn.close()
+    return JSONResponse({"ok": True, "items": items[:60]})
+
+
+@app.get("/stories/people")
+async def story_people_search(request: Request):
+    """Mention picker search: people by name (blocked pairs excluded)."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    q = (request.query_params.get("q") or "").strip()[:60]
+    if len(q) < 2:
+        return JSONResponse({"ok": True, "people": []})
+    conn = db()
+    rows = conn.execute(
+        "SELECT id, name, avatar FROM users WHERE name LIKE ? "
+        "AND id != ? AND id NOT IN (SELECT blocked_id FROM blocks "
+        "WHERE blocker_id=?) AND id NOT IN (SELECT blocker_id FROM "
+        "blocks WHERE blocked_id=?) ORDER BY name LIMIT 10",
+        ("%" + q + "%", user["id"], user["id"], user["id"])).fetchall()
+    conn.close()
+    return JSONResponse({"ok": True, "people": [
+        {"id": r["id"], "name": r["name"],
+         "avatar": avatar_url(r["avatar"])} for r in rows]})
+
+
+@app.post("/story/{sid}/reshare")
+async def story_reshare(request: Request, sid: int):
+    """A mentioned viewer shares the story to their own story (the
+    rule from Ken's spec video: anyone tagged can share it onward).
+    The copy is a fresh friends-audience story; the poll and the
+    mention list do NOT carry over."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    s = _get_story(sid)
+    if not s or s["user_id"] == user["id"] \
+            or not _can_view_story(user, s):
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    edit = _story_edit_of(s)
+    if user["id"] not in (edit.get("mentions") or []):
+        return JSONResponse({"ok": False, "error": "not mentioned"},
+                            status_code=403)
+    new_edit = {k: v for k, v in edit.items() if k != "mentions"}
+    import json as _json
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO stories(user_id, media, caption, created_at, "
+        "expires_at, music_kind, music_ref, music_title, music_artist, "
+        "music_thumb, music_start, music_len, music_volume, "
+        "music_mute_orig, edit_json, audience) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (user["id"], s["media"], s["caption"] or "", now_iso(),
+         story_expires_at(), s["music_kind"], s["music_ref"] or "",
+         s["music_title"] or "", s["music_artist"] or "",
+         s["music_thumb"] or "", s["music_start"] or 0,
+         s["music_len"] or 15,
+         s["music_volume"] if s["music_volume"] is not None else 80,
+         s["music_mute_orig"] or 0, _json.dumps(new_edit), "friends"))
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    notify(s["user_id"], "story_reshare",
+           f"{user['name']} shared your story to their story",
+           f"/story/{new_id}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "id": new_id})
 
 
 @app.post("/stories/new")
@@ -6441,16 +6770,26 @@ async def story_create(request: Request):
             media = save_upload(form.get("media"), "stories", STORY_EXTS)
         except ValueError as e:
             return redir("/stories/new", str(e))
+    # --- visual editor payload + audience + picker media ---------
+    import json as _json
+    edit = _clean_story_edit(form.get("edit_json") or "")
+    audience = "public" if (form.get("audience") or "") == "public" \
+        else "friends"
     if not media:
+        _existing = (form.get("existing_media") or "").strip()
+        if _existing and _own_media_path(user["id"], _existing):
+            media = _existing
+    if not media and edit.get("mode") != "text":
         return redir("/stories/new", "Choose a photo or short video.")
+    media = media or ""
     mins = _story_lifetime_minutes(form)
     conn = db()
     cur = conn.execute(
         "INSERT INTO stories(user_id, media, caption, created_at, expires_at, "
         "overlay_text, overlay_color, overlay_pos, music_kind, music_ref, "
         "music_title, music_artist, music_thumb, music_start, music_len, "
-        "music_volume, music_mute_orig, ama) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "music_volume, music_mute_orig, ama, edit_json, audience) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], media, caption, now_iso(), story_expires_at(mins),
          overlay_text, overlay_color, overlay_pos,
          "youtube" if music else None,
@@ -6459,7 +6798,7 @@ async def story_create(request: Request):
          music["artist"] if music else "",
          music["thumb"] if music else "",
          music_start, music_len, music_volume, music_mute_orig,
-         story_ama))
+         story_ama, _json.dumps(edit), audience))
     sid = cur.lastrowid
     if story_poll:
         conn.execute(
@@ -6468,8 +6807,15 @@ async def story_create(request: Request):
                                 story_poll[2]))
     conn.commit()
     conn.close()
+    for _mid in edit.get("mentions") or []:
+        if _mid != user["id"] and get_user(_mid):
+            notify(_mid, "story_mention",
+                   f"{user['name']} mentioned you in their story",
+                   f"/story/{sid}", actor_id=user["id"])
+    _flag_parts = [caption, overlay_text, poll_q]
+    _flag_parts += [tx["t"] for tx in edit.get("texts") or []]
     flag_item("story", sid, user["id"], user["name"],
-              " ".join(x for x in (caption, overlay_text) if x))
+              " ".join(x for x in _flag_parts if x))
     return redir("/home", _lifetime_flash(mins))
 
 
@@ -6479,7 +6825,8 @@ async def stories_queue(request: Request):
     user, err = require_login(request)
     if err:
         return JSONResponse({"ok": False, "error": "login"}, status_code=401)
-    return JSONResponse({"ok": True, "groups": _story_queue(user["id"])})
+    return JSONResponse({"ok": True, "me": user["id"],
+                         "groups": _story_queue(user["id"])})
 
 
 @app.get("/story/{sid}", response_class=HTMLResponse)

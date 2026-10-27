@@ -24,7 +24,32 @@
       <div id="sv-poll-body"></div>
       <div class="sv-poll-total" id="sv-poll-total"></div>
     </div>
+    <div id="sv-textstage" hidden></div>
+    <div id="sv-edit-layer"></div>
+    <div id="sv-captions" hidden></div>
   </div>
+  <style>
+    #sv-textstage{position:absolute;inset:0}
+    #sv-edit-layer{position:absolute;inset:0;pointer-events:none;z-index:4}
+    #sv-edit-layer .se-el{position:absolute;transform:translate(-50%,-50%);max-width:88%}
+    #sv-edit-layer .txt{white-space:pre-wrap;word-break:break-word;line-height:1.25;text-shadow:0 1px 8px rgba(0,0,0,.45)}
+    #sv-edit-layer .txt.bg{background:rgba(0,0,0,.62);padding:.18em .5em;border-radius:.45em;text-shadow:none}
+    #sv-edit-layer svg.art{display:block;filter:drop-shadow(0 2px 8px rgba(0,0,0,.5))}
+    #sv-edit-layer .se-pill-el{display:flex;align-items:center;gap:7px;background:rgba(14,14,17,.82);
+      border:1px solid rgba(255,255,255,.25);padding:8px 13px;border-radius:999px;font-weight:700;
+      white-space:nowrap;color:#fff}
+    #sv-edit-layer .se-pill-el svg{width:17px;height:17px;flex:0 0 auto}
+    #sv-edit-layer button.se-el{pointer-events:auto;background:none;border:none;cursor:pointer;font:inherit}
+    #sv-captions{position:absolute;left:14px;right:14px;bottom:12px;z-index:5;text-align:center;
+      background:rgba(0,0,0,.72);color:#fff;font-weight:700;padding:9px 13px;border-radius:11px;
+      font-size:15px;line-height:1.35}
+    .sef-deco{font-family:Georgia,'Times New Roman',serif}
+    .sef-bubble{font-family:'Arial Rounded MT Bold','Hiragino Maru Gothic ProN',sans-serif;font-weight:700}
+    .sef-typewriter{font-family:'Courier New',monospace}
+    .sef-meme{font-family:Impact,'Arial Black',sans-serif;text-transform:uppercase;letter-spacing:.02em}
+    .sef-strong{font-weight:900}
+    .sef-neon{font-weight:800}
+  </style>
 
   <div id="sv-yt-wrap" hidden>
     <div class="sv-yt-frame" id="sv-yt-slot"></div>
@@ -48,6 +73,7 @@
       <button type="button" data-kind="angry" title="Angry">😡</button>
       <span id="sv-reply-note" hidden></span>
     </div>
+    <button class="sv-chipbtn" id="sv-reshare" type="button" hidden style="align-self:flex-start">↗ Share to my story</button>
     <form id="sv-ama-form" hidden>
       <input id="sv-ama-input" type="text" maxlength="2000" autocomplete="off" placeholder="❓ Ask a question…">
       <button class="sv-chipbtn" type="submit">Ask</button>
@@ -107,6 +133,7 @@
   var amaInput = document.getElementById('sv-ama-input');
   var ytPlayer = null;
 
+  var ME = 0;
   var flat = [];        // [{g, s, gname...}] flattened queue
   var idx = -1;
   var durationMs = 5000;
@@ -179,6 +206,126 @@
     }
   }
 
+  /* --- Build STORY EDITOR: render the editor's element list --- */
+  var SE_ART = {
+    heart: '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>',
+    star: '<path d="M12 2.4l2.95 6.35 6.95.8-5.15 4.8 1.35 6.85L12 17.85l-6.1 3.35 1.35-6.85-5.15-4.8 6.95-.8z"/>',
+    flame: '<path d="M13.6 1.8c.5 2.9-.3 5-1.9 7.2C10.2 11.1 10.9 13 12 14.7c-1.3-.4-2.2-1.3-2.7-2.7-1.3 1.6-2 3.2-2 5.1A5.2 5.2 0 0012.5 22 5.2 5.2 0 0017.7 16.8c0-2-.8-4.1-2-5.7-.4 1.3-1.2 2.1-2.4 2.5.5-3.8.2-8.3.3-11.8z"/>',
+    crown: '<path d="M3 18.5h18v2H3zM2.5 7l4.8 3.4L12 5.5l4.7 4.9L21.5 7l-1.8 9.5H4.3L2.5 7z"/>',
+    bolt: '<path d="M13.2 2L3.6 14.2h6.7L8.9 22l9.6-12.2h-6.7L13.2 2z"/>',
+    moon: '<path d="M20.6 14.5A8.5 8.5 0 1 1 9.5 3.4a7 7 0 1 0 11.1 11.1z"/>',
+    music: '<circle cx="6.8" cy="17.8" r="3.1"/><circle cx="17.9" cy="15.8" r="3.1"/><path d="M9.4 17.8V5.4L20.5 3.6v12.2h-2.6V6.5L12 8.1v9.7H9.4z"/>',
+    rose: '<circle cx="12" cy="8.6" r="3.4"/><circle cx="7.6" cy="11.4" r="2.5"/><circle cx="16.4" cy="11.4" r="2.5"/><path d="M11.2 12h1.6l-.4 9h-.8l-.4-9z"/><path d="M11.4 16.4c-2.4.2-4-1-4.6-3 2.3-.3 3.9.7 4.6 3zM12.6 18.4c2.4.2 4-1 4.6-3-2.3-.3-3.9.7-4.6 3z"/>',
+    gem: '<path d="M6.2 3.5h11.6L21.5 9 12 20.5 2.5 9 6.2 3.5zM7.5 5.4L5.3 7.6h3.9L10.6 5.4H7.5zm5.9 0l1.4 2.2h3.9L16.5 5.4h-3.1zM9 9.4L12 15l3-5.6H9z"/>',
+    like: '<path d="M6.8 21.5v-11H3.2v11h3.6zM20.4 10.2H14l.9-4.2c.2-1.9-1-3.2-2.6-3.5L6.8 10.6v10.9h9.6a2.3 2.3 0 002.2-1.8l1.3-6.9a2.3 2.3 0 00-.5-2.6z"/>',
+    party: '<path d="M3.5 3.5L12 14l-2.8 1.6L3.5 3.5zM12 14l3.4 6.5-4.6-3L12 14zM20.5 3.5L14.8 15 12 14l8.5-10.5z"/><circle cx="18.6" cy="17.6" r="1.6"/><circle cx="5.4" cy="18.6" r="1.3"/>',
+    eyes: '<path fill-rule="evenodd" d="M12 5.2c4.9 0 9.1 2.9 10.9 6.8C21.1 15.9 16.9 18.8 12 18.8S2.9 15.9 1.1 12C2.9 8.1 7.1 5.2 12 5.2zm0 2.3c-3.7 0-7 1.8-8.7 4.5 1.7 2.7 5 4.5 8.7 4.5s7-1.8 8.7-4.5c-1.7-2.7-5-4.5-8.7-4.5zm0 1.3a3.2 3.2 0 110 6.4 3.2 3.2 0 010-6.4z"/>',
+    pin: '<path fill-rule="evenodd" d="M12 2.2a7.3 7.3 0 00-7.3 7.3c0 5.4 7.3 12.3 7.3 12.3s7.3-6.9 7.3-12.3A7.3 7.3 0 0012 2.2zm0 10a2.7 2.7 0 110-5.4 2.7 2.7 0 010 5.4z"/>',
+    link: '<path d="M10.6 13.4a4.2 4.2 0 005.9 0l3-3a4.24 4.24 0 10-5.9-6l-1.5 1.5 1.4 1.5 1.6-1.6a2.12 2.12 0 113 3l-3 3a2.12 2.12 0 01-3 0l-1.4 1.6zm2.8-2.8a4.2 4.2 0 00-5.9 0l-3 3a4.24 4.24 0 105.9 6l1.5-1.5-1.4-1.5-1.6 1.6a2.12 2.12 0 11-3-3l3-3a2.12 2.12 0 013 0l1.4-1.6z"/>',
+    help: '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zM12 5.6c1.9 0 3.4 1.3 3.4 3.1 0 2.3-2.4 2.7-2.4 4.1h-2c0-2.3 2.4-2.4 2.4-4 0-.7-.6-1.2-1.4-1.2-.8 0-1.5.5-1.6 1.3H8.4c.2-2 1.7-3.3 3.6-3.3zM11 15.4h2.1v2.1H11z"/>',
+    clock: '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zm1.1 4.4h-2v6.2l4.4 2.6 1-1.8-3.4-2V6.9z"/>',
+    chat: '<path d="M5 3.5h14A2.5 2.5 0 0121.5 6v8a2.5 2.5 0 01-2.5 2.5H9.5L5 20.5v-4A2.5 2.5 0 012.5 14V6A2.5 2.5 0 015 3.5z"/>',
+    at: '<path d="M12 4a8 8 0 108 8h-2a6 6 0 11-1.2-3.6V12a2.9 2.9 0 11-2-2.6A4.9 4.9 0 1017.7 15c.4 1.7 1.9 3 4.3 3v2c-2.8 0-4.9-1.3-5.9-3A8 8 0 0112 4zm0 3.6a4.4 4.4 0 104.4 4.4A4.4 4.4 0 0012 7.6z"/>'
+  };
+  var SE_FILTERS = {original:'', vivid:'saturate(1.5) contrast(1.1)',
+    noir:'grayscale(1) contrast(1.15)', gold:'sepia(.45) saturate(1.3) hue-rotate(-8deg)',
+    cool:'hue-rotate(18deg) saturate(1.1) brightness(1.05)',
+    fade:'brightness(1.12) contrast(.85) saturate(.8)',
+    glow:'brightness(1.15) saturate(1.25)', punch:'contrast(1.3) saturate(1.4)'};
+  var SE_GRADS = {dusk:'linear-gradient(160deg,#23233a,#4a1942 55%,#8f1d22)',
+    ember:'linear-gradient(160deg,#1c0f0a,#7a2408 55%,#e04707)',
+    ocean:'linear-gradient(160deg,#04141f,#0a4d5c 55%,#0e86a0)',
+    forest:'linear-gradient(160deg,#0a1a10,#14532d 55%,#3f9e4d)',
+    grape:'linear-gradient(160deg,#170a26,#4c1d95 55%,#9333ea)',
+    mono:'linear-gradient(160deg,#0a0a0c,#26262c 55%,#52525b)'};
+  var editLayer = document.getElementById('sv-edit-layer');
+  var captionsEl = document.getElementById('sv-captions');
+  var textStage = document.getElementById('sv-textstage');
+  var reshareBtn = document.getElementById('sv-reshare');
+  var clockIv = null, boomRev = false;
+  function svTimeNow(){ var d = new Date(); var h = d.getHours() % 12; if (h === 0) h = 12;
+    var m = d.getMinutes(); return h + ':' + (m < 10 ? '0' : '') + m + ' ' + (d.getHours() >= 12 ? 'PM' : 'AM'); }
+  function elPosV(el, d){ el.style.left = d.x + '%'; el.style.top = d.y + '%';
+    el.style.transform = 'translate(-50%,-50%) rotate(' + (d.rot || 0) + 'deg)'; }
+  function renderEdit(s){
+    var e = s.edit || {};
+    editLayer.innerHTML = '';
+    if (clockIv){ clearInterval(clockIv); clockIv = null; }
+    boomRev = false;
+    // text-only story: gradient stage, no media
+    if (e.mode === 'text'){
+      textStage.hidden = false;
+      textStage.style.background = SE_GRADS[e.textbg || 'dusk'] || SE_GRADS.dusk;
+      img.hidden = true; vid.hidden = true;
+    } else {
+      textStage.hidden = true;
+    }
+    var f = SE_FILTERS[e.filter || 'original'] || '';
+    img.style.filter = f; vid.style.filter = f;
+    (e.texts || []).forEach(function(tx){
+      var d = document.createElement('div');
+      d.className = 'se-el';
+      d.innerHTML = '<div class="txt sef-' + esc(tx.font || 'classic') + (tx.bg ? ' bg' : '') +
+        '" style="color:' + esc(tx.color || '#fff') + ';font-size:' + Math.round(27 * (tx.scale || 1)) +
+        'px;text-align:' + esc(tx.align || 'center') +
+        (tx.font === 'neon' ? ';text-shadow:0 0 7px ' + esc(tx.color || '#fff') + ',0 0 16px ' + esc(tx.color || '#fff') : '') +
+        '">' + esc(tx.t) + '</div>';
+      elPosV(d, tx);
+      editLayer.appendChild(d);
+    });
+    (e.stickers || []).forEach(function(sk){
+      var d;
+      if (SE_ART[sk.kind]){
+        d = document.createElement('div');
+        d.className = 'se-el';
+        var sz = Math.round(62 * (sk.scale || 1));
+        d.innerHTML = '<svg class="art" viewBox="0 0 24 24" fill="#fff" style="width:' + sz + 'px;height:' + sz + 'px">' + SE_ART[sk.kind] + '</svg>';
+      } else if (sk.kind === 'location' || sk.kind === 'time' || sk.kind === 'question'){
+        d = document.createElement('div');
+        d.className = 'se-el';
+        var ic = sk.kind === 'location' ? ['pin', '#ff453a'] : sk.kind === 'time' ? ['clock', '#fff'] : ['help', '#ffd60a'];
+        var label = sk.kind === 'location' ? sk.label : sk.kind === 'time' ? svTimeNow() : sk.prompt;
+        d.innerHTML = '<span class="se-pill-el"><svg viewBox="0 0 24 24" fill="' + ic[1] + '">' + SE_ART[ic[0]] + '</svg><span class="sv-pill-txt">' + esc(label || '') + '</span></span>';
+        if (sk.kind === 'time'){
+          var txtEl = d.querySelector('.sv-pill-txt');
+          clockIv = setInterval(function(){ if (txtEl) txtEl.textContent = svTimeNow(); }, 5000);
+        }
+      } else if (sk.kind === 'link' || sk.kind === 'addyours' || sk.kind === 'mention'){
+        d = document.createElement('button');
+        d.type = 'button';
+        d.className = 'se-el';
+        if (sk.kind === 'link'){
+          d.innerHTML = '<span class="se-pill-el"><svg viewBox="0 0 24 24" fill="#4da3ff">' + SE_ART.link + '</svg>' + esc(sk.label || 'Visit link') + '</span>';
+          d.addEventListener('click', function(ev){ ev.stopPropagation(); window.open(sk.url, '_blank', 'noopener'); });
+        } else if (sk.kind === 'addyours'){
+          d.innerHTML = '<span class="se-pill-el"><svg viewBox="0 0 24 24" fill="#32d74b">' + SE_ART.chat + '</svg>Add yours: ' + esc(sk.prompt || '') + '</span>';
+          d.addEventListener('click', function(ev){ ev.stopPropagation();
+            location.href = '/stories/new?prompt=' + encodeURIComponent(sk.prompt || ''); });
+        } else {
+          d.innerHTML = '<span class="se-pill-el"><svg viewBox="0 0 24 24" fill="#bf5af2">' + SE_ART.at + '</svg>@' + esc(sk.name || '') + '</span>';
+          d.addEventListener('click', function(ev){ ev.stopPropagation(); location.href = '/user/' + sk.uid; });
+        }
+      } else { return; }
+      elPosV(d, sk);
+      editLayer.appendChild(d);
+    });
+    if (e.captions){
+      captionsEl.hidden = false;
+      captionsEl.textContent = e.captions;
+    } else { captionsEl.hidden = true; }
+    // reshare: only for a mentioned viewer on someone else's story
+    var mentioned = (e.mentions || []).indexOf(ME) >= 0;
+    reshareBtn.hidden = !(mentioned && !s.mine);
+    reshareBtn.onclick = function(){
+      reshareBtn.disabled = true;
+      fetch('/story/' + s.id + '/reshare', {method: 'POST'}).then(function(r){ return r.json(); })
+        .then(function(dd){
+          reshareBtn.disabled = false;
+          if (dd && dd.ok){ reshareBtn.textContent = '✓ Shared to your story'; reshareBtn.hidden = false; }
+        }).catch(function(){ reshareBtn.disabled = false; });
+    };
+  }
+
   function buildBars(item) {
     barsEl.innerHTML = '';
     item.g.stories.forEach(function (s, i) {
@@ -219,6 +366,25 @@
           try { ytPlayer.seekTo(curMusic.start || 0, true); } catch (err2) {}
         } else {
           ytPause();
+        }
+      }
+    }
+    var curItem = flat[idx];
+    if (curItem && curItem.s.is_video) {
+      var ced = curItem.s.edit || {};
+      if (ced.trim && vid.duration && vid.currentTime >= ced.trim.end) { go(1); return; }
+      if (ced.boomerang && vid.duration) {
+        if (!boomRev && vid.currentTime >= vid.duration - 0.07) {
+          boomRev = true;
+          try { vid.pause(); } catch (e3) {}
+        } else if (boomRev) {
+          var nt = vid.currentTime - 0.05;
+          if (nt <= 0.05) {
+            boomRev = false;
+            try { vid.currentTime = 0; vid.play(); } catch (e4) {}
+          } else {
+            try { vid.currentTime = nt; } catch (e5) {}
+          }
         }
       }
     }
@@ -354,7 +520,8 @@
     vidEnded = false;
     avatarEl.innerHTML = avatarHTML(g);
     nameEl.textContent = g.name;
-    whenEl.textContent = timeLeft(s) + (s.mine ? ' · Your story' : '');
+    whenEl.textContent = timeLeft(s) + (s.mine ? ' · Your story' : '') +
+      (s.audience === 'public' ? ' · 🌐 Public' : '');
     buildBars(item);
 
     // Hide AND clear BOTH media elements first, then set up only the
@@ -379,6 +546,13 @@
         var d = isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 15;
         var used = Math.min(elapsed(), durationMs);
         durationMs = Math.min(d, 60) * 1000;
+        var ed = item.s.edit || {};
+        if (ed.trim && ed.trim.end > ed.trim.start) {
+          try { vid.currentTime = ed.trim.start; } catch (e2) {}
+          durationMs = Math.min(ed.trim.end - ed.trim.start, 60) * 1000;
+        } else if (ed.boomerang) {
+          durationMs = Math.min(d * 3, 15) * 1000;  // ~3 bounces
+        }
         accum = Math.min(used, durationMs - 1);
         startedAt = performance.now();
       }, { once: true });
@@ -426,6 +600,7 @@
       replyNote.hidden = true;
     }
     renderPoll(s);
+    renderEdit(s);
     amaForm.hidden = !(s.ama && !s.mine);
     if (amaForm.hidden) amaInput.value = '';
     if (!s.seen) {
@@ -635,6 +810,7 @@
   fetch('/stories/queue')
     .then(function (r) { return r.json(); })
     .then(function (data) {
+      ME = data.me || 0;
       (data.groups || []).forEach(function (g) {
         g.stories.forEach(function (s, si) {
           flat.push({ g: g, s: s, si: si });
