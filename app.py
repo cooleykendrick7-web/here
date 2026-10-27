@@ -4590,10 +4590,28 @@ async def view_post(request: Request, pid: int):
         conn.close()
         return render(request, "post_gone.html", {})
     comments = _thread_comments(conn, dict(p), user, owner_on)
+    author = conn.execute("SELECT * FROM users WHERE id=?",
+                          (p["user_id"],)).fetchone()
     conn.close()
     pc = post_card(dict(p), user, owner_on)
     pc["comments"] = comments
-    return render(request, "post.html", {"post": pc})
+    # The post page is the author's stage too (Ken's clear
+    # glass order — 'even with the comments, even with the
+    # post'): it wears the author's background, and every
+    # glass surface on it (the post card, the comment
+    # bubbles, the chrome) runs the author's showcase alpha
+    # via the --profile-glass vars post.html emits.
+    author = dict(author) if author else {}
+    ctx = {"post": pc,
+           "profile_glass": profile_showcase_alpha_for(author),
+           "profile_glass_soft": profile_showcase_soft_for(author)}
+    _abg = avatar_url(author.get("background", ""))
+    if _abg:
+        # Only an author WITH a background restages the page;
+        # otherwise the viewer's own backdrop (render default)
+        # stays exactly as before.
+        ctx["page_bg"] = _abg
+    return render(request, "post.html", ctx)
 
 
 @app.post("/post/{pid}/comment")
@@ -7333,6 +7351,29 @@ def look_vars_for(u):
             look_scope_class_for(u))
 
 
+def profile_showcase_alpha_for(u):
+    """The alpha a profile page showcases with: the owner's
+    own glass value, or CLEAR GLASS (0.35) when they have a
+    background, never saved a slider value, and run the
+    Glass scheme. Shared by the profile scope vars and the
+    profile page's --profile-glass (chrome) var so every
+    surface on the page agrees."""
+    if (u and u.get("background") and not u.get("glass_set")
+            and look_scheme_for(u) == "glass"):
+        return "0.35"
+    return glass_alpha_for(u)
+
+
+def profile_showcase_soft_for(u):
+    """The small-surface twin of profile_showcase_alpha_for:
+    the owner's soft (bubble) alpha, or CLEAR GLASS (0.35)
+    under the same background/no-choice/Glass conditions."""
+    if (u and u.get("background") and not u.get("glass_set")
+            and look_scheme_for(u) == "glass"):
+        return "0.35"
+    return glass_alpha_soft_for(u)
+
+
 def look_scope_style_for(u):
     """The owner's look vars as an inline style for a profile scope:
     their --glass-alpha + --glass-alpha-soft (by scheme), --glass-rgb,
@@ -7346,11 +7387,15 @@ def look_scope_style_for(u):
     # pattern plainly visible through every box, text still
     # readable on the frost. An owner who never touched the
     # transparency slider gets that clear scope default
-    # (0.35); an explicit slider choice always wins, and only
-    # the Glass scheme is see-through by design.
+    # (0.35) on the cards AND the small surfaces (comment
+    # bubbles included — Ken: 'even with the comments, even
+    # with the post'); an explicit slider choice always
+    # wins, and only the Glass scheme is see-through by
+    # design.
     if (u and u.get("background") and not u.get("glass_set")
             and look_scheme_for(u) == "glass"):
-        alpha = "0.35"
+        alpha = profile_showcase_alpha_for(u)
+        soft = profile_showcase_soft_for(u)
     return (f"--glass-alpha:{alpha};--glass-alpha-soft:{soft}"
             f";--glass-rgb:{rgb};--look-accent:{accent}"
             f";--look-accent-rgb:{look_accent_rgb_str_for(u)}")
@@ -7705,6 +7750,9 @@ async def profile(request: Request, uid: int):
                    "album_count": album_count,
                    "selling": selling, "selling_count": selling_count,
                    "page_bg": profile_ctx["background"],
+                   "profile_glass": profile_showcase_alpha_for(prof),
+                   "profile_glass_soft":
+                       profile_showcase_soft_for(prof),
                    "viewer_spot_style": "", "viewer_spot_classes": ""})
 
 
