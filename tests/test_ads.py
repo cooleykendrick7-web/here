@@ -359,6 +359,17 @@ check("dashboard lists the house ad", "Friday Night Showdown" in dash)
 check("dashboard lists the page ad for oversight", "Taco Truck" in dash)
 check("dashboard shows impression totals",
       "impressions" in dash)
+# owner ads are clickable: title + View ad open the ad's own page,
+# and the row shows the shareable link + where the ad sends people
+check("dashboard: ad title links to the ad page",
+      f'href="/a/{HA}"' in dash)
+check("dashboard: View ad button present",
+      "👁 View ad" in dash)
+check("dashboard: shareable ad link shown",
+      f"joincomehere.com/a/{HA}" in dash)
+check("dashboard: destination shown for the page ad too",
+      f"joincomehere.com/a/{PAD}" in dash
+      and "Sends people to:" in dash)
 
 # owner edit round-trip
 r = OWN.post(f"/owner/ads/{HA}", data={

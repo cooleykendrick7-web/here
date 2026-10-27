@@ -95,7 +95,7 @@ table.admin tr:last-child td{border-bottom:none}
       <tbody>
         {% for ad in ads_house %}
         <tr>
-          <td><strong>{{ ad.title|e }}</strong>{% if ad.body %}<br><span class="excerpt">{{ ad.body|truncate(90)|e }}</span>{% endif %}<br><span class="excerpt">{{ ad.link_url|e }}</span></td>
+          <td><a href="/a/{{ ad.id }}" target="_blank" rel="noopener" title="Open this ad's page"><strong>{{ ad.title|e }}</strong></a>{% if ad.body %}<br><span class="excerpt">{{ ad.body|truncate(90)|e }}</span>{% endif %}<br><span class="excerpt">🔗 Ad link: <a href="/a/{{ ad.id }}" target="_blank" rel="noopener">joincomehere.com/a/{{ ad.id }}</a></span>{% if ad.link_url %}<br><span class="excerpt">↗ Sends people to: {% if ad.link_url.startswith('http') %}<a href="{{ ad.link_url|e }}" target="_blank" rel="noopener">{{ ad.link_url|e }}</a>{% else %}{{ ad.link_url|e }}{% endif %}</span>{% endif %}</td>
           <td><span class="status-pill">{{ ad.status|e }}</span></td>
           <td>{{ ad.schedule_label|e }}</td>
           <td>{{ ad.weight }}</td>
@@ -103,6 +103,7 @@ table.admin tr:last-child td{border-bottom:none}
           <td>{{ ad.clicks }}</td>
           <td>{{ ad.ctr|e }}</td>
           <td style="white-space:nowrap">
+            <a class="btn-ghost" href="/a/{{ ad.id }}" target="_blank" rel="noopener">👁 View ad</a>
             <a class="btn-ghost" href="/owner/ads/{{ ad.id }}/edit">✏️ Edit</a>
             {% if ad.status == 'active' %}
             <form class="inline-form" action="/owner/ads/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="paused"><button class="btn-ghost" type="submit">⏸ Pause</button></form>
@@ -129,7 +130,7 @@ table.admin tr:last-child td{border-bottom:none}
       <tbody>
         {% for ad in ads_user %}
         <tr>
-          <td><strong>{{ ad.title|e }}</strong>{% if ad.body %}<br><span class="excerpt">{{ ad.body|truncate(90)|e }}</span>{% endif %}<br><span class="excerpt">{{ ad.link_url|e }}</span></td>
+          <td><a href="/a/{{ ad.id }}" target="_blank" rel="noopener" title="Open this ad's page"><strong>{{ ad.title|e }}</strong></a>{% if ad.body %}<br><span class="excerpt">{{ ad.body|truncate(90)|e }}</span>{% endif %}<br><span class="excerpt">🔗 Ad link: <a href="/a/{{ ad.id }}" target="_blank" rel="noopener">joincomehere.com/a/{{ ad.id }}</a></span>{% if ad.link_url %}<br><span class="excerpt">↗ Sends people to: {% if ad.link_url.startswith('http') %}<a href="{{ ad.link_url|e }}" target="_blank" rel="noopener">{{ ad.link_url|e }}</a>{% else %}{{ ad.link_url|e }}{% endif %}</span>{% endif %}</td>
           <td>{% if ad.page_id %}<a href="/page/{{ ad.page_id }}">{{ ad.page_name|e }}</a>{% else %}—{% endif %}</td>
           <td>{{ ad.creator_name|e }}</td>
           <td><span class="status-pill">{{ ad.status|e }}</span></td>
@@ -138,6 +139,7 @@ table.admin tr:last-child td{border-bottom:none}
           <td>{{ ad.clicks }}</td>
           <td>{{ ad.ctr|e }}</td>
           <td style="white-space:nowrap">
+            <a class="btn-ghost" href="/a/{{ ad.id }}" target="_blank" rel="noopener">👁 View ad</a>
             <a class="btn-ghost" href="/owner/ads/{{ ad.id }}/edit">✏️ Edit</a>
             {% if ad.status == 'active' %}
             <form class="inline-form" action="/owner/ads/{{ ad.id }}/status" method="post"><input type="hidden" name="status" value="paused"><button class="btn-ghost" type="submit">⏸ Pause</button></form>
