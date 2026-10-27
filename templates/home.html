@@ -2,19 +2,22 @@
 {% block title %}HERE — Home{% endblock %}
 {% block content %}
 
-<div class="stories-tray">
+<div class="stories-rail">
+  <a class="story-card create" href="/stories/new" title="Create story">
+    {% if user.avatar %}<img class="sc-bg" src="{{ user.avatar|e }}" alt="">{% else %}<span class="sc-bg" style="background:linear-gradient(160deg,#3a3b3d,#1c1e21)"></span>{% endif %}
+    <span class="sc-shade"></span>
+    <span class="sc-plus">＋</span>
+    <span class="sc-name">Create story</span>
+  </a>
   {% for t in stories_tray %}
-  <a class="story-item" href="/story/{{ t.first_id }}" title="{{ t.name|e }}{% if t.count > 1 %} ({{ t.count }}){% endif %}">
-    <span class="story-ring{% if t.all_viewed %} viewed{% endif %}">
-      {% if t.avatar %}<img src="{{ t.avatar|e }}" alt="">{% else %}<span class="story-ring-ph">{{ t.name[:1]|upper|e }}</span>{% endif %}
-    </span>
-    <span class="story-name">{% if t.is_self %}Your story{% else %}{{ t.name|e }}{% endif %}</span>
+  <a class="story-card" href="/story/{{ t.first_id }}" title="{{ t.name|e }}{% if t.count > 1 %} ({{ t.count }}){% endif %}">
+    {% if t.thumb %}<img class="sc-bg" src="{{ t.thumb|e }}" alt="">{% elif t.avatar %}<img class="sc-bg" src="{{ t.avatar|e }}" alt="">{% else %}<span class="sc-bg" style="background:linear-gradient(160deg,#4a2b30,#1c1e21)"></span>{% endif %}
+    <span class="sc-shade"></span>
+    {% if t.avatar %}<img class="sc-av{% if t.all_viewed %} viewed{% endif %}" src="{{ t.avatar|e }}" alt="">{% else %}<span class="sc-ph{% if t.all_viewed %} viewed{% endif %}">{{ t.name[:1]|upper|e }}</span>{% endif %}
+    {% if t.count > 1 %}<span class="sc-count">{{ t.count }}</span>{% endif %}
+    <span class="sc-name">{% if t.is_self %}Your story{% else %}{{ t.name|e }}{% endif %}</span>
   </a>
   {% endfor %}
-  <a class="story-item" href="/stories/new" title="Add to your story">
-    <span class="story-ring story-add-ring">＋</span>
-    <span class="story-name">Add story</span>
-  </a>
 </div>
 
 {% if live_now %}
@@ -38,10 +41,13 @@
 </div>
 
 <div class="card composer slim-composer" id="slim-composer">
-  <button type="button" class="slim-bar" id="slim-bar" aria-expanded="false" aria-controls="slim-body">
-    <span class="slim-pen">✍️</span>
-    <span class="slim-bar-text">Say something…</span>
-  </button>
+  <div class="composer-strip">
+    <a href="/user/{{ user.id }}">{% if user.avatar %}<img class="slim-avatar" src="{{ user.avatar|e }}" alt="">{% else %}<span class="slim-av-ph">{{ user.name[:1]|upper|e }}</span>{% endif %}</a>
+    <button type="button" class="slim-bar" id="slim-bar" aria-expanded="false" aria-controls="slim-body">
+      <span class="slim-bar-text">What's on your mind?</span>
+    </button>
+    <button type="button" class="slim-photo" id="slim-photo" title="Post a photo" aria-label="Post a photo">🖼️</button>
+  </div>
   <div class="slim-body" id="slim-body" hidden>
     <div class="slim-head">
       <span class="slim-head-label">✍️ Say something…</span>
@@ -149,6 +155,36 @@
 {% for item in feed_items %}
   {% if item.kind == 'ad' %}
     {% with ad=item.ad %}{% include "partials/ad_card.html" %}{% endwith %}
+  {% elif item.kind == 'pymk' %}
+    <div class="card pymk">
+      <div class="module-head"><b>People you may know</b><a href="/search">See all</a></div>
+      <div class="pymk-row">
+        {% for person in item.people %}
+        <div class="pymk-card">
+          <a href="/user/{{ person.id }}">{% if person.avatar %}<img src="{{ person.avatar|e }}" alt="">{% else %}<span class="pymk-ph">{{ person.name[:1]|upper|e }}</span>{% endif %}</a>
+          <div class="pymk-meta">
+            <b>{{ person.name|e }}</b>
+            <small>{% if person.mutual %}{{ person.mutual }} mutual friend{{ 's' if person.mutual != 1 }}{% else %}New to HERE{% endif %}</small>
+            <form action="/friends/request/{{ person.id }}" method="post"><button class="btn btn-sm" type="submit">Add friend</button></form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% elif item.kind == 'reels' %}
+    <div class="card">
+      <div class="module-head"><b>🎬 Reels</b><a href="/reels">See all</a></div>
+      <div class="reels-rail">
+        {% for v in item.videos %}
+        <a class="reel-card" href="/post/{{ v.id }}">
+          <video muted playsinline preload="metadata" src="{{ v.media|e }}"></video>
+          <span class="rc-shade"></span>
+          <span class="rc-play">▶ Reel</span>
+          <span class="rc-name">{{ v.name|e }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
   {% else %}
     {% with post=item.post %}{% include "partials/post_card.html" %}{% endwith %}
   {% endif %}
@@ -209,6 +245,29 @@
   }
   tabs.forEach(function(t){ t.addEventListener('click', function(){ setKind(t.dataset.kind); }); });
   setKind('text');
+
+  // Redesign Phase 1 deep links: the create sheet and the
+  // composer strip land here — open the slim composer, pick
+  // the kind, focus the box.
+  var slimBar = document.getElementById('slim-bar');
+  var slimBody = document.getElementById('slim-body');
+  function openComposer(){
+    if (slimBody && slimBody.hidden && slimBar) slimBar.click();
+  }
+  if (window.location.hash === '#composer-body'){
+    openComposer();
+    if (bodyBox) bodyBox.focus();
+  }
+  if (/[?&]compose=video/.test(window.location.search)){
+    openComposer();
+    setKind('video');
+  }
+  var photoBtn = document.getElementById('slim-photo');
+  if (photoBtn) photoBtn.addEventListener('click', function(){
+    openComposer();
+    setKind('photo');
+    if (bodyBox) bodyBox.focus();
+  });
 
   // 🎵 music picker (shared wiring lives in base.html)
   var mToggle = document.getElementById('wall-music-toggle');

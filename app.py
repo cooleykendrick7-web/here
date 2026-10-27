@@ -4100,7 +4100,80 @@ def _home_feed_items(user, post_cards_list):
     while ci < len(cards):
         out.append({"kind": "ad", "ad": cards[ci]})
         ci += 1
+    # Feed modules (redesign Phase 1 — the familiar river):
+    # a People-you-may-know card a few posts in, and a Reels
+    # rail of the feed's own video posts further down. Both
+    # ride the same visibility-filtered post list, so nothing
+    # new can leak.
+    people = _feed_people_suggestions(user["id"])
+    if people and len(out) >= 3:
+        out.insert(3, {"kind": "pymk", "people": people})
+    vids = []
+    for pc in post_cards_list:
+        m = (pc.get("media") or "").lower()
+        if m.endswith((".mp4", ".mov", ".webm")):
+            vids.append({"id": pc["id"], "media": pc["media"],
+                         "name": pc.get("author_name") or "",
+                         "avatar": pc.get("author_avatar") or "",
+                         "body": (pc.get("body") or "")[:80]})
+        if len(vids) >= 8:
+            break
+    if len(vids) >= 2:
+        out.insert(min(9, len(out)),
+                   {"kind": "reels", "videos": vids})
     return out
+
+
+def _feed_people_suggestions(viewer_id, limit=6):
+    """People-you-may-know for the home feed module: not me,
+    not friends, no request pending either way, not blocked
+    either way, not silenced; ranked by mutual friends."""
+    conn = db()
+    my_friends = friend_id_set(viewer_id)
+    blocked = blocked_id_set(viewer_id)
+    muted = muted_id_set(viewer_id)
+    pending = {r["user_id"] for r in conn.execute(
+        "SELECT user_id FROM friendships WHERE friend_id=? "
+        "AND status='pending'", (viewer_id,)).fetchall()}
+    pending |= {r["friend_id"] for r in conn.execute(
+        "SELECT friend_id FROM friendships WHERE user_id=? "
+        "AND status='pending'", (viewer_id,)).fetchall()}
+    rows = conn.execute(
+        "SELECT id, name, avatar FROM users WHERE id!=?",
+        (viewer_id,)).fetchall()
+    out = []
+    for u in rows:
+        uid = u["id"]
+        if (uid in my_friends or uid in blocked or uid in muted
+                or uid in pending):
+            continue
+        theirs = friend_id_set(uid)
+        mutual = len(my_friends & theirs)
+        out.append({"id": uid, "name": u["name"],
+                    "avatar": avatar_url(u["avatar"]),
+                    "mutual": mutual})
+    conn.close()
+    out.sort(key=lambda x: (-x["mutual"], x["name"].lower()))
+    return out[:limit]
+
+
+@app.get("/reels", response_class=HTMLResponse)
+async def reels_page(request: Request):
+    """Reels (redesign Phase 1): a grid of video posts from
+    the same universe as the home feed. Phase 3 turns this
+    into the full-screen swipe feed."""
+    user, err = require_login(request)
+    if err:
+        return err
+    record_activity(user["id"])
+    owner_on = is_owner(request)
+    posts = _home_posts(user, owner_on)
+    vids = []
+    for pc in posts:
+        m = (pc.get("media") or "").lower()
+        if m.endswith((".mp4", ".mov", ".webm")):
+            vids.append(pc)
+    return render(request, "reels.html", {"videos": vids})
 
 
 @app.get("/home", response_class=HTMLResponse)
@@ -5930,7 +6003,7 @@ def stories_tray(viewer_id):
         if not u:
             continue
         ss = conn.execute(
-            "SELECT id, created_at FROM stories WHERE user_id=? AND expires_at > ? "
+            "SELECT id, media, created_at FROM stories WHERE user_id=? AND expires_at > ? "
             "ORDER BY created_at DESC", (fid, now)).fetchall()
         if not ss:
             continue
@@ -5939,6 +6012,12 @@ def stories_tray(viewer_id):
         seen = {r["story_id"] for r in conn.execute(
             f"SELECT story_id FROM story_views WHERE user_id=? AND story_id IN ({ph})",
             (viewer_id, *sids)).fetchall()}
+        thumb = ""
+        for s in ss:
+            m = (s["media"] or "").lower()
+            if m.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                thumb = s["media"]
+                break
         entry = {
             "user_id": u["id"], "name": u["name"],
             "avatar": avatar_url(u["avatar"]),
@@ -5946,6 +6025,7 @@ def stories_tray(viewer_id):
             "first_id": ss[-1]["id"], "count": len(ss),
             "all_viewed": all(s in seen for s in sids),
             "latest": ss[0]["created_at"] or "",
+            "thumb": thumb,
         }
         (tray if fid == viewer_id else others).append(entry)
     conn.close()

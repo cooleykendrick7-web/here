@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{% if mode == 'live' %}🔴 {{ host.name|e }} is live — HERE{% else %}Live — HERE{% endif %}{% endblock %}
-{% block body_class %}{% if embed %}live-embed{% endif %}{% endblock %}
+{% block body_class %}live-page{% if embed %} live-embed{% endif %}{% endblock %}
 {% block content %}
 
 {% if embed and mode in ('ended', 'unavailable') %}

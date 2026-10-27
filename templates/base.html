@@ -1097,25 +1097,185 @@ body.scheme-glass .msg-theirs, body.scheme-mix .msg-theirs,
 /* ================= /Build SHINE ================= */
 </style>
 {% block head_extra %}{% endblock %}
+<style id="phase1-style">
+/* ===== Redesign Phase 1 — the familiar shell, HERE's skin =====
+   FB-style layout grammar (top bar, create sheet, floating
+   bottom tab bar, tall story cards, feed modules) wearing the
+   glass + the viewer's own Spot/look vars. Nothing here
+   restyles content cards themselves. */
+.create-btn{background:var(--red);color:#fff;border-radius:50%;
+  font-weight:900}
+.topbar .menu-toggle{flex:none}
+/* bottom tab bar */
+#site-tabbar{position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(10px + env(safe-area-inset-bottom));z-index:940;
+  display:flex;align-items:stretch;gap:2px;padding:6px 8px;
+  border-radius:999px;border:1px solid rgba(255,255,255,.16);
+  background:rgba(17,17,17,var(--glass-alpha));
+  -webkit-backdrop-filter:blur(16px) saturate(1.3);
+  backdrop-filter:blur(16px) saturate(1.3);
+  box-shadow:0 12px 32px rgba(0,0,0,.5)}
+.tab-it{position:relative;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:1px;min-width:52px;
+  padding:5px 6px;border-radius:999px;color:#c9c9cf;
+  text-decoration:none;font-size:9.5px;font-weight:700;
+  letter-spacing:.02em}
+.tab-it .tab-ic{font-size:19px;line-height:1.1}
+.tab-it.active{color:#fff;background:rgba(212,31,46,.28)}
+.tab-it .badge{position:absolute;top:-2px;right:6px;position:absolute}
+.tab-av img,.tab-av .tab-av-ph{width:25px;height:25px;
+  border-radius:50%;object-fit:cover;display:block}
+.tab-av .tab-av-ph{background:#3a3b3d;color:#fff;font-size:12px;
+  font-weight:800;display:flex;align-items:center;
+  justify-content:center}
+body.has-tabbar{padding-bottom:88px}
+body.live-page #site-tabbar,body.live-embed #site-tabbar{display:none}
+body.live-page.has-tabbar,body.live-embed.has-tabbar{padding-bottom:0}
+body.has-tabbar #golive-btn{bottom:90px}
+body.has-tabbar #mini-live{bottom:164px}
+/* create sheet */
+#create-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);
+  z-index:1300}
+#create-sheet{position:fixed;left:0;right:0;bottom:0;z-index:1301;
+  border-radius:20px 20px 0 0;padding:10px 14px
+  calc(14px + env(safe-area-inset-bottom));
+  border-top:1px solid rgba(255,255,255,.16);
+  background:rgba(22,22,26,var(--glass-alpha));
+  -webkit-backdrop-filter:blur(18px) saturate(1.3);
+  backdrop-filter:blur(18px) saturate(1.3);
+  box-shadow:0 -14px 40px rgba(0,0,0,.5)}
+#create-sheet[hidden],#create-backdrop[hidden]{display:none}
+.create-grip{width:42px;height:5px;border-radius:99px;
+  background:rgba(255,255,255,.3);margin:2px auto 10px}
+.create-row{display:flex;align-items:center;gap:13px;width:100%;
+  padding:11px 6px;background:none;border:none;color:#f2f2f4;
+  text-decoration:none;cursor:pointer;text-align:left;
+  font:inherit;border-radius:14px}
+.create-row:active{background:rgba(255,255,255,.07)}
+.create-ic{flex:none;width:44px;height:44px;border-radius:50%;
+  background:rgba(255,255,255,.1);display:flex;align-items:center;
+  justify-content:center;font-size:20px}
+.create-row b{display:block;font-size:16px}
+.create-row small{display:block;color:#b9b9c0;font-size:12.5px}
+/* drawer profile card */
+.drawer-profile{display:flex;align-items:center;gap:12px;
+  padding:10px;border-radius:16px;margin:2px 0 8px;
+  background:rgba(255,255,255,.06);text-decoration:none;color:#fff}
+.drawer-profile img,.drawer-av-ph{width:46px;height:46px;
+  border-radius:50%;object-fit:cover;flex:none}
+.drawer-av-ph{background:#3a3b3d;display:flex;align-items:center;
+  justify-content:center;font-weight:800;font-size:19px}
+.drawer-profile-meta b{display:block;font-size:16px}
+.drawer-profile-meta small{color:#b9b9c0;font-size:12.5px}
+/* tall story cards (home) */
+.stories-rail{display:flex;gap:10px;overflow-x:auto;
+  padding:4px 2px 14px;scrollbar-width:none}
+.stories-rail::-webkit-scrollbar{display:none}
+.story-card{position:relative;flex:none;width:104px;height:168px;
+  border-radius:16px;overflow:hidden;background:#242526;
+  text-decoration:none;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.story-card .sc-bg{position:absolute;inset:0;width:100%;
+  height:100%;object-fit:cover}
+.story-card .sc-shade{position:absolute;inset:0;background:
+  linear-gradient(180deg,rgba(0,0,0,.28),transparent 38%,
+  transparent 52%,rgba(0,0,0,.68))}
+.story-card .sc-av{position:absolute;top:8px;left:8px;width:34px;
+  height:34px;border-radius:50%;object-fit:cover;
+  border:3px solid var(--red)}
+.story-card .sc-av.viewed{border-color:#8a8d91}
+.story-card .sc-ph{position:absolute;top:8px;left:8px;width:34px;
+  height:34px;border-radius:50%;background:#3a3b3d;color:#fff;
+  border:3px solid var(--red);display:flex;align-items:center;
+  justify-content:center;font-weight:800;font-size:14px}
+.story-card .sc-ph.viewed{border-color:#8a8d91}
+.story-card .sc-name{position:absolute;left:9px;right:9px;
+  bottom:8px;font-size:12px;font-weight:700;line-height:1.3;
+  text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.story-card .sc-count{position:absolute;top:10px;right:9px;
+  font-size:11px;font-weight:800;background:rgba(0,0,0,.55);
+  padding:2px 7px;border-radius:99px}
+.story-card.create .sc-plus{position:absolute;left:50%;bottom:36px;
+  transform:translateX(-50%);width:38px;height:38px;
+  border-radius:50%;background:var(--red);color:#fff;
+  border:4px solid #1c1e21;display:flex;align-items:center;
+  justify-content:center;font-size:21px;font-weight:900}
+.story-card.create .sc-name{text-align:center;left:4px;right:4px}
+/* composer strip */
+.composer-strip{display:flex;align-items:center;gap:10px}
+.composer-strip .slim-bar{flex:1;width:auto}
+.composer-strip .slim-avatar{width:38px;height:38px;
+  border-radius:50%;object-fit:cover;flex:none;display:block}
+.composer-strip .slim-av-ph{width:38px;height:38px;
+  border-radius:50%;background:#3a3b3d;color:#fff;display:flex;
+  align-items:center;justify-content:center;font-weight:800;
+  flex:none}
+.slim-photo{margin-left:auto;flex:none;background:none;
+  border:none;font-size:21px;cursor:pointer;padding:6px}
+/* people-you-may-know module */
+.pymk-row{display:flex;gap:10px;overflow-x:auto;padding:4px 2px 8px;
+  scrollbar-width:none}
+.pymk-row::-webkit-scrollbar{display:none}
+.pymk-card{flex:none;width:158px;border:1px solid var(--border);
+  border-radius:14px;overflow:hidden;background:rgba(255,255,255,.03)}
+.pymk-card img,.pymk-ph{display:block;width:100%;height:128px;
+  object-fit:cover}
+.pymk-ph{background:#3a3b3d;color:#fff;font-size:44px;font-weight:800;
+  display:flex;align-items:center;justify-content:center}
+.pymk-meta{padding:9px 10px 11px}
+.pymk-meta b{display:block;font-size:14px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.pymk-meta small{color:var(--muted);font-size:12px;display:block;
+  margin:2px 0 8px}
+.pymk-meta .btn{width:100%}
+/* reels rail + reels page */
+.reels-rail{display:flex;gap:10px;overflow-x:auto;
+  padding:4px 2px 8px;scrollbar-width:none}
+.reels-rail::-webkit-scrollbar{display:none}
+.reel-card{position:relative;flex:none;width:126px;height:198px;
+  border-radius:14px;overflow:hidden;background:#000;
+  text-decoration:none}
+.reel-card video{width:100%;height:100%;object-fit:cover;
+  display:block}
+.reel-card .rc-shade{position:absolute;inset:0;background:
+  linear-gradient(180deg,transparent 55%,rgba(0,0,0,.75))}
+.reel-card .rc-name{position:absolute;left:8px;right:8px;bottom:7px;
+  color:#fff;font-size:11.5px;font-weight:700;
+  text-shadow:0 1px 4px rgba(0,0,0,.7);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.reel-card .rc-play{position:absolute;top:8px;left:8px;
+  color:#fff;font-size:12px;background:rgba(0,0,0,.5);
+  border-radius:99px;padding:2px 8px;font-weight:800}
+.reels-grid{display:grid;grid-template-columns:repeat(2,1fr);
+  gap:10px}
+@media (min-width:760px){.reels-grid{grid-template-columns:repeat(3,1fr)}}
+.reels-grid .reel-card{width:auto;height:250px}
+.module-head{display:flex;align-items:center;gap:8px;
+  margin:2px 0 8px}
+.module-head b{font-size:16px}
+.module-head a{margin-left:auto;font-size:13.5px;font-weight:700}
+@media (max-width:720px){
+  .top-search{display:none}
+}
+</style>
 {% if page_bg %}
-<style>
 body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,14,.58)),url('{{ page_bg }}')}
 </style>
 {% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_look_classes %} {{ viewer_look_classes }}{% endif %}{% if viewer_scheme_class %} {{ viewer_scheme_class }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }};--glass-alpha-soft:{{ viewer_glass_alpha_soft or '0.82' }};--glass-rgb:{{ viewer_glass_rgb or '255,255,255' }};--look-accent:{{ viewer_look_accent or '#d41f2e' }};--look-accent-rgb:{{ viewer_look_accent_rgb or '212,31,46' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
+<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_look_classes %} {{ viewer_look_classes }}{% endif %}{% if viewer_scheme_class %} {{ viewer_scheme_class }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}{% if user %} has-tabbar{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }};--glass-alpha-soft:{{ viewer_glass_alpha_soft or '0.82' }};--glass-rgb:{{ viewer_glass_rgb or '255,255,255' }};--look-accent:{{ viewer_look_accent or '#d41f2e' }};--look-accent-rgb:{{ viewer_look_accent_rgb or '212,31,46' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
 
 <header class="topbar">
+  <button class="nav-ic menu-toggle" id="menu-btn" title="Menu" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="mobmenu">☰</button>
   <a class="logo" href="/home">HERE</a>
-  <form class="search-form" action="/search" method="get">
+  <form class="search-form top-search" action="/search" method="get">
     <input type="text" name="q" placeholder="Search HERE" value="{{ q|default('')|e }}" autocomplete="off">
   </form>
   <nav class="topnav">
+    {% if user %}<button class="nav-ic create-btn" id="create-btn" title="Create" aria-label="Create">✚</button>{% endif %}
     <a class="nav-ic nav-live" href="/lives" title="Lives">🔴</a>
     <a class="nav-ic" href="/market" title="Market">🛒</a>
     <a class="nav-ic" href="/messages" title="Messages">💬{% if unread_msgs %}<span class="badge">{{ unread_msgs }}</span>{% endif %}</a>
     <a class="nav-ic" href="/notifications" title="Notifications">🔔{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
-    <button class="nav-ic menu-toggle" id="menu-btn" title="Menu" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="mobmenu">☰</button>
     {% if user %}
     <a class="nav-av" href="/user/{{ user.id }}" title="{{ user.name|e }}">
       {% if user.avatar %}<img src="{{ user.avatar|e }}" alt="me"{% if viewer_gold %} class="av-gold"{% endif %}>
@@ -1133,6 +1293,12 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   <form class="search-form menu-search" action="/search" method="get" role="search">
     <input type="text" name="q" placeholder="Search HERE" value="{{ q|default('')|e }}" autocomplete="off" aria-label="Search HERE">
   </form>
+  {% if user %}
+  <a class="drawer-profile" href="/user/{{ user.id }}">
+    {% if user.avatar %}<img src="{{ user.avatar|e }}" alt="">{% else %}<span class="drawer-av-ph">{{ user.name[:1]|upper|e }}</span>{% endif %}
+    <span class="drawer-profile-meta"><b>{{ user.name|e }}</b><small>See your profile · Your Spot</small></span>
+  </a>
+  {% endif %}
   {% if user %}
   <a href="/user/{{ user.id }}"><span>👤</span> My Profile</a>
   {% endif %}
@@ -1534,7 +1700,7 @@ document.addEventListener('click', function(ev){
     if (tab) tab.click();
     else window.location.href = '/lives';
   }
-  ['menu-golive', 'side-golive'].forEach(function(id){
+  ['menu-golive', 'side-golive', 'create-golive'].forEach(function(id){
     var el = document.getElementById(id);
     if (el) el.addEventListener('click', goLive);
   });
@@ -2916,6 +3082,49 @@ document.addEventListener('click', function(ev){
     allowfullscreen></iframe>
 </div>
 <script src="/static/r2upload.js" defer></script>
+
+{% if user %}
+<div id="create-backdrop" hidden></div>
+<div id="create-sheet" hidden role="dialog" aria-label="Create">
+  <div class="create-grip"></div>
+  <a class="create-row" href="/home#composer-body"><span class="create-ic">✍️</span><span><b>Post</b><small>Share a thought, photo or video</small></span></a>
+  <a class="create-row" href="/stories/new"><span class="create-ic">📸</span><span><b>Story</b><small>Here for 24 hours</small></span></a>
+  <a class="create-row" href="/home?compose=video#composer-body"><span class="create-ic">🎬</span><span><b>Reel</b><small>Post a video to the feed</small></span></a>
+  <button type="button" class="create-row" id="create-golive"><span class="create-ic">🔴</span><span><b>Live</b><small>Go live with your people</small></span></button>
+</div>
+<nav id="site-tabbar" aria-label="Main">
+  <a class="tab-it" data-tab="/home" href="/home"><span class="tab-ic">🏠</span>Home</a>
+  <a class="tab-it" data-tab="/reels" href="/reels"><span class="tab-ic">🎬</span>Reels</a>
+  <a class="tab-it" data-tab="/friends" href="/friends"><span class="tab-ic">👥</span>Friends{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
+  <a class="tab-it" data-tab="/market" href="/market"><span class="tab-ic">🛒</span>Market</a>
+  <a class="tab-it" data-tab="/notifications" href="/notifications"><span class="tab-ic">🔔</span>Alerts{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
+  <a class="tab-it tab-av" data-tab="/user/{{ user.id }}" href="/user/{{ user.id }}">{% if user.avatar %}<img src="{{ user.avatar|e }}" alt="me">{% else %}<span class="tab-av-ph">{{ user.name[:1]|upper|e }}</span>{% endif %}You</a>
+</nav>
+<script>
+(function(){
+  /* bottom tab bar: mark the tab for this page */
+  var path = window.location.pathname;
+  document.querySelectorAll('#site-tabbar .tab-it').forEach(function(a){
+    var tab = a.getAttribute('data-tab');
+    if (tab && (path === tab || (tab !== '/home' && path.indexOf(tab) === 0)))
+      a.classList.add('active');
+    if (tab === '/home' && (path === '/home' || path === '/')) a.classList.add('active');
+  });
+  /* create sheet */
+  var btn = document.getElementById('create-btn'),
+      sheet = document.getElementById('create-sheet'),
+      bd = document.getElementById('create-backdrop');
+  if (!btn || !sheet || !bd) return;
+  function open(){ sheet.hidden = false; bd.hidden = false; }
+  function close(){ sheet.hidden = true; bd.hidden = true; }
+  btn.addEventListener('click', open);
+  bd.addEventListener('click', close);
+  sheet.querySelectorAll('a, button').forEach(function(el){
+    el.addEventListener('click', close);
+  });
+})();
+</script>
+{% endif %}
 {% block scripts %}{% endblock %}
 <script>
 if ("serviceWorker" in navigator) {
