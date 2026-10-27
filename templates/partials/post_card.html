@@ -10,6 +10,14 @@
   {% if post.is_wall_post %}
   <div class="share-banner">🧱 <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a> wrote on <a href="/user/{{ post.wall_owner_id }}">{{ post.wall_owner_name|e }}</a>'s wall</div>
   {% endif %}
+  {% if post.discovery %}
+  <div class="share-banner" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">🌐 <span><b>From around HERE</b> — somebody outside your circle</span>
+    <span style="margin-left:auto;display:flex;gap:6px">
+      <form action="/follow/{{ post.user_id }}" method="post" style="display:inline"><button class="btn-ghost btn-sm" type="submit">Follow</button></form>
+      <form action="/friends/request/{{ post.user_id }}" method="post" style="display:inline"><button class="btn btn-sm" type="submit">Add friend</button></form>
+    </span>
+  </div>
+  {% endif %}
   <div class="post-header">
     {% if post.author_avatar %}<img class="avatar av-40" src="{{ post.author_avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ post.author_name[:1]|upper|e }}</span>{% endif %}

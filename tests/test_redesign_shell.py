@@ -3,7 +3,7 @@ walkthrough video): the FAMILIAR shell in HERE's skin — top bar
 with a create button, a create sheet (Post/Story/Reel/Live), a
 floating glass bottom tab bar with badges, a drawer profile
 card, TALL story cards on home, a composer strip (avatar +
-pill + photo), feed modules (People you may know, Reels rail),
+pill + photo), feed modules (Who's HERE?, Reels rail),
 and a /reels page. Glass + Spot vars must survive untouched.
 
 Run:  ./venv/bin/python tests/test_redesign_shell.py
@@ -129,7 +129,7 @@ check("home: deep-link JS opens the composer",
 
 # ---- home: feed modules ----
 check("home: People-you-may-know module renders",
-      "People you may know" in page)
+      "Who's HERE?" in page)
 check("home: PYMK suggests the stranger (Bob)",
       "Shell Bob" in page)
 check("home: PYMK hides existing friends/self only — Cleo also there",

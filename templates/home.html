@@ -157,7 +157,7 @@
     {% with ad=item.ad %}{% include "partials/ad_card.html" %}{% endwith %}
   {% elif item.kind == 'pymk' %}
     <div class="card pymk">
-      <div class="module-head"><b>People you may know</b><a href="/search">See all</a></div>
+      <div class="module-head"><b>Who's HERE?</b><a href="/search">See all</a></div>
       <div class="pymk-row">
         {% for person in item.people %}
         <div class="pymk-card">
@@ -185,6 +185,17 @@
         {% endfor %}
       </div>
     </div>
+  {% elif item.kind == 'interest' %}
+    <div class="card interest-card" data-key="{{ item.prompt.key|e }}">
+      <div class="module-head"><b>🎛 Train your feed</b></div>
+      <p style="font-size:16px;margin:2px 0 12px">{{ item.prompt.label|e }}</p>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 12px">Your answers shape what rolls through your feed. Nobody else's feed changes — just yours.</p>
+      <div style="display:flex;gap:9px">
+        <button type="button" class="btn interest-btn" data-pref="this" style="flex:1">👌 This — more like it</button>
+        <button type="button" class="btn-ghost interest-btn" data-pref="not" style="flex:1">👎 Not — less like it</button>
+      </div>
+      <p class="interest-done" hidden style="margin:10px 0 0;font-weight:700"></p>
+    </div>
   {% else %}
     {% with post=item.post %}{% include "partials/post_card.html" %}{% endwith %}
   {% endif %}
@@ -195,6 +206,31 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+(function(){
+  document.querySelectorAll('.interest-card').forEach(function(card){
+    var key = card.getAttribute('data-key');
+    card.querySelectorAll('.interest-btn').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        fetch('/feed/interest', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({key: key, pref: btn.getAttribute('data-pref')})})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (!d || !d.ok) return;
+          var done = card.querySelector('.interest-done');
+          done.hidden = false;
+          done.textContent = btn.getAttribute('data-pref') === 'this'
+            ? '✓ Got it — you\'ll see more like this.'
+            : '✓ Got it — you\'ll see less like this.';
+          card.querySelectorAll('.interest-btn').forEach(function(b){ b.disabled = true; });
+          setTimeout(function(){ card.style.transition = 'opacity .4s'; card.style.opacity = '0.55'; }, 900);
+        }).catch(function(){});
+      });
+    });
+  });
+})();
+</script>
 <script>
 (function(){
   var banner = document.getElementById('daily-banner');

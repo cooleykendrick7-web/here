@@ -1055,6 +1055,12 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_pollvotes_post "
               "ON poll_votes(post_id)")
     # Story polls: binary by design — exactly two choices ('a'/'b').
+    # Feed trainer (This-or-Not): each user's explicit more/less
+    # answers about kinds + hashtags, keyed 'kind:video' / 'tag:music'.
+    c.execute("""CREATE TABLE IF NOT EXISTS user_topic_prefs (
+        user_id INTEGER NOT NULL, key TEXT NOT NULL,
+        pref TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, key))""")
     c.execute("""CREATE TABLE IF NOT EXISTS story_polls (
         story_id INTEGER PRIMARY KEY,
         question TEXT NOT NULL, a_text TEXT NOT NULL,
@@ -2460,7 +2466,7 @@ def first_embed_in_text(body):
 
 # ---------------- discovery: profile views, suggested people, trending ----------------
 def discover_people(uid, limit=10):
-    """People you may know: non-friends ranked by profile views received in
+    """Who's HERE?: non-friends ranked by profile views received in
     the last 7 days. Falls back to newest signups when there is no view data
     yet, so the list is never empty. Excludes self, friends, anyone with
     a pending request in either direction, and anyone in a block
@@ -4090,6 +4096,166 @@ async def tag_suggest(request: Request):
     return JSONResponse({"ok": True, "results": out[:8]})
 
 
+INTEREST_KINDS = ("video", "photo", "link", "feeling", "text")
+
+
+def _topic_prefs(uid):
+    """The viewer's This-or-Not answers: {key: 'this'|'not'}."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT key, pref FROM user_topic_prefs WHERE user_id=?",
+        (uid,)).fetchall()
+    conn.close()
+    return {r["key"]: r["pref"] for r in rows}
+
+
+def _interest_candidates(uid):
+    """Prompts the trainer can still ask this viewer: trending
+    hashtags first, then post kinds — anything already answered is
+    never asked again."""
+    prefs = _topic_prefs(uid)
+    out = []
+    viewer = get_user(uid) or {"id": uid}
+    for topic in trending_tags(8, viewer):
+        tag = (topic.get("tag") or "").strip().lower()
+        if tag and ("tag:" + tag) not in prefs:
+            out.append({"key": "tag:" + tag,
+                        "label": "More #" + tag + " in your feed?"})
+    kind_labels = {"video": "More videos in your feed?",
+                   "photo": "More photos in your feed?",
+                   "link": "More link posts in your feed?",
+                   "feeling": "More feelings & life updates?",
+                   "text": "More written posts in your feed?"}
+    for k in INTEREST_KINDS:
+        if ("kind:" + k) not in prefs:
+            out.append({"key": "kind:" + k, "label": kind_labels[k]})
+    return out
+
+
+def _next_interest_prompt(uid):
+    cands = _interest_candidates(uid)
+    if not cands:
+        return None
+    import hashlib
+    seed = int(hashlib.sha256(
+        f"{uid}:{_today_str()}".encode()).hexdigest()[:6], 16)
+    return cands[seed % len(cands)]
+
+
+@app.post("/feed/interest")
+async def feed_interest(request: Request):
+    """Record a This-or-Not answer. JSON {key, pref}. Keys are
+    'kind:<kind>' from the interest whitelist or 'tag:<hashtag>' for
+    a hashtag that exists on HERE."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    key = str(data.get("key") or "").strip().lower()
+    pref = str(data.get("pref") or "").strip()
+    if pref not in ("this", "not"):
+        return JSONResponse({"ok": False, "error": "bad pref"},
+                            status_code=400)
+    ok = False
+    if key.startswith("kind:") and key[5:] in INTEREST_KINDS:
+        ok = True
+    elif key.startswith("tag:"):
+        import re as _re
+        tag = key[4:]
+        if _re.fullmatch(r"[a-z0-9_]{1,40}", tag):
+            conn = db()
+            ok = bool(conn.execute(
+                "SELECT 1 FROM post_hashtags WHERE tag=? LIMIT 1",
+                (tag,)).fetchone())
+            conn.close()
+    if not ok:
+        return JSONResponse({"ok": False, "error": "bad key"},
+                            status_code=400)
+    conn = db()
+    conn.execute(
+        "INSERT INTO user_topic_prefs(user_id, key, pref, updated_at) "
+        "VALUES(?,?,?,?) ON CONFLICT(user_id, key) "
+        "DO UPDATE SET pref=excluded.pref, updated_at=excluded.updated_at",
+        (user["id"], key, pref, now_iso()))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+def _post_tags_by_id(conn, post_ids):
+    if not post_ids:
+        return {}
+    ph = ",".join("?" * len(post_ids))
+    out = {}
+    for r in conn.execute(
+            f"SELECT post_id, tag FROM post_hashtags "
+            f"WHERE post_id IN ({ph})", list(post_ids)).fetchall():
+        out.setdefault(r["post_id"], set()).add(r["tag"])
+    return out
+
+
+def _discovery_posts(user, exclude_ids, limit=6):
+    """The random side of the home feed (Ken's order): PUBLIC posts
+    from people outside the viewer's circle, rolled into the scroll
+    so the viewer can find new people to follow. The viewer's
+    This-or-Not answers steer it: 'not' keys never surface, 'this'
+    keys float up. Friends' posts are never part of this — they
+    live in the main list and are never filtered."""
+    import random as _random
+    uid = user["id"]
+    prefs = _topic_prefs(uid)
+    not_keys = {k for k, v in prefs.items() if v == "not"}
+    this_keys = {k for k, v in prefs.items() if v == "this"}
+    circle = friend_id_set(uid) | muted_id_set(uid) | blocked_id_set(uid)
+    conn = db()
+    blocked_me = {r["blocker_id"] for r in conn.execute(
+        "SELECT blocker_id FROM blocks WHERE blocked_id=?",
+        (uid,)).fetchall()}
+    hidden = {r["post_id"] for r in conn.execute(
+        "SELECT post_id FROM hidden_posts WHERE user_id=?",
+        (uid,)).fetchall()}
+    rows = conn.execute(
+        "SELECT p.* FROM posts p WHERE p.page_id IS NULL "
+        "AND p.shared_post_id IS NULL AND p.privacy='public' "
+        "AND p.user_id != ? ORDER BY p.created_at DESC LIMIT 120",
+        (uid,)).fetchall()
+    conn.close()
+    rows = [r for r in rows
+            if r["user_id"] not in circle
+            and r["user_id"] not in blocked_me
+            and r["id"] not in exclude_ids and r["id"] not in hidden]
+    if not rows:
+        return []
+    conn = db()
+    tags = _post_tags_by_id(conn, [r["id"] for r in rows])
+    conn.close()
+    scored = []
+    for r in rows:
+        keys = {"kind:" + (r["kind"] or "text")}
+        keys |= {"tag:" + tg for tg in tags.get(r["id"], set())}
+        if keys & not_keys:
+            continue
+        scored.append((1 if keys & this_keys else 0, r))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    boosted = [r for s, r in scored if s]
+    rest = [r for s, r in scored if not s]
+    _random.shuffle(rest)
+    picked = (boosted + rest)[:limit]
+    cards = []
+    conn = db()
+    for r in picked:
+        card = post_card(dict(r), user, False)
+        if card:
+            card["discovery"] = True
+            cards.append(card)
+    conn.close()
+    return cards
+
+
 def _home_feed_items(user, post_cards_list):
     """Interleave Sponsored cards into the home feed (Build ADS): at
     most one ad per 8 feed items, plus one trailing ad on a short or
@@ -4134,8 +4300,6 @@ def _home_feed_items(user, post_cards_list):
     # ride the same visibility-filtered post list, so nothing
     # new can leak.
     people = _feed_people_suggestions(user["id"])
-    if people and len(out) >= 3:
-        out.insert(3, {"kind": "pymk", "people": people})
     vids = []
     for pc in post_cards_list:
         m = (pc.get("media") or "").lower()
@@ -4149,6 +4313,43 @@ def _home_feed_items(user, post_cards_list):
     if len(vids) >= 2:
         out.insert(min(9, len(out)),
                    {"kind": "reels", "videos": vids})
+    # Discovery (Ken's feed order): PUBLIC posts from outside the
+    # viewer's circle woven through the scroll — a couple early,
+    # then one every several items — each badged so the viewer can
+    # follow or add the author on the spot. The viewer's This-or-Not
+    # answers steer what surfaces (see _discovery_posts).
+    try:
+        disco = _discovery_posts(
+            user, {pc["id"] for pc in post_cards_list})
+    except Exception:
+        disco = []
+    if disco:
+        woven, di, since = [], 0, 0
+        for item in out:
+            woven.append(item)
+            since += 1
+            if di < len(disco) and since >= (5 if di == 0 else 7):
+                woven.append({"kind": "post", "post": disco[di]})
+                di += 1
+                since = 0
+        while di < len(disco):
+            woven.append({"kind": "post", "post": disco[di]})
+            di += 1
+        out = woven
+    # Who's HERE? rides after the discovery weave so even a short
+    # feed (few friend posts, fresh account) still meets new people
+    # a few items into the scroll.
+    if people and len(out) >= 3:
+        out.insert(3, {"kind": "pymk", "people": people})
+    # This-or-Not trainer card: one unanswered prompt per load,
+    # seated mid-scroll. Answering teaches the discovery mix.
+    try:
+        prompt = _next_interest_prompt(user["id"])
+    except Exception:
+        prompt = None
+    if prompt and len(out) >= 3:
+        out.insert(min(11, len(out)),
+                   {"kind": "interest", "prompt": prompt})
     return out
 
 
