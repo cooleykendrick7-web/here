@@ -9481,6 +9481,9 @@ async def call_request_decline(request: Request, rid: int):
 # offers. Watchers are receive-only and answer. Fixed offerer roles
 # per pair mean there is never negotiation glare to resolve.
 LIVE_STALE_SECONDS = 90        # host heartbeat gap that auto-ends a live
+LIVE_MEMBER_STALE_SECONDS = 120  # member heartbeat gap that drops a
+# ghost panelist (closed the app, lost signal — iOS often never
+# delivers the leave beacon, so presence is the only truth)
 LIVE_VIEWER_WINDOW = 45       # viewer counts if seen within this window
 LIVE_TITLE_MAX = 80
 LIVE_COMMENT_MAX = 300
@@ -9501,12 +9504,40 @@ def _sweep_lives(conn):
         "host_seen_at<?", (cutoff,)).fetchall()
     for row in stale:
         _end_live_row(conn, dict(row))
+    # Panel hygiene: a member who is GONE must not squat on the
+    # panel forever — their frozen tile haunts the host and their
+    # slot blocks new approvals ('Panel is full'). Presence is
+    # the member's viewer heartbeat row: drop an ACTIVE member
+    # whose heartbeat row says they left, or whose last
+    # heartbeat is older than the member cutoff. A member with
+    # NO presence row is NOT touched — the roster row alone is
+    # the seat's truth (the panel-cap contract), and every real
+    # member's client heartbeats from the live page, so a true
+    # ghost always has a row gone stale. The joined_at guard is
+    # the join grace: a just-seated member still counts.
+    mcut = (datetime.now(timezone.utc)
+            - timedelta(seconds=LIVE_MEMBER_STALE_SECONDS)).isoformat()
+    ghosts = conn.execute(
+        "SELECT m.live_id AS lid, m.user_id AS uid "
+        "FROM live_members m "
+        "JOIN live_sessions s ON s.id=m.live_id AND s.status='live' "
+        "JOIN live_viewers v ON v.live_id=m.live_id "
+        "AND v.user_id=m.user_id "
+        "WHERE m.left_at IS NULL AND m.joined_at<? AND "
+        "(v.left_at IS NOT NULL OR v.last_seen_at<?)",
+        (mcut, mcut)).fetchall()
+    for g in ghosts:
+        lrow = conn.execute(
+            "SELECT * FROM live_sessions WHERE id=?",
+            (g["lid"],)).fetchone()
+        if lrow:
+            _drop_guest(conn, dict(lrow), g["uid"])
     # Build W2: lazy Showdown resolution rides the same sweep —
     # active battles past their clock finish here (the state poll
     # and the lives list both pass through), then any finished
     # battle still missing its result posts/notices gets settled.
     _changed = _battle_expire(conn)
-    if stale or _changed:
+    if stale or _changed or ghosts:
         conn.commit()
     _pending_fx = conn.execute(
         "SELECT id FROM live_battles WHERE status='finished' AND "
@@ -10672,7 +10703,11 @@ async def live_state(request: Request, lid: int):
             "role": "host" if pid == live["host_id"] else "guest",
             "admin": pid in admin_ids,
             "muted": bool(mrow["muted"]) if mrow else False,
-            "video_ok": True if _vok is None else bool(_vok)})
+            "video_ok": True if _vok is None else bool(_vok),
+            # Ken: every panel tile wears its owner's gift level
+            # at the bottom center — tiles render this chip.
+            "level": _streamer_level(
+                (get_user(pid) or {}).get("gift_lifetime"))})
     # Compat: the single 'guest' of the old protocol is the first
     # non-host panelist.
     guest = _live_person(panel_ids[1]) if len(panel_ids) > 1 else None

@@ -144,6 +144,14 @@
   background:var(--lg-bg);border-top:var(--lg-border);
   backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
 .live-tile .tile-label .tname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Ken: your gift level sits at the very bottom of your panel
+   tile, dead center — a small gold pill over the label bar. */
+.live-tile .tile-level{position:absolute;left:50%;bottom:3px;
+  transform:translateX(-50%);z-index:3;pointer-events:none;
+  font-size:10px;font-weight:800;color:#ffe9a8;white-space:nowrap;
+  padding:1px 8px;border-radius:999px;background:rgba(10,10,12,.62);
+  border:1px solid rgba(255,215,110,.45);
+  text-shadow:0 1px 3px rgba(0,0,0,.9)}
 .live-conn-dot{width:9px;height:9px;border-radius:50%;background:#8a8d91;flex:none;
   cursor:pointer;border:1px solid rgba(255,255,255,.75);padding:0}
 .live-conn-dot.ok{background:#31a24c}
@@ -1198,21 +1206,32 @@ function liveRoomDiff(prev, next){
     var roleChip = document.createElement('span');
     roleChip.className = 'tile-role';
     roleChip.hidden = true;
+    var lvlChip = document.createElement('span');
+    lvlChip.className = 'tile-level';
+    lvlChip.hidden = true;
     el.appendChild(ph);
     el.appendChild(video);
     el.appendChild(label);
     el.appendChild(menuBtn);
     el.appendChild(roleChip);
+    el.appendChild(lvlChip);
     /* Build PANEL GIFTS: tapping a tile aims my gifts at that
        panelist (the tile's own buttons stopPropagation, so this
-       only fires for plain tile taps). */
-    el.addEventListener('click', function(){ selectGiftTarget(uid); });
+       only fires for plain tile taps). Ken's follow-up: tapping
+       a person IS how a gifter gifts them — selection alone
+       left people hunting for the gift button, so the tap now
+       also opens the gift sheet already aimed at this person. */
+    el.addEventListener('click', function(){
+      selectGiftTarget(uid);
+      if (!ended && canAimGifts() && giftTargetId === uid)
+        openGiftSheet();
+    });
     gridEl.appendChild(el);
     tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
                   badges: badges, srcTag: srcTag, menuBtn: menuBtn,
                   member: member, dot: dot, recon: recon,
                   phStatus: phStatus, videoState: '',
-                  roleChip: roleChip};
+                  roleChip: roleChip, lvlChip: lvlChip};
     updateTile(member);
     var P = peers[uid];
     if (P) P.videoEl = video;
@@ -1250,6 +1269,12 @@ function liveRoomDiff(prev, next){
       if (isH) T.roleChip.textContent = 'Host';
     }
     T.menuBtn.hidden = !(canManage() && canActOn(member));
+    if (T.lvlChip){
+      var lv = member.level && member.level.label;
+      T.lvlChip.hidden = !lv;
+      if (lv && T.lvlChip.textContent !== lv)
+        T.lvlChip.textContent = lv;
+    }
   }
   function removeTile(uid){
     var T = tiles[uid];
@@ -1376,7 +1401,7 @@ function liveRoomDiff(prev, next){
       audio: savedA ? {deviceId: {exact: savedA}} : true,
       video: savedV ? {deviceId: {exact: savedV}} : {facingMode: facing}
     };
-    return navigator.mediaDevices.getUserMedia(cons)
+    var inner = navigator.mediaDevices.getUserMedia(cons)
       .catch(function(err){
         if ((savedV || savedA) && err
             && (err.name === 'OverconstrainedError'
@@ -1390,6 +1415,30 @@ function liveRoomDiff(prev, next){
         }
         throw err;
       });
+    /* An unanswered permission prompt pends FOREVER: the guest
+       sits as "Connecting…" on every other screen while their
+       own page waits in silence. Cap the wait at 20s — the join
+       then fails honestly into the error box (and video_ok=false
+       upstream, so the host sees 📷 + the guest's picture
+       instead of an eternal spinner). If the prompt is answered
+       late anyway, the orphaned stream is stopped so no camera
+       light leaks on a join that already gave up. */
+    var raceLost = false;
+    var raced = Promise.race([
+      inner,
+      new Promise(function(_, reject){
+        setTimeout(function(){ reject(new Error('gum-timeout')); },
+                   20000);
+      })
+    ]);
+    raced.then(function(){}, function(e){
+      if (e && e.message === 'gum-timeout') raceLost = true;
+    });
+    inner.then(function(s){
+      if (raceLost && s)
+        s.getTracks().forEach(function(tr){ tr.stop(); });
+    }, function(){});
+    return raced;
   }
   function showMediaError(){
     errText.textContent = 'Camera/mic blocked — allow access in the '
@@ -1415,6 +1464,16 @@ function liveRoomDiff(prev, next){
   }
   function bindLocalTile(){
     if (!myStream) return;
+    /* Studio owns my tile while it is on. The state poll calls
+       this every few seconds — rebinding the RAW stream here is
+       exactly why the host saw a plain camera (no effects, no
+       green screen) while every viewer saw the finished Studio
+       picture. Route to the Studio binding instead. */
+    if (typeof studio !== 'undefined' && studio && studio.on
+        && studio.stream){
+      studioBindLocalTile();
+      return;
+    }
     var me = panelById[B.me];
     if (!me) return;
     var T = ensureTile(me);
@@ -2130,7 +2189,7 @@ function liveRoomDiff(prev, next){
     canvas: null, ctx: null, stream: null, track: null, raf: 0,
     mainVid: null, faceVid: null, faceStream: null,
     keyCanvas: null, keyCtx: null, mainTrackId: null, frame: 0,
-    bgCache: {}
+    bgCache: {}, fun: 'off', parts: [], alphaBuf: null
   };
   var studioSheetOpen = false;
   var STUDIO_FILTERS = {
@@ -2204,7 +2263,7 @@ function liveRoomDiff(prev, next){
       var s = JSON.parse(localStorage.getItem('here_studio') || 'null');
       if (!s) return;
       ['faceId', 'facePos', 'faceSize', 'effect', 'sticker', 'keyOn',
-       'keyColor', 'keySens', 'backdrop', 'picPos', 'picSize']
+       'keyColor', 'keySens', 'backdrop', 'picPos', 'picSize', 'fun']
         .forEach(function(k){
           if (s[k] !== undefined) studio[k] = s[k];
         });
@@ -2214,7 +2273,7 @@ function liveRoomDiff(prev, next){
     try {
       var s = {};
       ['faceId', 'facePos', 'faceSize', 'effect', 'sticker', 'keyOn',
-       'keyColor', 'keySens', 'backdrop', 'picPos', 'picSize']
+       'keyColor', 'keySens', 'backdrop', 'picPos', 'picSize', 'fun']
         .forEach(function(k){ s[k] = studio[k]; });
       localStorage.setItem('here_studio', JSON.stringify(s));
     } catch (e) {}
@@ -2519,6 +2578,9 @@ function liveRoomDiff(prev, next){
       try { img = kx.getImageData(0, 0, W2, H2); }
       catch (e) { return studio.keyCanvas; }
       var d = img.data;
+      if (!studio.alphaBuf
+          || studio.alphaBuf.length !== W2 * H2)
+        studio.alphaBuf = new Uint8Array(W2 * H2).fill(255);
       var green = studio.keyColor === 'green';
       /* strength needed to key: sens 10 -> .57 (strict),
          60 -> .32, 100 -> .12 (aggressive). */
@@ -2528,10 +2590,31 @@ function liveRoomDiff(prev, next){
         var kc = green ? g : b;
         var other = green ? Math.max(r, b) : Math.max(r, g);
         var s = (kc - other) / Math.max(1, kc);
-        if (s > Ts) d[i + 3] = 0;
+        var a3 = d[i + 3];
+        if (s > Ts) a3 = 0;
         else if (s > soft)
-          d[i + 3] = Math.round(d[i + 3]
+          a3 = Math.round(a3
             * (1 - (s - soft) / Math.max(0.01, Ts - soft)));
+        /* SKIN PROTECTION (Ken: the key was eating his FACE —
+           with the strength up, green-spill-lit skin drifts into
+           the key band and the face ghosts in and out). A pixel
+           in the YCbCr skin box is a PERSON, never a wall: it
+           keys only when the key colour is utterly overwhelming
+           (s far past the threshold). Judged on chroma, so it
+           holds across skin tones and room lighting. */
+        if (a3 < 255 && s < Ts + 0.35){
+          var cb = 128 - 0.168 * r - 0.331 * g + 0.5 * b;
+          var cr = 128 + 0.5 * r - 0.419 * g - 0.081 * b;
+          if (cb >= 70 && cb <= 135 && cr >= 120 && cr <= 185)
+            a3 = d[i + 3];
+        }
+        /* Anti-flicker: the outgoing alpha leans on last pass's
+           alpha, so borderline pixels settle instead of popping
+           the face in and out frame to frame. */
+        var pi = i >> 2;
+        a3 = Math.round(studio.alphaBuf[pi] * 0.45 + a3 * 0.55);
+        studio.alphaBuf[pi] = a3;
+        d[i + 3] = a3;
         if (d[i + 3] > 0){
           if (green && g > Math.max(r, b)) d[i + 1] = Math.max(r, b);
           if (!green && b > Math.max(r, g)) d[i + 2] = Math.max(r, g);
@@ -2593,6 +2676,8 @@ function liveRoomDiff(prev, next){
             db = d[ja + 2] - d[jb + 2];
         return Math.sqrt(dr * dr + dg * dg + db * db);
       }
+      if (!studio.alphaBuf || studio.alphaBuf.length !== N)
+        studio.alphaBuf = new Uint8Array(N).fill(255);
       var joined = new Uint8Array(N), stack = [];
       function seed(pp){
         if (!joined[pp] && distRef(pp) < refTol * 1.2){
@@ -2613,14 +2698,30 @@ function liveRoomDiff(prev, next){
           var q = nb[k];
           if (joined[q]) continue;
           if (distRef(q) < refTol && distPx(q, p) < stepTol){
+            /* SKIN GUARD: a skin-chroma pixel may only join the
+               wall when it is VERY wall-coloured (close to the
+               border reference) — the flood must never creep
+               from a beige wall into a face. */
+            var qi = q * 4;
+            var qcb = 128 - 0.168 * d[qi] - 0.331 * d[qi + 1]
+                      + 0.5 * d[qi + 2];
+            var qcr = 128 + 0.5 * d[qi] - 0.419 * d[qi + 1]
+                      - 0.081 * d[qi + 2];
+            if (qcb >= 70 && qcb <= 135 && qcr >= 120
+                && qcr <= 185 && distRef(q) > refTol * 0.55)
+              continue;
             joined[q] = 1; stack.push(q);
           }
         }
       }
       for (p = 0; p < N; p++){
         i4 = p * 4;
-        if (joined[p]) d[i4 + 3] = 0;
-        else if (!studioFilterOK && studio.effect !== 'none')
+        var wa = joined[p] ? 0 : d[i4 + 3];
+        /* Same anti-flicker lean as the chroma pass. */
+        wa = Math.round(studio.alphaBuf[p] * 0.45 + wa * 0.55);
+        studio.alphaBuf[p] = wa;
+        d[i4 + 3] = wa;
+        if (wa > 0 && !studioFilterOK && studio.effect !== 'none')
           studioPixelFilter(d, i4, studio.effect);
       }
       kx.putImageData(img, 0, 0);
@@ -2736,17 +2837,118 @@ function liveRoomDiff(prev, next){
       ctx.stroke();
       ctx.restore();
     }
+    studioDrawFun(ctx, W, H);
     studio.raf = requestAnimationFrame(studioDraw);
+  }
+  /* 🎉 Animated fun overlays — a small particle system drawn
+     INTO the finished picture, so the streamer sees them on
+     their own screen (their tile shows this same picture) and
+     every viewer sees them too. Confetti rains, sparkles
+     twinkle over the frame, hearts float up, flames lick the
+     bottom edge. */
+  function studioSpawn(mode, W, H){
+    var R = Math.random;
+    if (mode === 'confetti')
+      return {x: R() * W, y: -20, vx: (R() - 0.5) * 1.6,
+        vy: 2.2 + R() * 2.4, grav: 0.012, rot: R() * 6.28,
+        vr: (R() - 0.5) * 0.25, life: 3.4, rect: true,
+        size: 10 + R() * 10,
+        color: ['#f43f5e', '#f59e0b', '#10b981', '#3b82f6',
+                '#a855f7', '#facc15'][(R() * 6) | 0]};
+    if (mode === 'sparkles')
+      return {x: R() * W, y: R() * H, vx: 0, vy: -0.2, grav: 0,
+        rot: 0, vr: 0, life: 0.9 + R() * 0.8, rect: false,
+        ch: R() < 0.5 ? '✨' : '⭐', size: 16 + R() * 22};
+    if (mode === 'hearts')
+      return {x: R() * W, y: H + 20, vx: (R() - 0.5) * 0.8,
+        vy: -(1.2 + R() * 1.6), grav: -0.004,
+        rot: Math.sin(R() * 6.28) * 0.3, vr: 0, life: 4.2,
+        rect: false, ch: '❤️', size: 20 + R() * 20};
+    return {x: R() * W, y: H - 6, vx: (R() - 0.5) * 0.6,
+      vy: -(1.6 + R() * 2.2), grav: -0.01, rot: 0, vr: 0,
+      life: 1.1 + R() * 0.7, rect: false, ch: '🔥',
+      size: 22 + R() * 26};
+  }
+  function studioDrawFun(ctx, W, H){
+    var mode = studio.fun;
+    if (!mode || mode === 'off'){
+      if (studio.parts.length) studio.parts = [];
+      return;
+    }
+    var want = mode === 'confetti' ? 3 : 1;
+    for (var s = 0; s < want; s++){
+      if (studio.parts.length > 160) break;
+      if (Math.random() < 0.65)
+        studio.parts.push(studioSpawn(mode, W, H));
+    }
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    studio.parts = studio.parts.filter(function(pt){
+      pt.life -= 1 / 30;
+      if (pt.life <= 0) return false;
+      pt.x += pt.vx; pt.y += pt.vy;
+      pt.vy += pt.grav; pt.rot += pt.vr;
+      if (pt.y > H + 50 || pt.y < -70) return false;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, pt.life);
+      ctx.translate(pt.x, pt.y);
+      ctx.rotate(pt.rot);
+      if (pt.rect){
+        ctx.fillStyle = pt.color;
+        ctx.fillRect(-pt.size / 2, -pt.size / 4,
+                     pt.size, pt.size / 2);
+      } else {
+        ctx.font = pt.size + 'px serif';
+        try { ctx.fillText(pt.ch, 0, 0); } catch (e) {}
+      }
+      ctx.restore();
+      return true;
+    });
+    ctx.restore();
   }
   function studioDrawSticker(ctx, cx, cy, size){
     var st = STUDIO_STICKERS[studio.sticker];
     if (!st) return;
+    /* TikTok-style: the sticker is ALIVE — the crown bobs and
+       tilts, the shades sway, the star spins and pulses, the
+       fire flickers. A frozen emoji glued to the screen read
+       as broken; motion is the whole point. */
+    var pose = studioStickerPose();
+    var dx = pose.dx, dy = pose.dy, rot = pose.rot, sc = pose.sc;
     ctx.save();
+    ctx.translate(cx + dx, cy + dy);
+    ctx.rotate(rot);
+    ctx.scale(sc, sc);
     ctx.font = size + 'px serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    try { ctx.fillText(st, cx, cy); } catch (e) {}
+    try { ctx.fillText(st, 0, 0); } catch (e) {}
     ctx.restore();
+  }
+  /* The sticker's animated pose for this instant — shared by
+     the draw above and the diagnostics surface, so a test can
+     prove the sticker MOVES without depending on the test
+     browser having an emoji font. */
+  function studioStickerPose(){
+    var t = performance.now() / 1000;
+    var dx = 0, dy = 0, rot = 0, sc = 1;
+    if (studio.sticker === 'crown'){
+      dy = Math.sin(t * 2.2) * 6.4;
+      rot = Math.sin(t * 1.7) * 0.16;
+      sc = 1 + Math.sin(t * 3.1) * 0.05;
+    } else if (studio.sticker === 'shades'){
+      dx = Math.sin(t * 1.4) * 9.2;
+      rot = Math.sin(t * 1.1) * 0.08;
+    } else if (studio.sticker === 'star'){
+      rot = t * 1.6;
+      sc = 1 + Math.sin(t * 4.2) * 0.16;
+    } else if (studio.sticker === 'fire'){
+      dy = Math.sin(t * 9.0) * 2.8;
+      sc = 1 + Math.sin(t * 11.0) * 0.10
+             + Math.sin(t * 23.0) * 0.05;
+    }
+    return {dx: dx, dy: dy, rot: rot, sc: sc};
   }
   /* ---------- Studio sheet ---------- */
   function studioSection(txt){
@@ -2859,12 +3061,22 @@ function liveRoomDiff(prev, next){
                ['noir', '🖤 Noir']],
       studio.effect,
       function(v){ studio.effect = v; studioSaveSettings(); studioRerender(); });
-    studioNote('Sticker');
+    studioNote('Sticker — they MOVE now: the crown bobs, the '
+               + 'star spins, the fire flickers.');
     studioSeg([['none', 'None'], ['crown', '👑 Crown'],
                ['shades', '😎 Shades'], ['star', '⭐ Star'],
                ['fire', '🔥 Fire']],
       studio.sticker,
       function(v){ studio.sticker = v; studioSaveSettings(); studioRerender(); });
+    studioSection('🎉 Animated fun');
+    studioSeg([['off', 'Off'], ['confetti', '🎉 Confetti'],
+               ['sparkles', '✨ Sparkles'], ['hearts', '❤️ Hearts'],
+               ['flames', '🔥 Flames']],
+      studio.fun,
+      function(v){ studio.fun = v; studioSaveSettings(); studioRerender(); });
+    studioNote('Animated overlays on your picture — you see '
+               + 'them on your own screen too, and so does '
+               + 'everybody watching.');
     studioSection('🟩 Background — green screen');
     studioSeg([['off', 'Off'], ['on', '🟩 Green screen on']],
       studio.keyOn ? 'on' : 'off',
@@ -3004,6 +3216,9 @@ function liveRoomDiff(prev, next){
               trackId: studio.track ? studio.track.id : null,
               filterOK: studioFilterOK,
               frames: studio.frame,
+              funMode: studio.fun,
+              parts: studio.parts.length,
+              stickerPose: studioStickerPose(),
               canvasAttached: !!(studio.canvas
                 && studio.canvas.isConnected),
               mainReady: studio.mainVid
@@ -6090,6 +6305,21 @@ function liveRoomDiff(prev, next){
     });
   }
   window.addEventListener('beforeunload', function(){
+    if (ended) return;
+    try {
+      if (iAmHost())
+        navigator.sendBeacon('/live/' + B.id + '/end');
+      else
+        navigator.sendBeacon('/live/' + B.id + '/leave');
+    } catch (e) {}
+  });
+  /* iOS Safari / the HERE app's WebView often never fire
+     beforeunload on an app close or swipe-away — pagehide is
+     the event that DOES arrive. Same beacons; /leave and /end
+     are idempotent, so a double fire costs nothing. (The
+     server ALSO sweeps members whose heartbeat has been gone
+     too long, so a missed beacon can no longer haunt a panel.) */
+  window.addEventListener('pagehide', function(){
     if (ended) return;
     try {
       if (iAmHost())
