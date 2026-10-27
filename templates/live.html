@@ -683,28 +683,28 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   {% if can_share_live %}<button type="button" class="live-ctl share-toggle" id="ctl-live-share" data-sheet="share-sheet-live-{{ live.id }}" title="Share this live">↗</button>{% endif %}
   <button type="button" class="live-ctl" id="ctl-comment-focus" title="Comment">💬</button>
   <button type="button" class="live-ctl" id="ctl-layout" title="Panel layout: grid / rail" hidden>▦</button>
-  <button type="button" class="live-ctl" id="ctl-poll" title="Poll / Trivia" hidden>📊</button>
-  <button type="button" class="live-ctl" id="ctl-games" title="🎮 Games" hidden>🎮</button>
-  <button type="button" class="live-ctl" id="ctl-battle" title="⚔️ Live Showdown" hidden>⚔️</button>
+  <button type="button" class="live-ctl" id="ctl-poll" title="Poll / Trivia" hidden>{{ ic('poll') }}</button>
+  <button type="button" class="live-ctl" id="ctl-games" title="🎮 Games" hidden>{{ ic('games') }}</button>
+  <button type="button" class="live-ctl" id="ctl-battle" title="⚔️ Live Showdown" hidden>{{ ic('swords') }}</button>
  </div>
 <div class="live-controls" id="live-controls">
   <!-- panel members -->
-  <button type="button" class="live-ctl" id="ctl-mute" hidden>🎤 Mute</button>
-  <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
-  <button type="button" class="live-ctl" id="ctl-flip" hidden>🔄 Flip</button>
+  <button type="button" class="live-ctl" id="ctl-mute" hidden>{{ ic('mic') }} Mute</button>
+  <button type="button" class="live-ctl" id="ctl-cam" hidden>{{ ic('camera') }} Camera on</button>
+  <button type="button" class="live-ctl" id="ctl-flip" hidden>{{ ic('flip') }} Flip</button>
   <button type="button" class="live-ctl" id="ctl-connect" hidden>🎮 Live Connect</button>
-  <button type="button" class="live-ctl" id="ctl-studio" hidden>🎬 Studio</button>
-  <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>🚪 Leave panel</button>
+  <button type="button" class="live-ctl" id="ctl-studio" hidden>{{ ic('studio') }} Studio</button>
+  <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>{{ ic('logout') }} Leave panel</button>
   <!-- host -->
-  <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
+  <button type="button" class="live-ctl danger" id="ctl-end" hidden>{{ ic('stop') }} End Live</button>
   <!-- watcher -->
-  <button type="button" class="live-ctl" id="ctl-gift" hidden>🎁 Gift</button>
-  <span class="gift-target" id="gift-target" hidden>🎁 Gifting: host</span>
+  <button type="button" class="live-ctl" id="ctl-gift" hidden>{{ ic('gift') }} Gift</button>
+  <span class="gift-target" id="gift-target" hidden>{{ ic('gift') }} Gifting: host</span>
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
   {% if role == 'watcher' %}<button type="button" class="live-ctl" id="ctl-minimize" hidden>➖ Minimize</button>{% endif %}
-  <button type="button" class="live-ctl" id="ctl-join" hidden>🙋 Ask to join panel</button>
+  <button type="button" class="live-ctl" id="ctl-join" hidden>{{ ic('ask') }} Ask to join panel</button>
   <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
-  <button type="button" class="live-ctl" id="ctl-leave" hidden>🚪 Leave</button>
+  <button type="button" class="live-ctl" id="ctl-leave" hidden>{{ ic('logout') }} Leave</button>
 </div>
  </div>
 {% if can_share_live %}
@@ -718,7 +718,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <input type="text" class="share-url" readonly value="{{ live_share_url|e }}" onclick="this.select()">
   <div class="share-row">
     <button type="button" class="btn btn-sm share-copy" data-share-url="{{ live_share_url|e }}">Copy link</button>
-    <button type="button" class="btn-ghost btn-sm share-native" data-share-url="{{ live_share_url|e }}" data-share-text="{{ live_share_text|e }}" hidden>📤 Share…</button>
+    <button type="button" class="btn-ghost btn-sm share-native" data-share-url="{{ live_share_url|e }}" data-share-text="{{ live_share_text|e }}" hidden>{{ ic('send') }} Share…</button>
   </div>
   <div class="share-row">
     <a class="btn-ghost btn-sm" target="_blank" rel="noopener" href="https://www.facebook.com/sharer/sharer.php?u={{ live_share_url|urlencode }}">Facebook</a>
@@ -730,7 +730,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
 {% endif %}
  <div class="live-overlay-stack" id="live-overlay-stack">
 <button type="button" class="live-stack-toggle" id="live-stack-chevron" title="Hide the cards" aria-label="Hide the cards">⌄</button>
-<button type="button" class="live-stack-pill" id="live-stack-pill" hidden>🎛 Controls ⌃</button>
+<button type="button" class="live-stack-pill" id="live-stack-pill" hidden>{{ ic('sliders') }} Controls ⌃</button>
 <div class="live-err" id="live-error" hidden>
   <div id="live-error-text"></div>
   <button type="button" class="live-ctl" id="live-error-retry" style="margin-top:8px">🔁 Try again</button>
@@ -764,7 +764,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
     </div>
   </div>
   <div id="live-game-dice-ui" hidden>
-    <button type="button" class="btn" id="live-game-roll" style="font-size:18px;padding:12px 26px">🎲 Roll</button>
+    <button type="button" class="btn" id="live-game-roll" style="font-size:18px;padding:12px 26px">{{ ic('die') }} Roll</button>
   </div>
   <div id="live-game-players" style="margin-top:8px"></div>
   <div id="live-game-note" style="font-size:13px;color:rgba(255,255,255,.78);margin-top:6px"></div>
@@ -798,7 +798,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
 <div class="live-panel stack-card" id="live-panelctl" hidden>
   <div style="font-weight:800;margin-bottom:3px">👥 Panel</div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <button type="button" class="live-ctl" id="ctl-panel-toggle">👥 Open panel</button>
+    <button type="button" class="live-ctl" id="ctl-panel-toggle">{{ ic('friends') }} Open panel</button>
     <span style="font-size:13px">Guest boxes</span>
     <button type="button" class="live-ctl" id="ctl-boxes-minus" title="Fewer boxes">−</button>
     <strong id="live-boxes-n">5</strong>
@@ -1176,7 +1176,7 @@ function liveRoomDiff(prev, next){
       recon = document.createElement('button');
       recon.type = 'button';
       recon.className = 'live-reconnect-btn';
-      recon.textContent = '🔄';
+      window.hereSetIcon(recon, 'flip', '🔄');
       recon.title = 'Reconnect';
       (function(targetId){
         recon.addEventListener('click', function(ev){
@@ -1461,11 +1461,12 @@ function liveRoomDiff(prev, next){
     var micBtn = $('ctl-mute');
     micBtn.disabled = forcedMuted;
     micBtn.classList.toggle('off', !micWanted);
-    micBtn.textContent = forcedMuted ? '🔇 Muted for you'
-      : (myMicOn ? '🎤 Mute' : '🔇 Unmute');
+    if (forcedMuted) window.hereIconText(micBtn, 'mute', '🔇', ' Muted for you');
+    else if (myMicOn) window.hereIconText(micBtn, 'mic', '🎤', ' Mute');
+    else window.hereIconText(micBtn, 'mute', '🔇', ' Unmute');
     var camBtn = $('ctl-cam');
     camBtn.classList.toggle('off', !myCamOn);
-    camBtn.textContent = myCamOn ? '📷 Camera on' : '🚫 Camera off';
+    window.hereIconText(camBtn, myCamOn ? 'camera' : 'block', myCamOn ? '📷' : '🚫', myCamOn ? ' Camera on' : ' Camera off');
     $('live-muted-note').hidden = !forcedMuted;
   }
   function bindLocalTile(){
@@ -1756,7 +1757,7 @@ function liveRoomDiff(prev, next){
     if (typeof studioAfterSourceChange === 'function')
       studioAfterSourceChange();
     if (lcSheetOpen && !sheetEl.hidden
-        && sheetTitle.textContent === '🎮 Live Connect')
+        && sheetTitle.dataset.sheet === 'connect')
       renderConnectSheet();
   }
   function lcQueue(fn){
@@ -2076,13 +2077,13 @@ function liveRoomDiff(prev, next){
     });
     mrow.appendChild(mcb);
     var mtxt = document.createElement('span');
-    mtxt.textContent = ' 🪞 Mirror preview';
+    window.hereIconText(mtxt, 'mirror', '🪞', ' Mirror preview');
     mrow.appendChild(mtxt);
     sheetActions.appendChild(mrow);
   }
   function openConnectSheet(){
     lcSheetOpen = true;
-    sheetTitle.textContent = '🎮 Live Connect';
+    sheetTitle.dataset.sheet = 'connect'; window.hereIconText(sheetTitle, 'games', '🎮', ' Live Connect');
     sheetActions.innerHTML = '';
     manageTarget = null;
     $('live-sheet-cancel').textContent = 'Done';
@@ -3251,7 +3252,7 @@ function liveRoomDiff(prev, next){
   }
   function studioRerender(){
     if (studioSheetOpen && !sheetEl.hidden
-        && sheetTitle.textContent === '🎬 Studio')
+        && sheetTitle.dataset.sheet === 'studio')
       renderStudioSheet();
   }
   function renderStudioSheet(){
@@ -3456,7 +3457,7 @@ function liveRoomDiff(prev, next){
   }
   function openStudioSheet(){
     studioSheetOpen = true;
-    sheetTitle.textContent = '🎬 Studio';
+    sheetTitle.dataset.sheet = 'studio'; window.hereIconText(sheetTitle, 'studio', '🎬', ' Studio');
     sheetActions.innerHTML = '';
     manageTarget = null;
     $('live-sheet-cancel').textContent = 'Done';
@@ -4243,7 +4244,7 @@ function liveRoomDiff(prev, next){
     var need = false;
     eachRemoteVideo(function(v){ if (videoNeedsSound(v)) need = true; });
     btn.hidden = !need;
-    if (need) btn.textContent = '🔊 Tap for sound';
+    if (need) window.hereIconText(btn, 'speaker', '🔊', ' Tap for sound');
   }
   function unlockAudio(){
     soundOff = false;
@@ -4519,7 +4520,7 @@ function liveRoomDiff(prev, next){
   function spawnHeart(xPct, fromBottomPx){
     var h = document.createElement('span');
     h.className = 'live-heart';
-    h.textContent = '❤️';
+    window.hereSetIcon(h, 'love', '❤️');
     var size = 20 + Math.floor(Math.random() * 16);
     h.style.fontSize = size + 'px';
     h.style.left = (xPct != null ? xPct : 62 + Math.random() * 30) + '%';
@@ -4733,12 +4734,12 @@ function liveRoomDiff(prev, next){
       row.appendChild(sp);
       if (r.kind !== 'invite'){
         var ok = document.createElement('button');
-        ok.type = 'button'; ok.className = 'btn btn-sm'; ok.textContent = '✅ Let in';
+        ok.type = 'button'; ok.className = 'btn btn-sm'; window.hereIconText(ok, 'check', '✅', ' Let in');
         ok.addEventListener('click', function(){
           act('/join-decide', {request_id: r.id, approve: 1});
         });
         var no = document.createElement('button');
-        no.type = 'button'; no.className = 'btn-ghost btn-sm'; no.textContent = '❌ Not now';
+        no.type = 'button'; no.className = 'btn-ghost btn-sm'; window.hereIconText(no, 'x', '❌', ' Not now');
         no.addEventListener('click', function(){
           act('/join-decide', {request_id: r.id, approve: 0});
         });
@@ -4784,7 +4785,7 @@ function liveRoomDiff(prev, next){
         if (!tg.is_member && tg.user_id !== B.me && canManage()){
           var inv = document.createElement('button');
           inv.type = 'button'; inv.className = 'mini-btn';
-          inv.textContent = '➕ Invite to panel';
+          window.hereIconText(inv, 'create', '➕', ' Invite to panel');
           inv.addEventListener('click', function(){
             act('/invite', {user_id: tg.user_id}, 'Invite sent.');
           });
@@ -4793,7 +4794,7 @@ function liveRoomDiff(prev, next){
         if (iAmHost() && tg.user_id !== B.me && tg.role !== 'host'){
           var adm = document.createElement('button');
           adm.type = 'button'; adm.className = 'mini-btn';
-          adm.textContent = tg.admin ? '🛡 Remove admin' : '🛡 Make admin';
+          window.hereIconText(adm, 'shield', '🛡', tg.admin ? ' Remove admin' : ' Make admin');
           adm.addEventListener('click', function(){
             act(tg.admin ? '/remove-admin' : '/appoint-admin',
                 {user_id: tg.user_id});
@@ -4803,7 +4804,7 @@ function liveRoomDiff(prev, next){
         if (canActOn(tg)){
           var kick = document.createElement('button');
           kick.type = 'button'; kick.className = 'mini-btn';
-          kick.textContent = '🚪 Kick from live';
+          window.hereIconText(kick, 'logout', '🚪', ' Kick from live');
           kick.addEventListener('click', function(){
             act('/kick', {user_id: tg.user_id, scope: 'room'},
                 'Removed from the live.');
@@ -4823,7 +4824,7 @@ function liveRoomDiff(prev, next){
      sends the bell + push server-side; the invitee accepts from
      their invite banner on the live page. */
   function openInviteSheet(){
-    sheetTitle.textContent = '➕ Invite others';
+    sheetTitle.dataset.sheet = 'create'; window.hereIconText(sheetTitle, 'create', '➕', ' Invite others');
     sheetActions.innerHTML = '';
     manageTarget = null;
     function section(title, list, emptyText){
@@ -5034,7 +5035,7 @@ function liveRoomDiff(prev, next){
   /* The host's ⚔️ sheet: pick a length, pick a live host. When a
      battle already involves this room the sheet just says so. */
   function openBattleSheet(){
-    sheetTitle.textContent = '⚔️ LIVE SHOWDOWN';
+    sheetTitle.dataset.sheet = 'swords'; window.hereIconText(sheetTitle, 'swords', '⚔️', ' LIVE SHOWDOWN');
     sheetActions.innerHTML = '';
     manageTarget = null;
     var b = battleState;
@@ -5222,7 +5223,7 @@ function liveRoomDiff(prev, next){
      options + an optional trivia correct-answer selector + a 🎲
      random-trivia prefill. "End poll" appears while one is active. */
   function openPollSheet() {
-    sheetTitle.textContent = '📊 Poll / Trivia';
+    sheetTitle.dataset.sheet = 'poll'; window.hereIconText(sheetTitle, 'poll', '📊', ' Poll / Trivia');
     sheetActions.innerHTML = '';
     manageTarget = null;
     function field(ph, max) {
@@ -5378,7 +5379,7 @@ function liveRoomDiff(prev, next){
   /* The Games sheet rides the shared manage sheet: start either
      game (starting one ends the running game) + End game. */
   function openGameSheet() {
-    sheetTitle.textContent = '🎮 Games';
+    sheetTitle.dataset.sheet = 'games'; window.hereIconText(sheetTitle, 'games', '🎮', ' Games');
     sheetActions.innerHTML = '';
     manageTarget = null;
     sheetBtn('🔢 Guess the Number', false, function () {
@@ -6284,12 +6285,12 @@ function liveRoomDiff(prev, next){
     }
     var tabs = document.createElement('div');
     tabs.className = 'gift-tabs';
-    [['money', '💰 Money'], ['love', '❤️ Love'],
-     ['luxury', '👑 Luxury']].forEach(function(pair){
+    [['money', 'moneybag', '💰', ' Money'], ['love', 'love', '❤️', ' Love'],
+     ['luxury', 'crown', '👑', ' Luxury']].forEach(function(pair){
       var tb = document.createElement('button');
       tb.type = 'button';
       tb.className = 'gift-tab' + (giftCat === pair[0] ? ' on' : '');
-      tb.textContent = pair[1];
+      window.hereIconText(tb, pair[1], pair[2], pair[3]);
       tb.addEventListener('click', function(){
         giftCat = pair[0];
         armedGiftKey = null;
@@ -6373,7 +6374,7 @@ function liveRoomDiff(prev, next){
   function openGiftSheet(){
     giftSheetOpen = true;
     armedGiftKey = null;
-    sheetTitle.textContent = '🎁 Send a gift';
+    sheetTitle.dataset.sheet = 'gift'; window.hereIconText(sheetTitle, 'gift', '🎁', ' Send a gift');
     sheetActions.innerHTML = '';
     manageTarget = null;
     $('live-sheet-cancel').textContent = 'Done';

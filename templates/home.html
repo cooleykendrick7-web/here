@@ -46,7 +46,7 @@
     <button type="button" class="slim-bar" id="slim-bar" aria-expanded="false" aria-controls="slim-body">
       <span class="slim-bar-text">What's on your mind?</span>
     </button>
-    <button type="button" class="slim-photo" id="slim-photo" title="Post a photo" aria-label="Post a photo">🖼️</button>
+    <button type="button" class="slim-photo" id="slim-photo" title="Post a photo" aria-label="Post a photo">{{ ic('photo') }}</button>
   </div>
   <div class="slim-body" id="slim-body" hidden>
     <div class="slim-head">
@@ -56,11 +56,11 @@
   <form action="/posts" method="post" enctype="multipart/form-data">
     <input type="hidden" name="kind" id="kind-input" value="text">
     <div class="kind-tabs" id="kind-tabs">
-      <button type="button" class="kind-tab active" data-kind="text">📝 Status</button>
-      <button type="button" class="kind-tab" data-kind="photo">📷 Photo</button>
-      <button type="button" class="kind-tab" data-kind="feeling">😊 Feeling</button>
-      <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
-      <button type="button" class="kind-tab" data-kind="poll">📊 Poll</button>
+      <button type="button" class="kind-tab active" data-kind="text">{{ ic('note') }} Status</button>
+      <button type="button" class="kind-tab" data-kind="photo">{{ ic('camera') }} Photo</button>
+      <button type="button" class="kind-tab" data-kind="feeling">{{ ic('smile') }} Feeling</button>
+      <button type="button" class="kind-tab" data-kind="video">{{ ic('peeps') }} Video</button>
+      <button type="button" class="kind-tab" data-kind="poll">{{ ic('poll') }} Poll</button>
     </div>
     <div class="composer-body-wrap">
       <textarea name="body" id="composer-body" placeholder="What's on your mind?"></textarea>
@@ -95,7 +95,7 @@
     </div>
 
     <div class="composer-music" style="margin-top:10px">
-      <button type="button" class="btn-ghost btn-sm" id="wall-music-toggle">🎵 Add music</button>
+      <button type="button" class="btn-ghost btn-sm" id="wall-music-toggle">{{ ic('music') }} Add music</button>
       <div class="music-picker" id="wall-music-picker" hidden style="margin-top:10px">
         <input type="hidden" name="music_video_id" class="mp-vid" value="">
         <input type="hidden" name="music_url" class="mp-urlhidden" value="">
@@ -173,7 +173,7 @@
     </div>
   {% elif item.kind == 'reels' %}
     <div class="card">
-      <div class="module-head"><b>🎬 Peeps</b><a href="/peeps">See all</a></div>
+      <div class="module-head"><b>{{ ic('peeps') }} Peeps</b><a href="/peeps">See all</a></div>
       <div class="reels-rail">
         {% for v in item.videos %}
         <a class="reel-card" href="/post/{{ v.id }}">

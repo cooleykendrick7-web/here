@@ -53,8 +53,8 @@
     {% if call_req and call_req.direction == 'in' %}
     <div class="share-banner" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="grow" style="flex:1">{{ friend.name|e }} wants to {{ call_req.kind }} call you — approve to start the call.</span>
-      <button type="button" class="btn btn-sm" data-req-accept="{{ call_req.id }}">✓ Accept</button>
-      <button type="button" class="btn-danger btn-sm" data-req-decline="{{ call_req.id }}">✖ Decline</button>
+      <button type="button" class="btn btn-sm" data-req-accept="{{ call_req.id }}">{{ ic('check') }} Accept</button>
+      <button type="button" class="btn-danger btn-sm" data-req-decline="{{ call_req.id }}">{{ ic('x') }} Decline</button>
     </div>
     {% else %}
     <p id="call-req-hint" style="font-size:13px;color:var(--muted);margin-bottom:8px">
@@ -106,7 +106,7 @@
             {% if m.locked.adult %}
             <label style="display:block;font-size:13px;margin-bottom:6px"><input type="checkbox" name="confirm_adult" value="1" required> I'm 18 or older</label>
             {% endif %}
-            <button type="submit" class="btn btn-sm">🔓 Unlock for {{ m.locked.price }} 🎟️</button>
+            <button type="submit" class="btn btn-sm">{{ ic('unlock') }} Unlock for {{ m.locked.price }} {{ ic('tickets') }}</button>
           </form>
         </div>
         {% endif %}

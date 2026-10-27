@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{% if editing %}✏️ Edit listing{% else %}➕ Sell something{% endif %} — HERE{% endblock %}
+{% block title %}{% if editing %}{{ ic('post') }} Edit listing{% else %}{{ ic('create') }} Sell something{% endif %} — HERE{% endblock %}
 {% block head_extra %}
 <style>
 .mkt-cur{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
@@ -11,7 +11,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="section-title">{% if editing %}✏️ Edit listing{% else %}➕ Sell something{% endif %}</div>
+  <div class="section-title">{% if editing %}{{ ic('post') }} Edit listing{% else %}{{ ic('create') }} Sell something{% endif %}</div>
   <form action="{{ action|e }}" method="post" enctype="multipart/form-data" style="margin-top:12px">
     <div class="field">
       <label for="mk-title">Title</label>

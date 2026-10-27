@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="section-title">🎟 Invite friends</div>
+  <div class="section-title">{{ ic('tickets') }} Invite friends</div>
   <p style="color:var(--muted);font-size:14px">Share your personal link — when someone joins HERE from it, they show up here and you earn milestones.</p>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
     <input type="text" readonly value="{{ invite_link|e }}" id="invite-link-input" style="flex:1;min-width:220px;background:#f0f2f5;border:1px solid var(--border);border-radius:6px;padding:9px 12px;font-size:14px">
@@ -17,7 +17,7 @@
 </div>
 
 <div class="card">
-  <div class="section-title">📈 Your invites</div>
+  <div class="section-title">{{ ic('growth') }} Your invites</div>
   <p style="font-size:15px"><strong>{{ count }}</strong> {{ 'person has' if count == 1 else 'people have' }} joined from your invite</p>
   <div style="margin-top:14px">
     <div>🥇 Gold frame at {{ gold_at }} — {{ count }}/{{ gold_at }}{% if is_gold %} ✓ Earned{% endif %}</div>

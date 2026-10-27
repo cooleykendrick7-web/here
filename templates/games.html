@@ -8,7 +8,7 @@
   <p style="color:var(--muted);font-size:15px">Play with friends, jump into a live room game, or chase the weekly crown — it's all here.</p>
 </div>
 
-<div class="section-title" style="margin:18px 0 8px">⭐ Game of the Week</div>
+<div class="section-title" style="margin:18px 0 8px">{{ ic('star2') }} Game of the Week</div>
 <div class="card" style="border:2px solid #e6b800;background:#fffbe8;text-align:center;padding:28px 20px">
   <div style="font-size:52px">{{ featured.emoji|e }}</div>
   <div style="font-size:24px;font-weight:900;margin-top:6px">{{ featured.title|e }}</div>
@@ -17,7 +17,7 @@
   <div style="color:var(--muted);font-size:13.5px;margin-top:12px">New featured game every Monday 🔄</div>
 </div>
 
-<div class="section-title" style="margin:20px 0 8px">🎮 Play with a friend</div>
+<div class="section-title" style="margin:20px 0 8px">{{ ic('games') }} Play with a friend</div>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
   <div class="card" style="margin:0">
     <div style="font-size:34px">❌⭕</div>
@@ -62,7 +62,7 @@
   {% endfor %}
 </div>
 
-<div class="section-title" style="margin:20px 0 8px">🔴 Games inside a live</div>
+<div class="section-title" style="margin:20px 0 8px">{{ ic('lives') }} Games inside a live</div>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
   <div class="card" style="margin:0">
     <div style="font-size:30px">🔢</div>
@@ -85,7 +85,7 @@
     <p style="color:var(--muted);font-size:14px;margin-top:4px">Quick either/or questions for the whole room — vote, change your mind, watch the bars move.</p>
   </div>
 </div>
-<a class="btn" href="/lives" style="margin-top:12px;display:inline-block">🔴 Find a live</a>
+<a class="btn" href="/lives" style="margin-top:12px;display:inline-block">{{ ic('lives') }} Find a live</a>
 
 <div class="section-title" style="margin:20px 0 8px">More ways to play</div>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">

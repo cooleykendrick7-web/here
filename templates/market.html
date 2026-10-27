@@ -33,16 +33,16 @@
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <div class="grow" style="flex:1;min-width:160px">
       {% if saved_page %}
-      <div class="section-title">♥ Saved listings</div>
+      <div class="section-title">{{ ic('love') }} Saved listings</div>
       <p style="color:var(--muted);font-size:14px">Items you saved — actives first, sold ones badged.</p>
       {% elif mine_page %}
-      <div class="section-title">🛒 My listings</div>
+      <div class="section-title">{{ ic('market') }} My listings</div>
       <p style="color:var(--muted);font-size:14px">Everything you're selling on HERE.</p>
       {% elif seller %}
-      <div class="section-title">🛒 For sale by {{ seller.name|e }}</div>
+      <div class="section-title">{{ ic('market') }} For sale by {{ seller.name|e }}</div>
       <p style="color:var(--muted);font-size:14px"><a href="/user/{{ seller.id }}">← Back to {{ seller.name|e }}'s profile</a></p>
       {% else %}
-      <div class="section-title">🛒 HERE Market</div>
+      <div class="section-title">{{ ic('market') }} HERE Market</div>
       <p style="color:var(--muted);font-size:14px">Buy &amp; sell with people on HERE. Meet in a public place — HERE doesn't handle payments.</p>
       {% endif %}
     </div>

@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="section-title">📣 Run as ad — {{ page.name|e }}</div>
+  <div class="section-title">{{ ic('mega') }} Run as ad — {{ page.name|e }}</div>
   <p style="color:var(--muted);margin-top:8px">Promote your page in everyone's home feed as a <strong>Sponsored</strong> card — get sales and leads for your business. Running an ad is <strong>free</strong> right now. You write the words, HERE puts the ad together and runs it in the rotation.</p>
 
   <form action="/page/{{ page.id }}/promote" method="post" enctype="multipart/form-data" style="margin-top:12px">
@@ -99,12 +99,12 @@
         <input type="date" id="pa-end" name="ends_on">
       </div>
     </div>
-    <button type="submit" class="btn">📣 Run this ad</button>
+    <button type="submit" class="btn">{{ ic('mega') }} Run this ad</button>
   </form>
 </div>
 
 <div class="card">
-  <div class="section-title">📊 Your ads for this page</div>
+  <div class="section-title">{{ ic('poll') }} Your ads for this page</div>
   {% if my_ads %}
   <div style="overflow-x:auto;margin-top:10px">
     <table style="width:100%;border-collapse:collapse;font-size:13.5px">

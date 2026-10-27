@@ -14,7 +14,7 @@
 
 {% if winner %}
 <div class="card" style="border:2px solid #e6b800;background:#fffbe8">
-  <div class="section-title">🏆 Last week's winner</div>
+  <div class="section-title">{{ ic('contest') }} Last week's winner</div>
   <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:10px">
     <a href="/views?tag={{ last_tag|e }}"><video preload="metadata" src="{{ winner.media|e }}" style="width:130px;height:130px;object-fit:cover;border-radius:12px;background:#000"></video></a>
     <div style="flex:1;min-width:200px">
@@ -27,7 +27,7 @@
 {% endif %}
 
 <div class="card">
-  <div class="section-title">🏆 This week's leaderboard — #{{ contest_tag|e }}</div>
+  <div class="section-title">{{ ic('contest') }} This week's leaderboard — #{{ contest_tag|e }}</div>
   {% for e in entries %}
   <div class="row-item" style="align-items:center;gap:12px">
     <span style="font-size:20px;font-weight:900;min-width:34px;text-align:center">#{{ e.rank }}</span>

@@ -15,10 +15,10 @@
     {% else %}<span class="av-ph av-40">{{ post.author_name[:1]|upper|e }}</span>{% endif %}
     <div class="post-who">
       <div class="nm">
-        <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a>{% if post.author_verified %} <span class="verified-star" title="Verified — an important page on HERE">★</span>{% endif %}
+        <a href="/user/{{ post.user_id }}">{{ post.author_name|e }}</a>{% if post.author_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}
         <span class="kind-tag">{{ kind_labels.get(post.kind, post.kind)|e }}</span>
         <span class="kind-tag" title="{{ priv_titles.get(post.privacy, 'Public')|e }}">{{ priv_icons.get(post.privacy, '🌍')|e }}</span>
-        {% if post.pinned %}<span class="kind-tag">📌 Pinned</span>{% endif %}
+        {% if post.pinned %}<span class="kind-tag">{{ ic('pin') }} Pinned</span>{% endif %}
       </div>
       <div class="post-meta">{{ post.created_at|e }}{% if post.is_page_post %} · <span class="page-tag">in <a href="/page/{{ post.page_id }}">{{ post.page_name|e }}</a></span>{% endif %}{% if post.tagged_pages %} · <span class="page-tag">tagged {% for tp in post.tagged_pages %}<a href="/page/{{ tp.id }}">{{ tp.name|e }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}</div>
       {% if post.is_mine and post.hidden_from_count %}<div class="post-meta" style="color:var(--red-dark);font-weight:600">🙈 Hidden from {{ post.hidden_from_count }} {{ 'person' if post.hidden_from_count == 1 else 'people' }}</div>{% endif %}
@@ -84,7 +84,7 @@
     {% if _m.endswith('.mp4') or _m.endswith('.mov') or _m.endswith('.webm') %}
     <div class="post-video-wrap" style="position:relative">
     <video class="post-video-file" muted loop playsinline preload="metadata" src="{{ post.media|e }}"></video>
-    <button type="button" class="post-vol-btn" aria-label="Turn sound on" title="Sound on/off" style="position:absolute;right:10px;bottom:18px;width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.55);background:rgba(10,10,14,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:#fff;font-size:17px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;z-index:2">\U0001f507</button>
+    <button type="button" class="post-vol-btn" aria-label="Turn sound on" title="Sound on/off" style="position:absolute;right:10px;bottom:18px;width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.55);background:rgba(10,10,14,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:#fff;font-size:17px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;z-index:2">{{ ic('mute') }}</button>
     </div>
 <script>
 /* Build AUTOPLAY (Ken's order 2026-10-26): post videos autoplay MUTED
@@ -107,7 +107,7 @@
     var btn = wrap ? wrap.querySelector(".post-vol-btn") : null;
     function sync() {
       if (!btn) { return; }
-      btn.textContent = v.muted ? "\U0001f507" : "\U0001f50a";
+      window.hereSetIcon(btn, v.muted ? 'mute' : 'speaker', v.muted ? '\U0001f507' : '\U0001f50a');
       btn.setAttribute("aria-label",
                        v.muted ? "Turn sound on" : "Turn sound off");
     }
@@ -187,36 +187,36 @@
   {% endif %}
 
   <div class="post-stats">
-    <span class="react-summary">{% if post.likes %}{% for r in post.reactions_top %}{{ r.emoji }}{% endfor %} <span class="stat-likes">{{ post.likes }}</span>{% endif %}</span>
+    <span class="react-summary">{% if post.likes %}{% for r in post.reactions_top %}{{ ic(r.key) }}{% endfor %} <span class="stat-likes">{{ post.likes }}</span>{% endif %}</span>
     <a href="/post/{{ post.id }}">{{ post.comments_count }} Comments</a>
     <span>🔁 {{ post.share_count }} Shares</span>
   </div>
 
   <div class="post-actions">
-    <button type="button" class="post-options-btn post-options-toggle" data-pid="{{ post.id }}" aria-expanded="false" aria-controls="post-options-{{ post.id }}">⚙️ Post options</button>
+    <button type="button" class="post-options-btn post-options-toggle" data-pid="{{ post.id }}" aria-expanded="false" aria-controls="post-options-{{ post.id }}">{{ ic('gear') }} Post options</button>
   </div>
   <div class="post-options" id="post-options-{{ post.id }}" hidden>
-    <div class="post-opt-label">😊 React</div>
+    <div class="post-opt-label">{{ ic('smile') }} React</div>
     <div class="post-react-row">
       {% for k, e, label in post.reaction_kinds %}
       <form class="react-form inline-form" action="/post/{{ post.id }}/react" method="post">
         <input type="hidden" name="kind" value="{{ k }}">
-        <button type="submit" title="{{ label }}" aria-label="{{ label }}">{{ e }}</button>
+        <button type="submit" title="{{ label }}" aria-label="{{ label }}">{{ ic(k) }}</button>
       </form>
       {% endfor %}
     </div>
     <form class="like-form inline-form post-opt-form" action="/post/{{ post.id }}/like" method="post">
-      <button type="submit" class="like-btn post-opt-item{% if post.liked %} liked{% endif %}">{% if post.my_reaction %}{{ react_emojis.get(post.my_reaction,'👍') }} {{ react_labels.get(post.my_reaction,'Liked') }}{% else %}👍 Like{% endif %} (<span class="like-count">{{ post.likes }}</span>)</button>
+      <button type="submit" class="like-btn post-opt-item{% if post.liked %} liked{% endif %}">{% if post.my_reaction %}{{ ic(post.my_reaction) }} {{ react_labels.get(post.my_reaction,'Liked') }}{% else %}{{ ic('like') }} Like{% endif %} (<span class="like-count">{{ post.likes }}</span>)</button>
     </form>
-    <a class="action-link post-opt-item" href="/post/{{ post.id }}">💬 Comment</a>
+    <a class="action-link post-opt-item" href="/post/{{ post.id }}">{{ ic('comment') }} Comment</a>
     {% if post.can_share %}
     <form class="inline-form post-opt-form" action="/post/{{ post.id }}/share" method="post">
-      <button type="submit" class="action-link post-opt-item">🔁 Share on HERE</button>
+      <button type="submit" class="action-link post-opt-item">{{ ic('repost') }} Share on HERE</button>
     </form>
     {% endif %}
     {% if post.can_share_external %}
     <div class="aud-wrap post-opt-wrap">
-      <button type="button" class="action-link post-opt-item share-toggle" data-sheet="share-sheet-{{ post.id }}">↗ Share outside HERE</button>
+      <button type="button" class="action-link post-opt-item share-toggle" data-sheet="share-sheet-{{ post.id }}">{{ ic('share') }} Share outside HERE</button>
       <div class="aud-popup share-sheet" id="share-sheet-{{ post.id }}" hidden>
         <div class="aud-title">↗ Share this post</div>
         <p class="aud-hint">Anyone with this link can see this post.</p>
@@ -234,21 +234,21 @@
       </div>
     </div>
     {% endif %}
-    <button type="button" class="action-link post-opt-item" data-copy-path="/p/{{ post.id }}">🔗 Copy share link</button>
+    <button type="button" class="action-link post-opt-item" data-copy-path="/p/{{ post.id }}">{{ ic('link') }} Copy share link</button>
     {% if post.can_pin %}
       {% if post.pinned %}
       <form class="inline-form post-opt-form" action="/post/{{ post.id }}/unpin" method="post">
-        <button type="submit" class="action-link post-opt-item">📌 Unpin</button>
+        <button type="submit" class="action-link post-opt-item">{{ ic('pin') }} Unpin</button>
       </form>
       {% else %}
       <form class="inline-form post-opt-form" action="/post/{{ post.id }}/pin" method="post">
-        <button type="submit" class="action-link post-opt-item">📌 Pin</button>
+        <button type="submit" class="action-link post-opt-item">{{ ic('pin') }} Pin</button>
       </form>
       {% endif %}
     {% endif %}
     {% if post.can_edit_audience %}
     <div class="aud-wrap post-opt-wrap">
-      <button type="button" class="action-link post-opt-item aud-toggle" data-pid="{{ post.id }}" title="Hide this post from…">🙈 Hide this post from…</button>
+      <button type="button" class="action-link post-opt-item aud-toggle" data-pid="{{ post.id }}" title="Hide this post from…">{{ ic('hide') }} Hide this post from…</button>
       <div class="aud-popup" id="aud-popup-{{ post.id }}" hidden>
         <form action="/post/{{ post.id }}/audience" method="post">
           <div class="aud-title">🙈 Hide this post from…</div>
@@ -267,9 +267,9 @@
     {% endif %}
     {% if post.blocked_commenters %}
     <div class="aud-wrap post-opt-wrap">
-      <button type="button" class="action-link post-opt-item cblock-toggle" data-pid="{{ post.id }}" title="People blocked from commenting on this post">🚫 Blocked from commenting ({{ post.blocked_commenters|length }})</button>
+      <button type="button" class="action-link post-opt-item cblock-toggle" data-pid="{{ post.id }}" title="People blocked from commenting on this post">{{ ic('block') }} Blocked from commenting ({{ post.blocked_commenters|length }})</button>
       <div class="aud-popup" id="cblock-popup-{{ post.id }}" hidden>
-        <div class="aud-title">🚫 Blocked from commenting here</div>
+        <div class="aud-title">{{ ic('block') }} Blocked from commenting here</div>
         <p class="aud-hint">These people can't add new comments or replies on this post. Their old comments stay unless you delete them. Unblock lets them comment here again.</p>
         <div class="aud-list">
           {% for b in post.blocked_commenters %}
@@ -289,22 +289,22 @@
     {% if post.is_share %}
       {% if post.can_unshare %}
       <form class="inline-form post-opt-form" action="/share/{{ post.share_id }}/remove" method="post" onsubmit="return confirm('Remove this share from your wall?');">
-        <button type="submit" class="action-link post-opt-item post-opt-danger">🗑 Remove share</button>
+        <button type="submit" class="action-link post-opt-item post-opt-danger">{{ ic('delete') }} Remove share</button>
       </form>
       {% endif %}
     {% else %}
       {% if post.hidden_by_viewer %}
       <form class="inline-form post-opt-form" action="/post/{{ post.id }}/unhide" method="post">
-        <button type="submit" class="action-link post-opt-item">↩ Unhide this post</button>
+        <button type="submit" class="action-link post-opt-item">{{ ic('unhide') }} Unhide this post</button>
       </form>
       {% elif post.can_hide %}
       <form class="inline-form post-opt-form" action="/post/{{ post.id }}/hide" method="post">
-        <button type="submit" class="action-link post-opt-item">🙈 Hide this post</button>
+        <button type="submit" class="action-link post-opt-item">{{ ic('hide') }} Hide this post</button>
       </form>
       {% endif %}
       {% if post.can_delete %}
       <form class="inline-form post-opt-form" action="/post/{{ post.id }}/delete" method="post" onsubmit="return confirm('Delete this post?');">
-        <button type="submit" class="action-link post-opt-item post-opt-danger">🗑 Delete this post</button>
+        <button type="submit" class="action-link post-opt-item post-opt-danger">{{ ic('delete') }} Delete this post</button>
       </form>
       {% endif %}
     {% endif %}

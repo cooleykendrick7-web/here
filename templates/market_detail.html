@@ -77,17 +77,17 @@
     <form class="inline-form" action="/market/{{ listing.id }}/sold" method="post">
       <button type="submit" class="btn">{% if listing.sold %}Mark available again{% else %}Mark SOLD{% endif %}</button>
     </form>
-    <a class="btn-ghost" href="/market/{{ listing.id }}/edit">✏️ Edit</a>
+    <a class="btn-ghost" href="/market/{{ listing.id }}/edit">{{ ic('post') }} Edit</a>
     <form class="inline-form" action="/market/{{ listing.id }}/delete" method="post" onsubmit="return confirm('Delete this listing? It disappears from the Market (messages about it keep their snapshot card).');">
-      <button type="submit" class="btn-danger">🗑 Delete</button>
+      <button type="submit" class="btn-danger">{{ ic('delete') }} Delete</button>
     </form>
     {% else %}
     <form class="mkt-msgform" action="/market/{{ listing.id }}/message" method="post">
       <input type="text" name="body" maxlength="2000" value="Hi! Is this still available?" aria-label="Message to the seller">
-      <button type="submit" class="btn">💬 Message seller</button>
+      <button type="submit" class="btn">{{ ic('messages') }} Message seller</button>
     </form>
     <form class="inline-form" action="/market/{{ listing.id }}/save" method="post">
-      <button type="submit" class="btn-ghost">{% if saved %}♥ Saved{% else %}🤍 Save{% endif %}</button>
+      <button type="submit" class="btn-ghost">{% if saved %}{{ ic('love') }} Saved{% else %}{{ ic('love') }} Save{% endif %}</button>
     </form>
     <button type="button" class="btn-ghost" data-copy-path="/m/{{ listing.id }}">🔗 Share</button>
     {% endif %}

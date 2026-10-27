@@ -650,6 +650,12 @@ def init_db():
         c.execute("ALTER TABLE users ADD COLUMN look_surface TEXT")
     if "look_accent" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN look_accent TEXT")
+    # --- Build ICON STYLES: the viewer's icon finish ('emoji'
+    # default = the classic look; solid/glass/jelly/chrome/gold/
+    # transparent swap every chrome icon for custom vector art). ---
+    if "icon_style" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN icon_style TEXT "
+                  "DEFAULT 'emoji'")
     # --- hide-from-specific-people + post tags (safe on existing DBs) ---
     c.execute("""CREATE TABLE IF NOT EXISTS post_hidden_from (
         post_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
@@ -1559,6 +1565,8 @@ def render(request: Request, name, ctx=None):
     """Every page view gets the global template context; authenticated views
     also refresh last_seen."""
     ctx = dict(ctx or {})
+    ctx.setdefault("icon_style", "emoji")
+    ctx.setdefault("ic", lambda key: icon_html(key, "emoji"))
     u = current_user(request)
     if u:
         touch_seen(u["id"])
@@ -1582,6 +1590,17 @@ def render(request: Request, name, ctx=None):
             "AND m.is_read=0" + _vis_frag("m"),
             (u["id"], u["id"], u["id"], u["id"])).fetchone()["c"]
         conn.close()
+        # Build ICON STYLES: the viewer's icon finish drives the
+        # ic() template helper + the body class (base.html).
+        _istyle = icon_style_of(u)
+        ctx["icon_style"] = _istyle
+        ctx["ic"] = lambda key: icon_html(key, _istyle)
+        if _istyle != "emoji":
+            import json as _json
+            ctx["icons_js"] = _json.dumps(
+                {k: str(icon_html(k, _istyle)) for k in
+                 ("mic", "mute", "phone", "camera", "lives",
+                 "speaker", "gift", "eye")})
         # The viewer's own profile background follows them around the whole
         # logged-in site. Routes may override page_bg (profile pages show the
         # profile owner's background instead).
@@ -2673,7 +2692,8 @@ def post_card(p, viewer, owner_on=False):
             liked = True
             my_reaction = r["kind"] or "like"
     reactions_top = [
-        {"emoji": REACTION_EMOJI.get(r["kind"], "👍"), "count": r["c"]}
+        {"emoji": REACTION_EMOJI.get(r["kind"], "👍"),
+         "key": r["kind"], "count": r["c"]}
         for r in conn.execute(
             "SELECT kind, COUNT(*) c FROM likes WHERE post_id=? "
             "GROUP BY kind ORDER BY c DESC LIMIT 3", (p["id"],)).fetchall()
@@ -7252,6 +7272,162 @@ def glass_alpha_soft_for(u):
     return _saved_glass_alpha_for(u)
 
 
+
+# --- Build ICON STYLES: one custom vector icon set, seven finishes --
+# Ken's order (Oct 27): the iPhone-emoji icons are "mediocre" — every
+# chrome icon is redrawn once as clean vector art and finished per
+# viewer: emoji (DEFAULT — the classic look, byte-identical output),
+# solid, glass, jelly, chrome, gold, transparent. The finish is pure
+# CSS (base.html paints body.icons-<style> .hic from one gradient
+# sprite); the art never changes. Storage: users.icon_style.
+ICON_STYLES = ("emoji", "solid", "glass", "jelly", "chrome", "gold",
+               "transparent")
+ICON_STYLE_LABELS = {
+    "emoji": "Emoji — the classic HERE look (default)",
+    "solid": "Solid — flat, bold, one clean color",
+    "glass": "Glass — frosted see-through, bright edge",
+    "jelly": "Jelly — glossy candy red",
+    "chrome": "Chrome — liquid silver metal",
+    "gold": "Gold — polished gold metal",
+    "transparent": "Transparent — outline only, pure see-through",
+}
+ICON_EMOJI = {
+    "home": "🏠", "peeps": "🎬", "friends": "👥", "market": "🛒",
+    "alerts": "🔔", "menu": "☰", "create": "✚", "lives": "🔴",
+    "messages": "💬", "comment": "💬", "search": "🔍", "post": "✍️",
+    "story": "📸", "camera": "📸", "games": "🎮", "tickets": "🎟️",
+    "discover": "🧭", "daily": "🔥", "contest": "🏆", "gift": "🎁",
+    "like": "👍", "love": "❤️", "laugh": "😂", "wow": "😮",
+    "sad": "😢", "angry": "😡", "share": "↗", "pin": "📌",
+    "hide": "🙈", "eye": "👁", "delete": "🗑", "verified": "★",
+    "bolt": "⚡", "status": "⚡", "sliders": "🎛", "music": "🎵",
+    "poll": "📊", "lock": "🔒", "invite": "💌", "page": "📄",
+    "addfriend": "➕", "app": "📱", "logout": "🚪", "studio": "🎬",
+    "mic": "🎤", "flip": "🔄", "gear": "⚙️", "swords": "⚔️",
+    "die": "🎲", "speaker": "🔊", "mute": "🔇", "phone": "📞",
+    "crown": "👑", "moneybag": "💰", "minus": "➖", "check": "✓",
+    "x": "✕", "clock": "🕐", "send": "📤", "block": "🚫",
+    "back": "←", "dots": "⋯", "play": "▶", "profile": "👤",
+    "glass": "🪟", "expand": "⤢", "link": "🔗", "repost": "🔁",
+    "unhide": "↩", "smile": "😊", "note": "📝", "star2": "⭐",
+    "medal": "🥇", "palette": "🎨", "photo": "🖼️", "tap": "🖐️",
+    "hourglass": "⏳", "stop": "🛑", "shield": "🛡", "mirror": "🪞",
+    "ask": "🙋", "inbox": "📥", "wave": "👋", "growth": "📈",
+    "tag": "🏷️", "mega": "📣", "unlock": "🔓",
+}
+# The custom art: 24x24 fill shapes (themed by CSS), matching the
+# specimen board Ken approved on Oct 27. `.stk` sub-shapes are
+# stroke-only details (broadcast arcs, mic cradle, speaker waves).
+ICON_ART = {
+    "home": '<path d="M12 3l9 8h-3v9h-4.2v-6H10.2v6H6v-9H3z"/>',
+    "peeps": '<path fill-rule="evenodd" d="M4 5h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2zm6.2 4.6v4.8L14.6 12z"/>',
+    "friends": '<path d="M9 10.6A3.6 3.6 0 1 0 9 3.4a3.6 3.6 0 0 0 0 7.2zM2.8 20.2c.6-3.9 3-6 6.2-6s5.6 2.1 6.2 6H2.8zM16.9 10.3a3.2 3.2 0 1 0-1.6-6.1 4.4 4.4 0 0 1 0 5.4c.5.2 1 .4 1.6.7zM17.5 14.4c2.2.7 3.6 2.6 4 5.8h-4.9c-.2-2.4-.9-4.4-2.1-5.9.9.1 2 .1 3 .1z"/>',
+    "market": '<path d="M2.5 4h2.2l2.3 11.6A2.2 2.2 0 009.2 17.5h7.9a2.2 2.2 0 002.1-1.7L21 7.5H6.2l-.5-2.4A1.2 1.2 0 004.5 4.2H2.5V4zm6.7 18a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2zm8.6 0a2.1 2.1 0 1 0 0-4.2 2.1 2.1 0 0 0 0 4.2z"/>',
+    "alerts": '<path d="M12 3a6.2 6.2 0 00-6.2 6.2v3.6L3.6 17h16.8L18.2 12.8V9.2A6.2 6.2 0 0012 3zM9.8 19a2.3 2.3 0 004.4 0H9.8z"/>',
+    "menu": '<rect x="4" y="5.6" width="16" height="2.6" rx="1.3"/><rect x="4" y="10.7" width="16" height="2.6" rx="1.3"/><rect x="4" y="15.8" width="16" height="2.6" rx="1.3"/>',
+    "create": '<path d="M10.7 4.5h2.6v6.2h6.2v2.6h-6.2v6.2h-2.6v-6.2H4.5v-2.6h6.2z"/>',
+    "lives": '<circle cx="12" cy="12" r="2.7"/><path class="stk" d="M7.5 7.5a6.4 6.4 0 000 9M16.5 7.5a6.4 6.4 0 010 9M5 5a10 10 0 000 14M19 5a10 10 0 010 14"/>',
+    "messages": '<path d="M5 3.5h14A2.5 2.5 0 0121.5 6v8a2.5 2.5 0 01-2.5 2.5H9.5L5 20.5v-4A2.5 2.5 0 012.5 14V6A2.5 2.5 0 015 3.5z"/>',
+    "comment": '<path fill-rule="evenodd" d="M5 3.5h14A2.5 2.5 0 0121.5 6v8a2.5 2.5 0 01-2.5 2.5H9.5L5 20.5v-4A2.5 2.5 0 012.5 14V6A2.5 2.5 0 015 3.5zM6.5 8h11V6.4h-11V8zm0 3.6h7.5V10H6.5v1.6z"/>',
+    "search": '<path fill-rule="evenodd" d="M10.8 3.5a7.3 7.3 0 104.9 13.4l4.6 4.6 1.8-1.8-4.6-4.6A7.3 7.3 0 0010.8 3.5zm0 2.6a4.7 4.7 0 110 9.4 4.7 4.7 0 010-9.4z"/>',
+    "post": '<path d="M3.6 20.4l1.1-4.1L16 5a1.9 1.9 0 012.7 0l.3.3a1.9 1.9 0 010 2.7L7.7 19.3l-4.1 1.1zM17.6 6.2l1.2 1.2.8-.8a1.9 1.9 0 00-2.7-2.7l-.8.8 1.5 1.5z"/>',
+    "story": '<path fill-rule="evenodd" d="M4.5 7h2.8L9.4 4.5h5.2L16.7 7h2.8A1.5 1.5 0 0121 8.5v10A1.5 1.5 0 0119.5 20h-15A1.5 1.5 0 013 18.5v-10A1.5 1.5 0 014.5 7zM12 17.2a3.7 3.7 0 1 0 0-7.4 3.7 3.7 0 0 0 0 7.4z"/>',
+    "camera": '<path fill-rule="evenodd" d="M4.5 7h2.8L9.4 4.5h5.2L16.7 7h2.8A1.5 1.5 0 0121 8.5v10A1.5 1.5 0 0119.5 20h-15A1.5 1.5 0 013 18.5v-10A1.5 1.5 0 014.5 7zM12 17.2a3.7 3.7 0 1 0 0-7.4 3.7 3.7 0 0 0 0 7.4z"/>',
+    "games": '<path fill-rule="evenodd" d="M7.2 7.5h9.6A5.2 5.2 0 0122 12.7v1.6a3.1 3.1 0 01-5.5 1.9L15 14.4H9l-1.5 1.8A3.1 3.1 0 012 14.3v-1.6A5.2 5.2 0 017.2 7.5zM8 10.2H6.4v1.7H4.7v1.7h1.7v1.7H8v-1.7h1.7v-1.7H8v-1.7zm8.9 1a1.15 1.15 0 100-2.3 1.15 1.15 0 000 2.3zm2.3 2.3a1.15 1.15 0 100-2.3 1.15 1.15 0 000 2.3z"/>',
+    "tickets": '<path fill-rule="evenodd" d="M4 6.5h16A1.5 1.5 0 0121.5 8v2.2a2.8 2.8 0 000 5.6V18a1.5 1.5 0 01-1.5 1.5H4A1.5 1.5 0 012.5 18v-2.2a2.8 2.8 0 000-5.6V8A1.5 1.5 0 014 6.5zm10.5 2.2v8.6h1.8V8.7h-1.8z"/>',
+    "discover": '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zm0 2.4a7.1 7.1 0 110 14.2 7.1 7.1 0 010-14.2z"/><path d="M15.8 8.2l-2.1 5.4-5.5 2.2 2.2-5.5z"/>',
+    "daily": '<path d="M13.6 1.8c.5 2.9-.3 5-1.9 7.2C10.2 11.1 10.9 13 12 14.7c-1.3-.4-2.2-1.3-2.7-2.7-1.3 1.6-2 3.2-2 5.1A5.2 5.2 0 0012.5 22 5.2 5.2 0 0017.7 16.8c0-2-.8-4.1-2-5.7-.4 1.3-1.2 2.1-2.4 2.5.5-3.8.2-8.3.3-11.8z"/>',
+    "contest": '<path d="M6.5 3.5h11V9a5.5 5.5 0 01-11 0V3.5zM6.5 5H4a3.5 3.5 0 003.6 4.9A5.4 5.4 0 016.5 7V5zm11 0h2.5v2a5.4 5.4 0 01-1.1 2.9A3.5 3.5 0 0020 6V5zM11 14.6h2v2.9h3.2v2.6H7.8v-2.6H11v-2.9z"/>',
+    "gift": '<path d="M3.8 10h16.4v10.2H3.8zM2.8 6.2A1.7 1.7 0 014.5 4.5h3.7a2.8 2.8 0 012.8 2.8V10H4.5a1.7 1.7 0 01-1.7-1.7V6.2zm18.4 0v2.1a1.7 1.7 0 01-1.7 1.7H13V7.3a2.8 2.8 0 012.8-2.8h3.7a1.7 1.7 0 011.7 1.7zM11 10h2v10.2h-2z"/>',
+    "like": '<path d="M6.8 21.5v-11H3.2v11h3.6zM20.4 10.2H14l.9-4.2c.2-1.9-1-3.2-2.6-3.5L6.8 10.6v10.9h9.6a2.3 2.3 0 002.2-1.8l1.3-6.9a2.3 2.3 0 00-2.3-2.6h2.8z"/>',
+    "love": '<path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>',
+    "laugh": '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zM8.2 9.2a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm7.6 0a1.5 1.5 0 110 3 1.5 1.5 0 010-3zM7 13.6h10c-.6 3-2.5 4.7-5 4.7s-4.4-1.7-5-4.7z"/>',
+    "wow": '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zM8.4 8.6a1.7 1.7 0 110 3.4 1.7 1.7 0 010-3.4zm7.2 0a1.7 1.7 0 110 3.4 1.7 1.7 0 010-3.4zM12 14.2a2.2 2.2 0 110 4.4 2.2 2.2 0 010-4.4z"/>',
+    "sad": '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zM8.2 9.2a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm7.6 0a1.5 1.5 0 110 3 1.5 1.5 0 010-3z"/><path class="stk" d="M8 17.6a5.4 5.4 0 018 0"/>',
+    "angry": '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zM6.7 8.6l3.9 1.1-.4 1.5-3.9-1.1zm10.6 0l.4 1.5-3.9 1.1-.4-1.5zM8.4 12.4a1.4 1.4 0 110 2.8 1.4 1.4 0 010-2.8zm7.2 0a1.4 1.4 0 110 2.8 1.4 1.4 0 010-2.8z"/><path class="stk" d="M8.2 18.4a5.2 5.2 0 017.6 0"/>',
+    "share": '<circle cx="6" cy="12" r="2.6"/><circle cx="17.5" cy="5.5" r="2.6"/><circle cx="17.5" cy="18.5" r="2.6"/><path d="M8.3 10.8l6.9-4 .9 1.6-6.9 4zM8.3 13.2l6.9 4-.9 1.6-6.9-4z"/>',
+    "pin": '<path fill-rule="evenodd" d="M12 2.2a7.3 7.3 0 00-7.3 7.3c0 5.4 7.3 12.3 7.3 12.3s7.3-6.9 7.3-12.3A7.3 7.3 0 0012 2.2zm0 10a2.7 2.7 0 110-5.4 2.7 2.7 0 010 5.4z"/>',
+    "hide": '<path fill-rule="evenodd" d="M12 5.2c4.9 0 9.1 2.9 10.9 6.8C21.1 15.9 16.9 18.8 12 18.8S2.9 15.9 1.1 12C2.9 8.1 7.1 5.2 12 5.2zm0 2.3c-3.7 0-7 1.8-8.7 4.5 1.7 2.7 5 4.5 8.7 4.5s7-1.8 8.7-4.5c-1.7-2.7-5-4.5-8.7-4.5zm0 1.3a3.2 3.2 0 110 6.4 3.2 3.2 0 010-6.4z"/><path d="M4.2 3.4L21 20.2l-1.5 1.5L2.7 4.9z"/>',
+    "eye": '<path fill-rule="evenodd" d="M12 5.2c4.9 0 9.1 2.9 10.9 6.8C21.1 15.9 16.9 18.8 12 18.8S2.9 15.9 1.1 12C2.9 8.1 7.1 5.2 12 5.2zm0 2.3c-3.7 0-7 1.8-8.7 4.5 1.7 2.7 5 4.5 8.7 4.5s7-1.8 8.7-4.5c-1.7-2.7-5-4.5-8.7-4.5zm0 1.3a3.2 3.2 0 110 6.4 3.2 3.2 0 010-6.4z"/>',
+    "delete": '<path d="M9.2 3h5.6l.9 2h4.6v2.6H3.7V5h4.6l.9-2zM5.7 9.2h12.6l-.9 11.3a1.6 1.6 0 01-1.6 1.5H8.2a1.6 1.6 0 01-1.6-1.5L5.7 9.2z"/>',
+    "verified": '<path d="M12 2.4l2.95 6.35 6.95.8-5.15 4.8 1.35 6.85L12 17.85l-6.1 3.35 1.35-6.85-5.15-4.8 6.95-.8z"/>',
+    "bolt": '<path d="M13.2 2L3.6 14.2h6.7L8.9 22l9.6-12.2h-6.7L13.2 2z"/>',
+    "status": '<rect x="3.5" y="7" width="17" height="2.3" rx="1.15"/><rect x="3.5" y="15" width="17" height="2.3" rx="1.15"/><circle cx="9" cy="8.15" r="2.9"/><circle cx="15.5" cy="16.15" r="2.9"/>',
+    "sliders": '<rect x="3.5" y="7" width="17" height="2.3" rx="1.15"/><rect x="3.5" y="15" width="17" height="2.3" rx="1.15"/><circle cx="9" cy="8.15" r="2.9"/><circle cx="15.5" cy="16.15" r="2.9"/>',
+    "music": '<circle cx="6.8" cy="17.8" r="3.1"/><circle cx="17.9" cy="15.8" r="3.1"/><path d="M9.4 17.8V5.4L20.5 3.6v12.2h-2.6V6.5L12 8.1v9.7H9.4z"/>',
+    "poll": '<path d="M3.5 12.5h4.4V21H3.5zM9.8 7.8h4.4V21H9.8zM16.1 3.2h4.4V21h-4.4z"/>',
+    "lock": '<path d="M6.8 10.2V8a5.2 5.2 0 0110.4 0v2.2h.8a1.8 1.8 0 011.8 1.8v8.2a1.8 1.8 0 01-1.8 1.8H6a1.8 1.8 0 01-1.8-1.8V12A1.8 1.8 0 016 10.2h.8zm2.3 0h5.8V8a2.9 2.9 0 00-5.8 0v2.2zM12 14a2.1 2.1 0 011 3.9v1.6h-2.2v-1.6A2.1 2.1 0 0112 14z"/>',
+    "invite": '<path fill-rule="evenodd" d="M3.5 5A1.8 1.8 0 015.3 3.2h13.4A1.8 1.8 0 0120.5 5v14a1.8 1.8 0 01-1.8 1.8H5.3A1.8 1.8 0 013.5 19V5zm2.3.6l6.2 4.9 6.2-4.9H5.8zM19 8.2l-7 5.5-7-5.5v13.3h14V8.2z"/>',
+    "page": '<path fill-rule="evenodd" d="M6 2.5h7.5L19 8v12a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 015 20V4A1.5 1.5 0 016 2.5zm6.5 1.7V9H17.3L12.5 4.2z"/>',
+    "addfriend": '<path d="M10 11.2A3.8 3.8 0 1 0 10 3.6a3.8 3.8 0 0 0 0 7.6zM3.4 20.6c.7-4 3.2-6.2 6.6-6.2 1.5 0 2.9.5 4 1.4-.6 1.3-1 2.9-1.1 4.8H3.4zM19 12.2h2.4v2.3H19v2.4h-2.3v-2.4h-2.4v-2.3h2.4V9.8H19v2.4z"/>',
+    "app": '<path fill-rule="evenodd" d="M8 2.2h8A1.8 1.8 0 0117.8 4v16A1.8 1.8 0 0116 21.8H8A1.8 1.8 0 016.2 20V4A1.8 1.8 0 018 2.2zm4 17.3a1.4 1.4 0 100-2.8 1.4 1.4 0 000 2.8z"/>',
+    "logout": '<path d="M4.5 3h9.5v2.6H7.2v12.8h6.8V21H4.5V3zM16.8 8.2l4 3.8-4 3.8v-2.7h-6v-2.2h6V8.2z"/>',
+    "studio": '<rect x="5" y="4" width="2.4" height="16" rx="1.2"/><rect x="10.8" y="4" width="2.4" height="16" rx="1.2"/><rect x="16.6" y="4" width="2.4" height="16" rx="1.2"/><rect x="3.4" y="8" width="5.6" height="3.4" rx="1.7"/><rect x="9.2" y="13.5" width="5.6" height="3.4" rx="1.7"/><rect x="15" y="6.5" width="5.6" height="3.4" rx="1.7"/>',
+    "mic": '<path d="M12 2.5a3 3 0 013 3v5a3 3 0 01-6 0v-5a3 3 0 013-3z"/><path class="stk" d="M5.8 11.2a6.2 6.2 0 0012.4 0M12 17.6V21M8.6 21h6.8"/>',
+    "flip": '<path d="M12.5 3.5A8.5 8.5 0 0120.6 10l1.7-1.7v5.2h-5.2l2-2A6.5 6.5 0 0012.5 5.5v-2zM11.5 20.5A8.5 8.5 0 013.4 14l-1.7 1.7V10.5h5.2l-2 2a6.5 6.5 0 006.6 6v2z"/>',
+    "gear": '<path fill-rule="evenodd" d="M10.2 2.6h3.6l.6 2.9a8.4 8.4 0 012.5 1.4l2.7-1.3 1.8 3.1-2.4 1.9a8.6 8.6 0 010 2.9l2.4 1.9-1.8 3.1-2.7-1.3a8.4 8.4 0 01-2.5 1.4l-.6 2.9h-3.6L9.6 18.7a8.4 8.4 0 01-2.5-1.4l-2.7 1.3-1.8-3.1L5 13.6a8.6 8.6 0 010-2.9L2.6 8.8l1.8-3.1 2.7 1.3a8.4 8.4 0 012.5-1.4l.6-3zM12 15.4a3.4 3.4 0 100-6.8 3.4 3.4 0 000 6.8z"/>',
+    "swords": '<path d="M4.1 3.2l12.7 12.7-2 2L2.1 5.2zM19.9 3.2L7.2 15.9l2 2L21.9 5.2z"/><circle cx="12" cy="12" r="1.7"/><path d="M15.6 16.4l3.2-3.2 1.7 1.7-3.2 3.2zM8.4 16.4L5.2 13.2l-1.7 1.7 3.2 3.2z"/>',
+    "die": '<path fill-rule="evenodd" d="M5 3.5h14A1.5 1.5 0 0120.5 5v14a1.5 1.5 0 01-1.5 1.5H5A1.5 1.5 0 013.5 19V5A1.5 1.5 0 015 3.5zM5.6 7.5a1.9 1.9 0 103.8 0 1.9 1.9 0 10-3.8 0zm8.9 0a1.9 1.9 0 103.8 0 1.9 1.9 0 10-3.8 0zM10.1 12a1.9 1.9 0 103.8 0 1.9 1.9 0 10-3.8 0zM5.6 16.5a1.9 1.9 0 103.8 0 1.9 1.9 0 10-3.8 0zm8.9 0a1.9 1.9 0 103.8 0 1.9 1.9 0 10-3.8 0z"/>',
+    "speaker": '<path d="M3.5 9.5v5h3.5L12 19V5L7 9.5H3.5z"/><path class="stk" d="M15 9.2a4 4 0 010 5.6M17.6 6.8a7.6 7.6 0 010 10.4"/>',
+    "mute": '<path d="M3.5 9.5v5h3.5L12 19V5L7 9.5H3.5zM15.3 9.6l5.1 5.1-1.4 1.4-5.1-5.1-5.1 5.1-1.4-1.4 5.1-5.1-5.1-5.1 1.4-1.4 5.1 5.1 5.1-5.1 1.4 1.4-5.1 5.1z" transform="translate(2.5 0) scale(.88)"/>',
+    "phone": '<path d="M6.6 10.8a15.9 15.9 0 006.6 6.6l2.2-2.2a1 1 0 011-.25 11.4 11.4 0 003.6.6 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.3.2 2.4.6 3.6a1 1 0 01-.25 1l-2.25 2.2z"/>',
+    "crown": '<path d="M3 18.5h18v2H3zM2.5 7l4.8 3.4L12 5.5l4.7 4.9L21.5 7l-1.8 9.5H4.3L2.5 7z"/>',
+    "moneybag": '<path d="M9.2 2.8h5.6l-1.3 3.1H10.5L9.2 2.8zM12 7.3c3.9 0 6.8 2.9 6.8 6.6 0 4-3 7.3-6.8 7.3s-6.8-3.3-6.8-7.3c0-3.7 2.9-6.6 6.8-6.6z"/>',
+    "minus": '<rect x="5" y="10.8" width="14" height="2.5" rx="1.25"/>',
+    "check": '<path d="M9.6 16.9L4.9 12.2 3.4 13.7l6.2 6.2L20.9 8.6 19.4 7.1z"/>',
+    "x": '<path d="M6 4.7l6 6 6-6 1.9 1.9-6 6 6 6-1.9 1.9-6-6-6 6-1.9-1.9 6-6-6-6z"/>',
+    "clock": '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zm0 2.4a7.1 7.1 0 110 14.2 7.1 7.1 0 010-14.2z"/><path class="stk" d="M12 8v4.4l3 1.8"/>',
+    "send": '<path d="M21.8 2.2L2.4 10.6l7 3 2.4 7.4 3.3-5.4 5.2 3.6 1.5-17zM10.9 12.4l7.9-5.6-5.9 10.4-2-4.8z"/>',
+    "block": '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zm0 2.4a7.1 7.1 0 014.6 12.4L5.3 6A7.1 7.1 0 0112 4.9zm0 14.7a7.1 7.1 0 01-4.6-12.4L18.7 18A7.1 7.1 0 0112 19.6z"/>',
+    "back": '<path d="M20 11H7.8l4.6-4.6L11 5l-7 7 7 7 1.4-1.4L7.8 13H20z"/>',
+    "dots": '<circle cx="5.5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18.5" cy="12" r="2"/>',
+    "play": '<path d="M8.5 5.5v13l11-6.5z"/>',
+    "profile": '<path d="M12 11.6a4.3 4.3 0 1 0 0-8.6 4.3 4.3 0 0 0 0 8.6zM4 21.2c.9-4.4 4-6.7 8-6.7s7.1 2.3 8 6.7H4z"/>',
+    "glass": '<path fill-rule="evenodd" d="M5 3.5h14A1.5 1.5 0 0120.5 5v14a1.5 1.5 0 01-1.5 1.5H5A1.5 1.5 0 013.5 19V5A1.5 1.5 0 015 3.5zm.2 1.7v13.6h13.6V5.2H5.2z"/><path d="M6.8 15.8l6.8-8.4h2.9l-6.8 8.4H6.8zm4.6 2.2l4.2-5.1h2.7L14.1 18h-2.7z"/>',
+    "expand": '<path d="M9.2 3.8H4v5.2h2V6.6l3.2 3.2 1.5-1.5L7.5 5.1h1.7V3.8zM20 9V3.8h-5.2v1.3h2.4l-3.2 3.2 1.5 1.5L18.7 6.6V9H20zm-9.2 5.2H4V20h5.2v-2H6.6l3.2-3.2-1.5-1.5-3.2 3.2H9.2zM14.8 20H20v-5.2h-2v2.4l-3.2-3.2-1.5 1.5 3.2 3.2h-1.7V20z" transform="translate(1.6 1.6) scale(.87)"/>',
+    "link": '<path d="M10.6 13.4a4.24 4.24 0 005.99 0l3-3a4.24 4.24 0 10-5.99-6l-1.5 1.5 1.41 1.42 1.5-1.5a2.12 2.12 0 113 3l-3 3a2.12 2.12 0 01-3 0l-1.4-1.4zM13.4 10.6a4.24 4.24 0 00-6 0l-3 3a4.24 4.24 0 106 6l1.5-1.5-1.41-1.42-1.5 1.5a2.12 2.12 0 11-3-3l3-3a2.12 2.12 0 013 0l1.4 1.4z"/>',
+    "repost": '<path d="M12.5 3.5A8.5 8.5 0 0120.6 10l1.7-1.7v5.2h-5.2l2-2A6.5 6.5 0 0012.5 5.5v-2zM11.5 20.5A8.5 8.5 0 013.4 14l-1.7 1.7V10.5h5.2l-2 2a6.5 6.5 0 006.6 6v2z"/>',
+    "unhide": '<path d="M9 5.5L3 11.5 9 17.5v-3.7c5 0 8.5 1.6 11 4.7-.8-6-4.5-9.7-11-10.3V5.5z"/>',
+    "smile": '<path fill-rule="evenodd" d="M12 2.5a9.5 9.5 0 100 19 9.5 9.5 0 000-19zM8.2 9.4a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm7.6 0a1.5 1.5 0 110 3 1.5 1.5 0 010-3z"/><path class="stk" d="M7.8 13.8a5.6 5.6 0 008.4 0"/>',
+    "note": '<path d="M3.6 20.4l1.1-4.1L16 5a1.9 1.9 0 012.7 0l.3.3a1.9 1.9 0 010 2.7L7.7 19.3l-4.1 1.1zM17.6 6.2l1.2 1.2.8-.8a1.9 1.9 0 00-2.7-2.7l-.8.8 1.5 1.5z"/>',
+    "star2": '<path d="M12 2.4l2.95 6.35 6.95.8-5.15 4.8 1.35 6.85L12 17.85l-6.1 3.35 1.35-6.85-5.15-4.8 6.95-.8z"/>',
+    "medal": '<path d="M8.2 3h3l-1.4 5.2L7 9.6 8.2 3zm7.6 0h-3l1.4 5.2L17 9.6 15.8 3z"/><circle cx="12" cy="14.8" r="5.6"/><circle cx="12" cy="14.8" r="2.4" fill="none"/>',
+    "palette": '<path fill-rule="evenodd" d="M12 3a9 9 0 100 18c1.4 0 2-.9 2-1.9 0-.8-.5-1.3-.5-2.1 0-.9.7-1.5 1.7-1.5h2.9a3.4 3.4 0 003.4-3.3C21.4 7.2 17.1 3 12 3zM7.6 10.4a1.6 1.6 0 110-3.2 1.6 1.6 0 010 3.2zm3.5-4a1.6 1.6 0 110 3.2 1.6 1.6 0 010-3.2zm4.9.8a1.6 1.6 0 110 3.2 1.6 1.6 0 010-3.2z"/>',
+    "photo": '<path fill-rule="evenodd" d="M4 4.5h16A1.5 1.5 0 0121.5 6v12a1.5 1.5 0 01-1.5 1.5H4A1.5 1.5 0 012.5 18V6A1.5 1.5 0 014 4.5zm13.4 3a1.7 1.7 0 100 3.4 1.7 1.7 0 000-3.4z"/><path d="M4.8 18.2l5-5 3.2 3.2 3-3 4.7 4.7v.6H4.8v-.5z"/>',
+    "tap": '<path d="M9.2 12.6V5.8a1.7 1.7 0 013.4 0V4.2a1.7 1.7 0 013.4 0v1.9a1.7 1.7 0 013.4.8v6.2c0 4.9-3 8.9-7.6 8.9-3.8 0-5.9-2.1-7.7-5.6l-1.5-3c-.5-1.1.9-2.1 1.9-1.4l2.7 2v-1.4z"/>',
+    "hourglass": '<path d="M6 3h12v2.8H6zM6 18.2h12V21H6zM7.6 5.2h8.8c0 3.3-1.9 4.4-3.1 5.3-.8.6-.8 1.4 0 2 1.2.9 3.1 2 3.1 5.3H7.6c0-3.3 1.9-4.4 3.1-5.3.8-.6.8-1.4 0-2C9.5 9.6 7.6 8.5 7.6 5.2z"/>',
+    "stop": '<path d="M8.6 3h6.8L21 8.6v6.8L15.4 21H8.6L3 15.4V8.6L8.6 3z"/>',
+    "shield": '<path d="M12 2.5l8 3v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10v-6l8-3z"/>',
+    "mirror": '<path d="M7 3h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2zm4.2 14h1.6v2.4h3.4V21H7.8v-1.6h3.4V17z"/>',
+    "ask": '<path d="M9.2 12.6V5.8a1.7 1.7 0 013.4 0V4.2a1.7 1.7 0 013.4 0v1.9a1.7 1.7 0 013.4.8v6.2c0 4.9-3 8.9-7.6 8.9-3.8 0-5.9-2.1-7.7-5.6l-1.5-3c-.5-1.1.9-2.1 1.9-1.4l2.7 2v-1.4z"/>',
+    "inbox": '<path d="M4 4.5h16A1.5 1.5 0 0121.5 6v12a1.5 1.5 0 01-1.5 1.5H4A1.5 1.5 0 012.5 18V6A1.5 1.5 0 014 4.5zm6.2 1.8v4.2H7.4l4.6 4.6 4.6-4.6h-2.8V6.3H10.2zM5 15.5h14V18H5z" transform="scale(.96) translate(.5 .5)"/>',
+    "wave": '<path d="M9.2 12.6V5.8a1.7 1.7 0 013.4 0V4.2a1.7 1.7 0 013.4 0v1.9a1.7 1.7 0 013.4.8v6.2c0 4.9-3 8.9-7.6 8.9-3.8 0-5.9-2.1-7.7-5.6l-1.5-3c-.5-1.1.9-2.1 1.9-1.4l2.7 2v-1.4z"/>',
+    "growth": '<path d="M3.5 12.5h4.4V21H3.5zM9.8 7.8h4.4V21H9.8zM16.1 3.2h4.4V21h-4.4z"/>',
+    "tag": '<path fill-rule="evenodd" d="M3.5 3.5h8.1l9 9a2 2 0 010 2.8l-5.7 5.7a2 2 0 01-2.8 0l-8.6-8.6v-8.9zm3.4 3.1a1.8 1.8 0 100 3.6 1.8 1.8 0 000-3.6z"/>',
+    "mega": '<path d="M3 10.2v3.6l3 .6v-4.8l-3 .6zM19 5L8 8.8v6.4L19 19V5zM10.2 15.4l-.1 1.8a2.6 2.6 0 005.1.4l-.3-1.5-4.7-.7z"/>',
+    "unlock": '<path d="M6.8 10.2V8a5.2 5.2 0 0110.3-.8l-2 .9A3 3 0 009.2 8v2.2h8a1.8 1.8 0 011.8 1.8v8a1.8 1.8 0 01-1.8 1.8H6A1.8 1.8 0 014.2 20v-8A1.8 1.8 0 016 10.2h.8zM12 14a2.1 2.1 0 011 3.9v1.6h-2v-1.6A2.1 2.1 0 0112 14z"/>',
+}
+
+
+def icon_style_of(u):
+    """The viewer's icon finish; anything unrecognized is 'emoji'."""
+    s = ((u or {}).get("icon_style") or "emoji").strip().lower()
+    return s if s in ICON_STYLES else "emoji"
+
+
+def icon_html(key, style="emoji"):
+    """One chrome icon as the viewer wants it: the classic emoji
+    glyph for 'emoji' (and unknown keys), else the custom vector
+    art as an inline SVG that base.html's finish CSS paints.
+    Returned as Markup so templates never escape it."""
+    from markupsafe import Markup
+    if style == "emoji" or key not in ICON_ART:
+        return ICON_EMOJI.get(key, "")
+    return Markup(
+        '<svg class="hic" viewBox="0 0 24 24" aria-hidden="true">'
+        + ICON_ART[key] + "</svg>")
+
+
 # --- Build LOOKS: schemes, surface/accent colors, presets -----------
 # A "look" is: a scheme (glass / solid / mix), an optional surface
 # color (tints the glass; IS the card color when solid) and an
@@ -7872,6 +8048,11 @@ async def profile_edit_page(request: Request):
         (user["id"],)).fetchall()]
     conn.close()
     return render(request, "profile_edit.html", {
+        "icon_style": icon_style_of(user),
+        "icon_styles": [(s, ICON_STYLE_LABELS[s]) for s in ICON_STYLES],
+        "icon_previews": {s: {k: icon_html(k, s) for k in
+                              ("home", "peeps", "love", "gift", "gear")}
+                          for s in ICON_STYLES},
         "muted_people": muted_people,
         "blocked_people": blocked_people,
         "profile": {"id": user["id"], "name": user["name"],
@@ -8147,6 +8328,29 @@ async def settings_look(request: Request):
     conn.commit()
     conn.close()
     return redir("/settings/profile", "Your look was saved 🎨")
+
+
+@app.post("/settings/icons")
+async def settings_icons(request: Request):
+    """Save the caller's icon finish (Build ICON STYLES). Purely a
+    per-viewer display preference — it changes how the icons look
+    on THEIR screen everywhere on HERE. Anything off the whitelist
+    changes nothing."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    style = (form.get("icon_style") or "").strip().lower()
+    if style not in ICON_STYLES:
+        return redir("/settings/profile",
+                     "That icon style isn't one of the choices.")
+    conn = db()
+    conn.execute("UPDATE users SET icon_style=? WHERE id=?",
+                 (style, user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile",
+                 "Icon style saved — " + ICON_STYLE_LABELS[style] + ".")
 
 
 def _delete_upload(rel_path):

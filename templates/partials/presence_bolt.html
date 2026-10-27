@@ -2,4 +2,4 @@
    (from presence_of()), optional show_label = true to add the text label.
    &#9889; is ⚡; &#65038; (variation selector) keeps it a plain text glyph
    so the span color decides green/yellow/red instead of the emoji color. #}
-{% if pres %}<span class="bolt bolt-{{ pres.status }}" title="{{ pres.label }}">&#9889;&#65038;</span>{% if show_label %}<span class="bolt-label">{{ pres.label }}</span>{% endif %}{% endif %}
+{% if pres %}<span class="bolt bolt-{{ pres.status }}" title="{{ pres.label }}">{% if icon_style and icon_style != 'emoji' %}{{ ic('bolt') }}{% else %}&#9889;&#65038;{% endif %}</span>{% if show_label %}<span class="bolt-label">{{ pres.label }}</span>{% endif %}{% endif %}

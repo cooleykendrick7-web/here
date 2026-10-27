@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="section-title">📥 Friend Requests {% if incoming %}({{ incoming|length }}){% endif %}</div>
+  <div class="section-title">{{ ic('inbox') }} Friend Requests {% if incoming %}({{ incoming|length }}){% endif %}</div>
   {% for r in incoming %}
   <div class="row-item">
     {% if r.avatar %}<img class="avatar av-40" src="{{ r.avatar|e }}" alt="">
@@ -27,7 +27,7 @@
 </div>
 
 <div class="card">
-  <div class="section-title">📤 Sent Requests {% if sent %}({{ sent|length }}){% endif %}</div>
+  <div class="section-title">{{ ic('send') }} Sent Requests {% if sent %}({{ sent|length }}){% endif %}</div>
   {% for r in sent %}
   <div class="row-item">
     {% if r.avatar %}<img class="avatar av-40" src="{{ r.avatar|e }}" alt="">
@@ -48,7 +48,7 @@
 </div>
 
 <div class="card">
-  <div class="section-title">👥 My Friends {% if friends %}({{ friends|length }}){% endif %}</div>
+  <div class="section-title">{{ ic('friends') }} My Friends {% if friends %}({{ friends|length }}){% endif %}</div>
   {% for f in friends %}
   <div class="row-item">
     {% if f.avatar %}<img class="avatar av-40" src="{{ f.avatar|e }}" alt="">

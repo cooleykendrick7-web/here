@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="section-title">{% if which == 'followers' %}👥 Followers of{% else %}👀 {{ profile.name|e }} is following{% endif %} <a href="/user/{{ profile.id }}">{{ profile.name|e }}</a> {% if people %}({{ people|length }}){% endif %}</div>
+  <div class="section-title">{% if which == 'followers' %}{{ ic('friends') }} Followers of{% else %}{{ ic('eye') }} {{ profile.name|e }} is following{% endif %} <a href="/user/{{ profile.id }}">{{ profile.name|e }}</a> {% if people %}({{ people|length }}){% endif %}</div>
   {% for p in people %}
   <div class="row-item">
     {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">

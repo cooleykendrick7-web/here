@@ -9,7 +9,7 @@
 {% endif %}
 
 <div class="card">
-  <div class="section-title">🎟️ My Live Tickets</div>
+  <div class="section-title">{{ ic('tickets') }} My Live Tickets</div>
   <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
     <div>
       <div style="font-size:30px;font-weight:900;color:var(--red)">{{ balance }} 🎟️</div>
@@ -28,12 +28,12 @@
     and earned tickets cash out below.
   </p>
   <p style="margin-top:12px">
-    <a class="btn-ghost" href="/earnings">📊 My earnings — per stream + cash-out center</a>
+    <a class="btn-ghost" href="/earnings">{{ ic('poll') }} My earnings — per stream + cash-out center</a>
   </p>
 </div>
 
 <div class="card">
-  <div class="section-title">🛒 Get tickets</div>
+  <div class="section-title">{{ ic('market') }} Get tickets</div>
   {% if stripe_on %}
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
     {% for p in packs %}

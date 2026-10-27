@@ -1271,20 +1271,65 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 </style>
 {% endif %}
 </head>
-<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_look_classes %} {{ viewer_look_classes }}{% endif %}{% if viewer_scheme_class %} {{ viewer_scheme_class }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}{% if user %} has-tabbar{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }};--glass-alpha-soft:{{ viewer_glass_alpha_soft or '0.82' }};--glass-rgb:{{ viewer_glass_rgb or '255,255,255' }};--look-accent:{{ viewer_look_accent or '#d41f2e' }};--look-accent-rgb:{{ viewer_look_accent_rgb or '212,31,46' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
+<body class="{% block body_class %}{% endblock %}{% if page_bg %} has-profile-bg{% endif %}{% if viewer_spot_classes %} {{ viewer_spot_classes }}{% endif %}{% if viewer_look_classes %} {{ viewer_look_classes }}{% endif %}{% if viewer_scheme_class %} {{ viewer_scheme_class }}{% endif %}{% if viewer_box_alpha %} boxes-glass{% endif %}{% if user %} has-tabbar{% endif %}{% if icon_style and icon_style != 'emoji' %} icons-{{ icon_style }}{% endif %}" style="--glass-alpha:{{ viewer_glass_alpha or '0.82' }};--glass-alpha-soft:{{ viewer_glass_alpha_soft or '0.82' }};--glass-rgb:{{ viewer_glass_rgb or '255,255,255' }};--look-accent:{{ viewer_look_accent or '#d41f2e' }};--look-accent-rgb:{{ viewer_look_accent_rgb or '212,31,46' }}{% if viewer_spot_style %};{{ viewer_spot_style }}{% endif %}{% if viewer_box_alpha %};--box-alpha:{{ viewer_box_alpha }}{% endif %}">
+<script>
+/* Build ICON STYLES: JS-driven buttons swap through these helpers
+   (themed pages get the vector art, classic pages keep the emoji
+   text exactly as before). Defined FIRST in the body — live-page
+   scripts run before the tab bar script ever could. */
+window.hereSetIcon = function(el, key, fallback) {
+  if (window.HERE_ICONS && window.HERE_ICONS[key]) {
+    el.innerHTML = window.HERE_ICONS[key];
+  } else {
+    el.textContent = fallback;
+  }
+};
+window.hereIconText = function(el, key, emoji, text) {
+  if (window.HERE_ICONS && window.HERE_ICONS[key]) {
+    el.innerHTML = window.HERE_ICONS[key] + text;
+  } else {
+    el.textContent = emoji + text;
+  }
+};
+</script>
+
+{% if icon_style and icon_style != 'emoji' %}
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<linearGradient id="hicGlass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".78"/><stop offset=".5" stop-color="#fff" stop-opacity=".34"/><stop offset="1" stop-color="#fff" stop-opacity=".18"/></linearGradient>
+<linearGradient id="hicJelly" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff9d9d"/><stop offset=".45" stop-color="#f0443e"/><stop offset="1" stop-color="#b30f1d"/></linearGradient>
+<linearGradient id="hicChrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfdff"/><stop offset=".38" stop-color="#c9ccd6"/><stop offset=".52" stop-color="#787d8c"/><stop offset=".66" stop-color="#e8eaf2"/><stop offset="1" stop-color="#9ba0ae"/></linearGradient>
+<linearGradient id="hicGold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff3b0"/><stop offset=".35" stop-color="#f6d860"/><stop offset=".55" stop-color="#c99612"/><stop offset=".75" stop-color="#ffe98a"/><stop offset="1" stop-color="#a8740a"/></linearGradient>
+</defs></svg>
+<style>
+.hic{width:1.12em;height:1.12em;vertical-align:-.16em;flex:none}
+.hic .stk{fill:none;stroke-linecap:round}
+body.icons-solid .hic{fill:#f2f2f4}body.icons-solid .hic .stk{stroke:#f2f2f4;stroke-width:1.7}
+body.icons-glass .hic{fill:url(#hicGlass);stroke:rgba(255,255,255,.9);stroke-width:.6}body.icons-glass .hic .stk{stroke:rgba(255,255,255,.92);stroke-width:1.7}
+body.icons-jelly .hic{fill:url(#hicJelly);stroke:rgba(120,0,10,.35);stroke-width:.5;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))}body.icons-jelly .hic .stk{stroke:url(#hicJelly);stroke-width:2}
+body.icons-chrome .hic{fill:url(#hicChrome);stroke:rgba(20,20,25,.35);stroke-width:.5}body.icons-chrome .hic .stk{stroke:url(#hicChrome);stroke-width:1.8}
+body.icons-gold .hic{fill:url(#hicGold);stroke:rgba(90,60,0,.4);stroke-width:.5}body.icons-gold .hic .stk{stroke:url(#hicGold);stroke-width:1.8}
+body.icons-transparent .hic{fill:rgba(255,255,255,.07);stroke:#fff;stroke-width:1}body.icons-transparent .hic .stk{stroke:#fff;stroke-width:1.7}
+body .bolt .hic{fill:currentColor;stroke:none;filter:none}
+.tab-ic .hic{width:20px;height:20px;vertical-align:-4px}
+.create-ic .hic{width:24px;height:24px;vertical-align:-5px}
+.menu-ic .hic, .mobmenu .hic{width:20px;height:20px;vertical-align:-4px}
+.nav-ic .hic{width:21px;height:21px;vertical-align:-4px}
+</style>
+<script>window.HERE_ICONS={{ icons_js }};</script>
+{% endif %}
 
 <header class="topbar">
-  <button class="nav-ic menu-toggle" id="menu-btn" title="Menu" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="mobmenu">☰</button>
+  <button class="nav-ic menu-toggle" id="menu-btn" title="Menu" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="mobmenu">{{ ic('menu') }}</button>
   <a class="logo" href="/home">HERE</a>
   <form class="search-form top-search" action="/search" method="get">
     <input type="text" name="q" placeholder="Search HERE" value="{{ q|default('')|e }}" autocomplete="off">
   </form>
   <nav class="topnav">
-    {% if user %}<button class="nav-ic create-btn" id="create-btn" title="Create" aria-label="Create">✚</button>{% endif %}
-    <a class="nav-ic nav-live" href="/lives" title="Lives">🔴</a>
-    <a class="nav-ic" href="/market" title="Market">🛒</a>
-    <a class="nav-ic" href="/messages" title="Messages">💬{% if unread_msgs %}<span class="badge">{{ unread_msgs }}</span>{% endif %}</a>
-    <a class="nav-ic" href="/notifications" title="Notifications">🔔{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
+    {% if user %}<button class="nav-ic create-btn" id="create-btn" title="Create" aria-label="Create">{{ ic('create') }}</button>{% endif %}
+    <a class="nav-ic nav-live" href="/lives" title="Lives">{{ ic('lives') }}</a>
+    <a class="nav-ic" href="/market" title="Market">{{ ic('market') }}</a>
+    <a class="nav-ic" href="/messages" title="Messages">{{ ic('messages') }}{% if unread_msgs %}<span class="badge">{{ unread_msgs }}</span>{% endif %}</a>
+    <a class="nav-ic" href="/notifications" title="Notifications">{{ ic('alerts') }}{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
     {% if user %}
     <a class="nav-av" href="/user/{{ user.id }}" title="{{ user.name|e }}">
       {% if user.avatar %}<img src="{{ user.avatar|e }}" alt="me"{% if viewer_gold %} class="av-gold"{% endif %}>
@@ -1297,7 +1342,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 <div class="mobmenu" id="mobmenu" role="menu" aria-label="Main menu">
   <div style="display:flex;align-items:center;margin-bottom:4px">
     <span class="logo" style="font-size:24px">HERE</span>
-    <button class="nav-ic" id="mobmenu-close" style="margin-left:auto;border:none;color:#f0f0f0;cursor:pointer" aria-label="Close menu">✕</button>
+    <button class="nav-ic" id="mobmenu-close" style="margin-left:auto;border:none;color:#f0f0f0;cursor:pointer" aria-label="Close menu">{{ ic('x') }}</button>
   </div>
   <form class="search-form menu-search" action="/search" method="get" role="search">
     <input type="text" name="q" placeholder="Search HERE" value="{{ q|default('')|e }}" autocomplete="off" aria-label="Search HERE">
@@ -1309,40 +1354,40 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   </a>
   {% endif %}
   {% if user %}
-  <a href="/user/{{ user.id }}"><span>👤</span> My Profile</a>
+  <a href="/user/{{ user.id }}"><span>{{ ic('profile') }}</span> My Profile</a>
   {% endif %}
   <div class="menu-group">Create</div>
-  <a href="/home#composer-body"><span>➕</span> New post</a>
-  <button type="button" class="menu-act" id="menu-golive"><span>🔴</span> Go live</button>
-  <a href="/stories/new"><span>📸</span> New story</a>
-  <a href="/market/new"><span>🛒</span> Sell on Market</a>
-  <a href="/pages/new"><span>📄</span> Create Page</a>
+  <a href="/home#composer-body"><span>{{ ic('create') }}</span> New post</a>
+  <button type="button" class="menu-act" id="menu-golive"><span>{{ ic('lives') }}</span> Go live</button>
+  <a href="/stories/new"><span>{{ ic('story') }}</span> New story</a>
+  <a href="/market/new"><span>{{ ic('market') }}</span> Sell on Market</a>
+  <a href="/pages/new"><span>{{ ic('page') }}</span> Create Page</a>
   <div class="menu-group">Fun</div>
-  <a href="/games"><span>🎮</span> Games</a>
-  <a href="/tickets"><span>🎟️</span> Tickets</a>
-  <a href="/views"><span>🎬</span> Peeps</a>
-  <a href="/discover"><span>🧭</span> Discover</a>
-  <a href="/daily"><span>🔥</span> Daily</a>
-  <a href="/contest"><span>🏆</span> Contest</a>
+  <a href="/games"><span>{{ ic('games') }}</span> Games</a>
+  <a href="/tickets"><span>{{ ic('tickets') }}</span> Tickets</a>
+  <a href="/views"><span>{{ ic('peeps') }}</span> Peeps</a>
+  <a href="/discover"><span>{{ ic('discover') }}</span> Discover</a>
+  <a href="/daily"><span>{{ ic('daily') }}</span> Daily</a>
+  <a href="/contest"><span>{{ ic('contest') }}</span> Contest</a>
   <div class="menu-group">You</div>
-  <a href="/friends"><span>👥</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
-  <a href="/search"><span>🔎</span> Find Friends</a>
-  <a href="/pages"><span>📄</span> Pages</a>
-  <a href="/messages"><span>💬</span> Messages</a>
-  <a href="/lives"><span>🔴</span> Lives</a>
-  <a href="/market"><span>🛒</span> Market</a>
-  <a href="/hidden"><span>🙈</span> Hidden</a>
-  <a href="/invite"><span>💌</span> Invite</a>
+  <a href="/friends"><span>{{ ic('friends') }}</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
+  <a href="/search"><span>{{ ic('search') }}</span> Find Friends</a>
+  <a href="/pages"><span>{{ ic('page') }}</span> Pages</a>
+  <a href="/messages"><span>{{ ic('messages') }}</span> Messages</a>
+  <a href="/lives"><span>{{ ic('lives') }}</span> Lives</a>
+  <a href="/market"><span>{{ ic('market') }}</span> Market</a>
+  <a href="/hidden"><span>{{ ic('hide') }}</span> Hidden</a>
+  <a href="/invite"><span>{{ ic('invite') }}</span> Invite</a>
   <div class="menu-group">Settings</div>
-  <a href="/settings/profile"><span>✏️</span> Edit Profile</a>
-  <a href="/settings/profile#spot"><span>🏠</span> Your Spot</a>
-  <a href="/settings/profile#status"><span>⚡</span> Status</a>
-  <a href="/settings/profile#boxes"><span>🪟</span> Glass transparency</a>
-  <a href="/settings/profile#privacy"><span>🔒</span> Privacy</a>
+  <a href="/settings/profile"><span>{{ ic('post') }}</span> Edit Profile</a>
+  <a href="/settings/profile#spot"><span>{{ ic('home') }}</span> Your Spot</a>
+  <a href="/settings/profile#status"><span>{{ ic('status') }}</span> Status</a>
+  <a href="/settings/profile#boxes"><span>{{ ic('glass') }}</span> Glass transparency</a>
+  <a href="/settings/profile#privacy"><span>{{ ic('lock') }}</span> Privacy</a>
   <div class="menu-group">More</div>
-  <a href="/notifications"><span>🔔</span> Notifications</a>
-  <a href="/app"><span>📱</span> Get the app</a>
-  <a href="/logout"><span>🚪</span> Logout</a>
+  <a href="/notifications"><span>{{ ic('alerts') }}</span> Notifications</a>
+  <a href="/app"><span>{{ ic('app') }}</span> Get the app</a>
+  <a href="/logout"><span>{{ ic('logout') }}</span> Logout</a>
 </div>
 
 {% if flash %}
@@ -1352,40 +1397,40 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 <div class="layout">
   <aside class="side-left">
     {% if user %}
-    <a class="menu-item" href="/user/{{ user.id }}"><span class="menu-ic">👤</span> My Profile</a>
+    <a class="menu-item" href="/user/{{ user.id }}"><span class="menu-ic">{{ ic('profile') }}</span> My Profile</a>
     {% endif %}
     <div class="menu-group">Create</div>
-    <a class="menu-item" href="/home#composer-body"><span class="menu-ic">➕</span> New post</a>
-    <button type="button" class="menu-item menu-act" id="side-golive"><span class="menu-ic">🔴</span> Go live</button>
-    <a class="menu-item" href="/stories/new"><span class="menu-ic">📸</span> New story</a>
-    <a class="menu-item" href="/market/new"><span class="menu-ic">🛒</span> Sell on Market</a>
-    <a class="menu-item" href="/pages/new"><span class="menu-ic">📄</span> Create Page</a>
+    <a class="menu-item" href="/home#composer-body"><span class="menu-ic">{{ ic('create') }}</span> New post</a>
+    <button type="button" class="menu-item menu-act" id="side-golive"><span class="menu-ic">{{ ic('lives') }}</span> Go live</button>
+    <a class="menu-item" href="/stories/new"><span class="menu-ic">{{ ic('story') }}</span> New story</a>
+    <a class="menu-item" href="/market/new"><span class="menu-ic">{{ ic('market') }}</span> Sell on Market</a>
+    <a class="menu-item" href="/pages/new"><span class="menu-ic">{{ ic('page') }}</span> Create Page</a>
     <div class="menu-group">Fun</div>
-    <a class="menu-item" href="/games"><span class="menu-ic">🎮</span> Games</a>
-    <a class="menu-item" href="/tickets"><span class="menu-ic">🎟️</span> Tickets</a>
-    <a class="menu-item" href="/views"><span class="menu-ic">🎬</span> Peeps</a>
-    <a class="menu-item" href="/discover"><span class="menu-ic">🧭</span> Discover</a>
-    <a class="menu-item" href="/daily"><span class="menu-ic">🔥</span> Daily</a>
-    <a class="menu-item" href="/contest"><span class="menu-ic">🏆</span> Contest</a>
+    <a class="menu-item" href="/games"><span class="menu-ic">{{ ic('games') }}</span> Games</a>
+    <a class="menu-item" href="/tickets"><span class="menu-ic">{{ ic('tickets') }}</span> Tickets</a>
+    <a class="menu-item" href="/views"><span class="menu-ic">{{ ic('peeps') }}</span> Peeps</a>
+    <a class="menu-item" href="/discover"><span class="menu-ic">{{ ic('discover') }}</span> Discover</a>
+    <a class="menu-item" href="/daily"><span class="menu-ic">{{ ic('daily') }}</span> Daily</a>
+    <a class="menu-item" href="/contest"><span class="menu-ic">{{ ic('contest') }}</span> Contest</a>
     <div class="menu-group">You</div>
-    <a class="menu-item" href="/friends"><span class="menu-ic">👥</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
-    <a class="menu-item" href="/search"><span class="menu-ic">🔎</span> Find Friends</a>
-    <a class="menu-item" href="/pages"><span class="menu-ic">📄</span> Pages</a>
-    <a class="menu-item" href="/messages"><span class="menu-ic">💬</span> Messages</a>
-    <a class="menu-item" href="/lives"><span class="menu-ic">🔴</span> Lives</a>
-    <a class="menu-item" href="/market"><span class="menu-ic">🛒</span> Market</a>
-    <a class="menu-item" href="/hidden"><span class="menu-ic">🙈</span> Hidden</a>
-    <a class="menu-item" href="/invite"><span class="menu-ic">💌</span> Invite</a>
+    <a class="menu-item" href="/friends"><span class="menu-ic">{{ ic('friends') }}</span> Friends{% if pending_count %} <span class="badge" style="position:static;border:none">{{ pending_count }}</span>{% endif %}</a>
+    <a class="menu-item" href="/search"><span class="menu-ic">{{ ic('search') }}</span> Find Friends</a>
+    <a class="menu-item" href="/pages"><span class="menu-ic">{{ ic('page') }}</span> Pages</a>
+    <a class="menu-item" href="/messages"><span class="menu-ic">{{ ic('messages') }}</span> Messages</a>
+    <a class="menu-item" href="/lives"><span class="menu-ic">{{ ic('lives') }}</span> Lives</a>
+    <a class="menu-item" href="/market"><span class="menu-ic">{{ ic('market') }}</span> Market</a>
+    <a class="menu-item" href="/hidden"><span class="menu-ic">{{ ic('hide') }}</span> Hidden</a>
+    <a class="menu-item" href="/invite"><span class="menu-ic">{{ ic('invite') }}</span> Invite</a>
     <div class="menu-group">Settings</div>
-    <a class="menu-item" href="/settings/profile"><span class="menu-ic">✏️</span> Edit Profile</a>
-    <a class="menu-item" href="/settings/profile#spot"><span class="menu-ic">🏠</span> Your Spot</a>
-    <a class="menu-item" href="/settings/profile#status"><span class="menu-ic">⚡</span> Status</a>
-    <a class="menu-item" href="/settings/profile#boxes"><span class="menu-ic">🪟</span> Glass transparency</a>
-    <a class="menu-item" href="/settings/profile#privacy"><span class="menu-ic">🔒</span> Privacy</a>
+    <a class="menu-item" href="/settings/profile"><span class="menu-ic">{{ ic('post') }}</span> Edit Profile</a>
+    <a class="menu-item" href="/settings/profile#spot"><span class="menu-ic">{{ ic('home') }}</span> Your Spot</a>
+    <a class="menu-item" href="/settings/profile#status"><span class="menu-ic">{{ ic('status') }}</span> Status</a>
+    <a class="menu-item" href="/settings/profile#boxes"><span class="menu-ic">{{ ic('glass') }}</span> Glass transparency</a>
+    <a class="menu-item" href="/settings/profile#privacy"><span class="menu-ic">{{ ic('lock') }}</span> Privacy</a>
     <div class="menu-group">More</div>
-    <a class="menu-item" href="/notifications"><span class="menu-ic">🔔</span> Notifications</a>
-    <a class="menu-item" href="/app"><span class="menu-ic">📱</span> Get the app</a>
-    <a class="menu-item" href="/logout"><span class="menu-ic">🚪</span> Logout</a>
+    <a class="menu-item" href="/notifications"><span class="menu-ic">{{ ic('alerts') }}</span> Notifications</a>
+    <a class="menu-item" href="/app"><span class="menu-ic">{{ ic('app') }}</span> Get the app</a>
+    <a class="menu-item" href="/logout"><span class="menu-ic">{{ ic('logout') }}</span> Logout</a>
   </aside>
 
   <main class="feed">
@@ -1455,11 +1500,11 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     </div>
   </div>
   <div class="inc-actions">
-    <button type="button" class="inc-btn inc-answer" id="inc-answer">📞 Answer</button>
-    <button type="button" class="inc-btn inc-decline" id="inc-decline">✖ Decline</button>
+    <button type="button" class="inc-btn inc-answer" id="inc-answer">{{ ic('phone') }} Answer</button>
+    <button type="button" class="inc-btn inc-decline" id="inc-decline">{{ ic('x') }} Decline</button>
   </div>
   <div class="inc-actions">
-    <button type="button" class="inc-btn inc-reply-btn" id="inc-reply">💬 Reply &amp; decline</button>
+    <button type="button" class="inc-btn inc-reply-btn" id="inc-reply">{{ ic('messages') }} Reply &amp; decline</button>
   </div>
   <div id="inc-reply-panel" hidden>
     <div class="inc-chips">
@@ -1507,11 +1552,11 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   <div id="call-toast" hidden></div>
   <div class="call-controls" id="call-controls">
     <button type="button" class="call-ctl sm" id="call-min-btn" title="Minimize">⌄</button>
-    <button type="button" class="call-ctl" id="call-mute-btn" title="Mute">🎤</button>
-    <button type="button" class="call-ctl" id="call-cam-btn" title="Camera on/off" hidden>📷</button>
+    <button type="button" class="call-ctl" id="call-mute-btn" title="Mute">{{ ic('mic') }}</button>
+    <button type="button" class="call-ctl" id="call-cam-btn" title="Camera on/off" hidden>{{ ic('camera') }}</button>
     <button type="button" class="call-ctl" id="call-flip-btn" title="Switch camera" hidden>🔄</button>
     <button type="button" class="call-ctl sm" id="call-pip-btn" title="Pop out video" hidden>⧉</button>
-    <button type="button" class="call-ctl" id="call-end-btn" title="End call">📞</button>
+    <button type="button" class="call-ctl" id="call-end-btn" title="End call">{{ ic('phone') }}</button>
   </div>
 </div>
 
@@ -1527,8 +1572,8 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     </div>
   </div>
   <div class="call-mini-btns">
-    <button type="button" class="call-mini-btn" id="call-mini-mute" title="Mute">🎤</button>
-    <button type="button" class="call-mini-btn" id="call-mini-end" title="End call">📞</button>
+    <button type="button" class="call-mini-btn" id="call-mini-mute" title="Mute">{{ ic('mic') }}</button>
+    <button type="button" class="call-mini-btn" id="call-mini-end" title="End call">{{ ic('phone') }}</button>
   </div>
 </div>
 
@@ -1572,7 +1617,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
 
 <!-- ===== Go Live: floating tab + start sheet (not on /live/ pages) ===== -->
 {% if not hide_golive %}
-<button type="button" id="golive-btn">🔴 Go Live</button>
+<button type="button" id="golive-btn">{{ ic('lives') }} Go Live</button>
 <div id="golive-backdrop" hidden></div>
 <div id="golive-sheet" hidden>
   <div class="aud-title">🔴 Go Live</div>
@@ -2232,9 +2277,9 @@ document.addEventListener('click', function(ev){
     hideMini(); /* a fresh call always starts full-screen, video home */
     controlsRow.style.display = '';
     muteBtn.classList.remove('off');
-    muteBtn.textContent = '🎤';
+    window.hereSetIcon(muteBtn, 'mic', '🎤');
     miniMute.classList.remove('off');
-    miniMute.textContent = '🎤';
+    window.hereSetIcon(miniMute, 'mic', '🎤');
     camBtn.classList.remove('off');
     overlay.hidden = false;
   }
@@ -2459,7 +2504,7 @@ document.addEventListener('click', function(ev){
     if (!t) return;
     [muteBtn, miniMute].forEach(function(b){
       b.classList.toggle('off', !t.enabled);
-      b.textContent = t.enabled ? '🎤' : '🔇';
+      window.hereSetIcon(b, t.enabled ? 'mic' : 'mute', t.enabled ? '🎤' : '🔇');
     });
   }
   function toggleMute(){
@@ -2684,7 +2729,7 @@ document.addEventListener('click', function(ev){
     incoming = call;
     shownRingId = call.id;
     incName.textContent = call.other.name;
-    incKind.textContent = (call.kind === 'video' ? '📹 Video call' : '📞 Voice call') + ' · ringing…';
+    if (window.HERE_ICONS) { incKind.innerHTML = (call.kind === 'video' ? HERE_ICONS.camera : HERE_ICONS.phone) + (call.kind === 'video' ? ' Video call' : ' Voice call') + ' · ringing…'; } else { incKind.textContent = (call.kind === 'video' ? '📹 Video call' : '📞 Voice call') + ' · ringing…'; }
     if (call.other.avatar){
       incImg.src = call.other.avatar; incImg.hidden = false; incPh.hidden = true;
     } else {
@@ -3083,8 +3128,8 @@ document.addEventListener('click', function(ev){
   <div class="mini-live-head" id="mini-live-head">
     <span class="mini-live-dot">● LIVE</span>
     <span class="mini-live-name" id="mini-live-name">Live</span>
-    <button type="button" id="mini-live-expand" title="Open the full live" aria-label="Open the full live">⤢</button>
-    <button type="button" id="mini-live-stop" title="Stop watching" aria-label="Stop watching">✕</button>
+    <button type="button" id="mini-live-expand" title="Open the full live" aria-label="Open the full live">{{ ic('expand') }}</button>
+    <button type="button" id="mini-live-stop" title="Stop watching" aria-label="Stop watching">{{ ic('x') }}</button>
   </div>
   <iframe id="mini-live-frame" title="Mini live player"
     allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
@@ -3096,17 +3141,17 @@ document.addEventListener('click', function(ev){
 <div id="create-backdrop" hidden></div>
 <div id="create-sheet" hidden role="dialog" aria-label="Create">
   <div class="create-grip"></div>
-  <a class="create-row" href="/home#composer-body"><span class="create-ic">✍️</span><span><b>Post</b><small>Share a thought, photo or video</small></span></a>
-  <a class="create-row" href="/stories/new"><span class="create-ic">📸</span><span><b>Story</b><small>Here for 24 hours</small></span></a>
-  <a class="create-row" href="/home?compose=video#composer-body"><span class="create-ic">🎬</span><span><b>Peep</b><small>Post a video — it lands in Peeps</small></span></a>
-  <button type="button" class="create-row" id="create-golive"><span class="create-ic">🔴</span><span><b>Live</b><small>Go live with your people</small></span></button>
+  <a class="create-row" href="/home#composer-body"><span class="create-ic">{{ ic('post') }}</span><span><b>Post</b><small>Share a thought, photo or video</small></span></a>
+  <a class="create-row" href="/stories/new"><span class="create-ic">{{ ic('story') }}</span><span><b>Story</b><small>Here for 24 hours</small></span></a>
+  <a class="create-row" href="/home?compose=video#composer-body"><span class="create-ic">{{ ic('peeps') }}</span><span><b>Peep</b><small>Post a video — it lands in Peeps</small></span></a>
+  <button type="button" class="create-row" id="create-golive"><span class="create-ic">{{ ic('lives') }}</span><span><b>Live</b><small>Go live with your people</small></span></button>
 </div>
 <nav id="site-tabbar" aria-label="Main">
-  <a class="tab-it" data-tab="/home" href="/home"><span class="tab-ic">🏠</span>Home</a>
-  <a class="tab-it" data-tab="/views" href="/views"><span class="tab-ic">🎬</span>Peeps</a>
-  <a class="tab-it" data-tab="/friends" href="/friends"><span class="tab-ic">👥</span>Friends{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
-  <a class="tab-it" data-tab="/market" href="/market"><span class="tab-ic">🛒</span>Market</a>
-  <a class="tab-it" data-tab="/notifications" href="/notifications"><span class="tab-ic">🔔</span>Alerts{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
+  <a class="tab-it" data-tab="/home" href="/home"><span class="tab-ic">{{ ic('home') }}</span>Home</a>
+  <a class="tab-it" data-tab="/views" href="/views"><span class="tab-ic">{{ ic('peeps') }}</span>Peeps</a>
+  <a class="tab-it" data-tab="/friends" href="/friends"><span class="tab-ic">{{ ic('friends') }}</span>Friends{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
+  <a class="tab-it" data-tab="/market" href="/market"><span class="tab-ic">{{ ic('market') }}</span>Market</a>
+  <a class="tab-it" data-tab="/notifications" href="/notifications"><span class="tab-ic">{{ ic('alerts') }}</span>Alerts{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
   <a class="tab-it tab-av" data-tab="/user/{{ user.id }}" href="/user/{{ user.id }}">{% if user.avatar %}<img src="{{ user.avatar|e }}" alt="me">{% else %}<span class="tab-av-ph">{{ user.name[:1]|upper|e }}</span>{% endif %}You</a>
 </nav>
 <script>

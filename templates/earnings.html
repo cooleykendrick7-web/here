@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="section-title">📊 My earnings</div>
+  <div class="section-title">{{ ic('poll') }} My earnings</div>
   <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:8px">
     <div>
       <div style="font-size:30px;font-weight:900;color:var(--red)">{{ lifetime }} 🎟️</div>
@@ -74,7 +74,7 @@
 </div>
 
 <div class="card">
-  <div class="section-title">💰 Cash out</div>
+  <div class="section-title">{{ ic('moneybag') }} Cash out</div>
   {% if pending %}
   <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and is waiting for the owner's approval. You'll see it marked paid right here.</p>
   <p class="cashout-status" style="font-size:14.5px;margin-top:8px">Cash-out status: waiting for the owner's approval — once it's approved, {{ pending.dollars|e }} is on its way to you.</p>

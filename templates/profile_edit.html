@@ -179,6 +179,39 @@
   </form>
 </div>
 
+<div class="card" id="icons">
+  <div class="section-title">🎨 Icon style</div>
+  <p style="margin-top:8px;color:var(--muted)">Every icon on HERE, redrawn as custom art — no more phone emojis. Pick a finish and it applies on YOUR screen everywhere: menus, tabs, post buttons, lives. <b>Emoji</b> is the classic look and stays the default.</p>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="ipGlass" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".78"/><stop offset=".5" stop-color="#fff" stop-opacity=".34"/><stop offset="1" stop-color="#fff" stop-opacity=".18"/></linearGradient>
+  <linearGradient id="ipJelly" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff9d9d"/><stop offset=".45" stop-color="#f0443e"/><stop offset="1" stop-color="#b30f1d"/></linearGradient>
+  <linearGradient id="ipChrome" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfdff"/><stop offset=".38" stop-color="#c9ccd6"/><stop offset=".52" stop-color="#787d8c"/><stop offset=".66" stop-color="#e8eaf2"/><stop offset="1" stop-color="#9ba0ae"/></linearGradient>
+  <linearGradient id="ipGold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff3b0"/><stop offset=".35" stop-color="#f6d860"/><stop offset=".55" stop-color="#c99612"/><stop offset=".75" stop-color="#ffe98a"/><stop offset="1" stop-color="#a8740a"/></linearGradient>
+  </defs></svg>
+  <form action="/settings/icons" method="post" style="margin-top:12px">
+    <div class="look-schemes">
+      {% for s, label in icon_styles %}
+      <label class="look-pill"><input type="radio" name="icon_style" value="{{ s }}" {% if icon_style == s %}checked{% endif %}> <span class="icon-prev ip-{{ s }}">{% for k in ('home','peeps','love','gift','gear') %}{{ icon_previews[s][k] }}{% endfor %}</span> {{ label }}</label>
+      {% endfor %}
+    </div>
+    <button class="primary" type="submit" style="margin-top:12px">Save icon style</button>
+  </form>
+  <style>
+  /* previews sit on a dark chip (like the specimen board) so
+     every finish reads the same on light and dark pages — and
+     must beat the page's own body.icons-* finish rules, so each
+     finish always shows ITSELF in the picker */
+  .icon-prev{display:inline-flex;gap:3px;align-items:center;margin-right:6px;font-size:19px;background:#17171c;border:1px solid #2c2c33;border-radius:9px;padding:4px 7px}
+  .icon-prev .hic{width:21px;height:21px;vertical-align:-4px}
+  body .icon-prev.ip-solid .hic{fill:#f2f2f4;stroke:none;filter:none}
+  body .icon-prev.ip-glass .hic{fill:url(#ipGlass);stroke:rgba(255,255,255,.9);stroke-width:.6;filter:none}
+  body .icon-prev.ip-jelly .hic{fill:url(#ipJelly);stroke:rgba(120,0,10,.35);stroke-width:.5;filter:none}
+  body .icon-prev.ip-chrome .hic{fill:url(#ipChrome);stroke:rgba(20,20,25,.35);stroke-width:.5;filter:none}
+  body .icon-prev.ip-gold .hic{fill:url(#ipGold);stroke:rgba(90,60,0,.4);stroke-width:.5;filter:none}
+  body .icon-prev.ip-transparent .hic{fill:rgba(255,255,255,.07);stroke:#fff;stroke-width:1;filter:none}
+  </style>
+</div>
+
 <div class="card" id="status">
   <div class="section-title">⚡ Status</div>
   <p style="margin-top:8px;color:var(--muted)">Your lightning bolt tells people if you're around: <span style="color:#22c55e">⚡ green</span> = active, <span style="color:#eab308">⚡ yellow</span> = away, <span style="color:#ef4444">⚡ red</span> = offline.</p>

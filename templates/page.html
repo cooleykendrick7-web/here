@@ -13,15 +13,15 @@
     <div class="pmeta" style="margin:8px 0">{{ page.members }} members · by {{ page.owner_name|e }}</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       {% if page.is_owner %}
-      <a class="btn-ghost btn-sm" href="/page/{{ page.id }}/edit">✏️ Edit Page</a>
-      <a class="btn-ghost btn-sm" href="/page/{{ page.id }}/promote">📣 Run as ad</a>
+      <a class="btn-ghost btn-sm" href="/page/{{ page.id }}/edit">{{ ic('post') }} Edit Page</a>
+      <a class="btn-ghost btn-sm" href="/page/{{ page.id }}/promote">{{ ic('mega') }} Run as ad</a>
       {% if page.is_verified %}
       <span class="kind-tag"><span class="verified-star">★</span> Verified</span>
       {% elif page.verification_status == 'pending' %}
       <span class="kind-tag">⏳ Verification pending</span>
       {% else %}
       <form class="inline-form" action="/verify/page/{{ page.id }}/request" method="post">
-        <button type="submit" class="btn-ghost btn-sm">⭐ Verify page</button>
+        <button type="submit" class="btn-ghost btn-sm">{{ ic('star2') }} Verify page</button>
       </form>
       {% endif %}
       {% elif page.joined %}

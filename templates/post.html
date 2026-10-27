@@ -39,7 +39,7 @@
 {% endmacro %}
 
 <div class="card">
-  <div class="section-title">💬 Comments</div>
+  <div class="section-title">{{ ic('messages') }} Comments</div>
   {% for c in post.comments %}
   {{ comment_row(c, post, false) }}
   {% for r in c.replies %}

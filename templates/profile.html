@@ -22,20 +22,20 @@
       {% if profile.spot_name %}
       <h2 class="spot-title">{{ profile.spot_name|e }}</h2>
       <div class="spot-owner-line">
-        <span class="spot-real-name">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">★</span>{% endif %}</span>
+        <span class="spot-real-name">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}</span>
         {% if not profile.is_self %}
         <form class="inline-form" action="/tap/{{ profile.id }}" method="post">
-          <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">🖐️ Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>
+          <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">{{ ic('tap') }} Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>
         </form>
         {% elif profile.tap_count %}
         <span class="kind-tag">🖐️ {{ profile.tap_count }} taps</span>
         {% endif %}
       </div>
       {% else %}
-      <h2 style="font-size:24px">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">★</span>{% endif %}
+      <h2 style="font-size:24px">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}
         {% if not profile.is_self %}
         <form class="inline-form" action="/tap/{{ profile.id }}" method="post">
-          <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">🖐️ Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>
+          <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">{{ ic('tap') }} Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>
         </form>
         {% elif profile.tap_count %}
         <span class="kind-tag">🖐️ {{ profile.tap_count }} taps</span>
@@ -45,7 +45,7 @@
       {% if not profile.is_private_locked %}
       <div class="post-meta" style="margin-top:4px">{{ profile.friend_count }} friends · joined {{ profile.created_at|e }}</div>
       <div class="post-meta" style="margin-top:2px"><a href="/user/{{ profile.id }}/followers">{{ profile.follower_count }} Followers</a> · <a href="/user/{{ profile.id }}/following">{{ profile.following_count }} Following</a></div>
-      {% if profile.is_insider %}<span class="kind-tag">⭐ HERE Insider</span>{% elif profile.is_gold_inviter %}<span class="kind-tag">🥇 Gold Inviter</span>{% endif %}
+      {% if profile.is_insider %}<span class="kind-tag">{{ ic('star2') }} HERE Insider</span>{% elif profile.is_gold_inviter %}<span class="kind-tag">{{ ic('medal') }} Gold Inviter</span>{% endif %}
       {% if profile.streak and profile.streak >= 2 %}<span class="kind-tag">🔥 {{ profile.streak }} day streak</span>{% endif %}
       {% if profile.contest_winner %}<span class="kind-tag">🏆 My Views Winner</span>{% endif %}
       <span class="kind-tag">🎤 Live Level: {{ profile.live_level.label|e }}</span>
@@ -55,24 +55,24 @@
       {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
         {% if profile.live_id %}
-        <a class="btn" href="/live/{{ profile.live_id }}" style="background:var(--red);animation:livepulse 1.2s infinite">🔴 LIVE — watch now</a>
+        <a class="btn" href="/live/{{ profile.live_id }}" style="background:var(--red);animation:livepulse 1.2s infinite">{{ ic('lives') }} LIVE — watch now</a>
         {% endif %}
-        <a class="btn-ghost" href="/lives">🔴 Lives</a>
-        <button type="button" class="btn-ghost btn-sm" data-copy-path="/u/{{ profile.id }}">🔗 Share profile</button>
+        <a class="btn-ghost" href="/lives">{{ ic('lives') }} Lives</a>
+        <button type="button" class="btn-ghost btn-sm" data-copy-path="/u/{{ profile.id }}">{{ ic('link') }} Share profile</button>
         {% if profile.is_self %}
-        <a class="btn-ghost" href="/invite">🎟 Invite friends</a>
-        <a class="btn-ghost" href="/settings/profile">✏️ Edit Profile</a>
-        <a class="btn-ghost" href="/earnings">📊 My earnings</a>
-        <a class="btn-ghost" href="/settings/profile#spot">🏠 Customize my spot</a>
+        <a class="btn-ghost" href="/invite">{{ ic('tickets') }} Invite friends</a>
+        <a class="btn-ghost" href="/settings/profile">{{ ic('post') }} Edit Profile</a>
+        <a class="btn-ghost" href="/earnings">{{ ic('poll') }} My earnings</a>
+        <a class="btn-ghost" href="/settings/profile#spot">{{ ic('home') }} Customize my spot</a>
         {% if profile.is_private %}<span class="kind-tag">🔒 Private</span>{% endif %}
-        <a class="kind-tag" href="/settings/profile#creator-mode" style="text-decoration:none">🎨 Creator Mode: {% if profile.creator_mode %}On{% else %}Off{% endif %}</a>
+        <a class="kind-tag" href="/settings/profile#creator-mode" style="text-decoration:none">{{ ic('palette') }} Creator Mode: {% if profile.creator_mode %}On{% else %}Off{% endif %}</a>
         {% if profile.is_verified %}
-        <span class="kind-tag"><span class="verified-star">★</span> Verified</span>
+        <span class="kind-tag"><span class="verified-star">{{ ic('verified') }}</span> Verified</span>
         {% elif profile.verification_status == 'pending' %}
-        <span class="kind-tag">⏳ Verification pending</span>
+        <span class="kind-tag">{{ ic('hourglass') }} Verification pending</span>
         {% else %}
         <form class="inline-form" action="/verify/user/request" method="post">
-          <button type="submit" class="btn btn-sm">⭐ Verify me</button>
+          <button type="submit" class="btn btn-sm">{{ ic('star2') }} Verify me</button>
         </form>
         {% endif %}
         {% elif profile.req_status == 'none' %}
@@ -80,7 +80,7 @@
           <button type="submit" class="btn btn-sm">➕ Add Friend</button>
         </form>
         {% elif profile.req_status == 'pending_out' %}
-        <button class="btn-ghost btn-sm" disabled>⏳ Request Sent</button>
+        <button class="btn-ghost btn-sm" disabled>{{ ic('hourglass') }} Request Sent</button>
         {% elif profile.req_status == 'pending_in' %}
         <form class="inline-form" action="/friends/accept/{{ profile.id }}" method="post">
           <button type="submit" class="btn btn-sm">✅ Accept Request</button>
@@ -104,11 +104,11 @@
           <button type="submit" class="btn-ghost btn-sm" title="Follow {{ profile.name|e }} — see their lives and posts in your lists; following never unlocks a private profile">➕ Follow</button>
         </form>
         {% endif %}
-        <a class="btn-ghost btn-sm" href="/messages/{{ profile.id }}">💬 Message</a>
+        <a class="btn-ghost btn-sm" href="/messages/{{ profile.id }}">{{ ic('messages') }} Message</a>
         {% include "partials/page_gift.html" %}
         {% if profile.can_steal_look %}
         <form class="inline-form" action="/user/{{ profile.id }}/steal-look" method="post">
-          <button type="submit" class="btn-ghost btn-sm" title="Copy {{ profile.name|e }}'s look — scheme, colors and style — to your own HERE. Their background photo stays theirs.">🎨 Steal this look</button>
+          <button type="submit" class="btn-ghost btn-sm" title="Copy {{ profile.name|e }}'s look — scheme, colors and style — to your own HERE. Their background photo stays theirs.">{{ ic('palette') }} Steal this look</button>
         </form>
         {% endif %}
         {% if profile.muted_by_viewer %}
@@ -218,11 +218,11 @@
     {% if not profile.is_self %}<input type="hidden" name="wall_user_id" value="{{ profile.id }}">{% endif %}
     <input type="hidden" name="next" value="/user/{{ profile.id }}">
     <div class="kind-tabs" id="kind-tabs">
-      <button type="button" class="kind-tab active" data-kind="text">📝 Status</button>
-      <button type="button" class="kind-tab" data-kind="photo">📷 Photo</button>
-      <button type="button" class="kind-tab" data-kind="feeling">😊 Feeling</button>
-      <button type="button" class="kind-tab" data-kind="video">🎬 Video</button>
-      <button type="button" class="kind-tab" data-kind="poll">📊 Poll</button>
+      <button type="button" class="kind-tab active" data-kind="text">{{ ic('note') }} Status</button>
+      <button type="button" class="kind-tab" data-kind="photo">{{ ic('camera') }} Photo</button>
+      <button type="button" class="kind-tab" data-kind="feeling">{{ ic('smile') }} Feeling</button>
+      <button type="button" class="kind-tab" data-kind="video">{{ ic('peeps') }} Video</button>
+      <button type="button" class="kind-tab" data-kind="poll">{{ ic('poll') }} Poll</button>
     </div>
     <div class="composer-body-wrap">
       <textarea name="body" id="composer-body" placeholder="{% if profile.is_self %}What's on your mind?{% else %}Write on {{ profile.name|e }}'s wall…{% endif %}"></textarea>

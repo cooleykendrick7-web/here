@@ -18,10 +18,10 @@
 </style>
 
 <div class="card">
-  <h2 style="font-size:24px">🔴 Lives</h2>
+  <h2 style="font-size:24px">{{ ic('lives') }} Lives</h2>
   <p style="color:var(--muted);margin-top:6px">Watch people who are live right now — friends and people you follow come first.</p>
   <div id="lives-random-slot" style="margin-top:12px">
-    {% if lives %}<button type="button" class="btn" id="lives-random">🎲 Random live</button>{% endif %}
+    {% if lives %}<button type="button" class="btn" id="lives-random">{{ ic('die') }} Random live</button>{% endif %}
   </div>
 </div>
 
@@ -54,7 +54,7 @@
       {% if l.my_join_pending %}
       <button type="button" class="btn-ghost btn-sm" disabled>⏳ Asked — waiting for host</button>
       {% else %}
-      <button type="button" class="btn-ghost btn-sm js-ask-join" data-live="{{ l.id }}">🙋 Ask to join panel</button>
+      <button type="button" class="btn-ghost btn-sm js-ask-join" data-live="{{ l.id }}">{{ ic('ask') }} Ask to join panel</button>
       {% endif %}
       {% if l.following %}
       <span class="kind-tag">Following ✓</span>

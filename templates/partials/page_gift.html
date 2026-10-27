@@ -7,12 +7,12 @@
    re-send behind an in-flight lock, and a successful send plays
    the gift's own Build RICH giftfx animation across the screen. #}
 {% if page_gift %}
-<button type="button" class="btn btn-sm" id="pgift-open">🎁 Gift</button>
+<button type="button" class="btn btn-sm" id="pgift-open">{{ ic('gift') }} Gift</button>
 <div id="pgift-backdrop" hidden></div>
 <div id="pgift-sheet" hidden role="dialog" aria-label="Send a gift">
   <div class="pgift-head">
-    <span class="pgift-title">🎁 Gift {{ page_gift.recipient_name|e }}</span>
-    <button type="button" class="pgift-x" id="pgift-close" aria-label="Close">✕</button>
+    <span class="pgift-title">{{ ic('gift') }} Gift {{ page_gift.recipient_name|e }}</span>
+    <button type="button" class="pgift-x" id="pgift-close" aria-label="Close">{{ ic('x') }}</button>
   </div>
   <div id="pgift-actions"></div>
   <div class="pgift-error" id="pgift-error" hidden></div>

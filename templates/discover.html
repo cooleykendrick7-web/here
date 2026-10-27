@@ -3,12 +3,12 @@
 {% block content %}
 
 <div class="card">
-  <div class="section-title">🧭 Discover</div>
+  <div class="section-title">{{ ic('discover') }} Discover</div>
   <p style="color:var(--muted);font-size:14px">People you may know and what's trending this week on HERE.</p>
 </div>
 
 <div class="card">
-  <div class="section-title">👋 People you may know</div>
+  <div class="section-title">{{ ic('wave') }} People you may know</div>
   {% for p in people %}
   <div class="row-item">
     {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">
@@ -46,7 +46,7 @@
 
 {% if insiders %}
 <div class="card">
-  <div class="section-title">⭐ HERE Insiders</div>
+  <div class="section-title">{{ ic('star2') }} HERE Insiders</div>
   {% for p in insiders %}
   <div class="row-item">
     {% if p.avatar %}<img class="avatar av-40" src="{{ p.avatar|e }}" alt="">

@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="card">
-  <div class="section-title">🔎 Search HERE</div>
+  <div class="section-title">{{ ic('search') }} Search HERE</div>
   <form action="/search" method="get" style="margin-top:10px">
     <div class="field">
       <input type="text" name="q" placeholder="Search people and pages…" value="{{ q|e }}" autocomplete="off">
@@ -14,7 +14,7 @@
 
 {% if q %}
 <div class="card">
-  <div class="section-title">👤 People</div>
+  <div class="section-title">{{ ic('profile') }} People</div>
   {% for u in users %}
   <div class="row-item">
     {% if u.avatar %}<img class="avatar av-40" src="{{ u.avatar|e }}" alt="">
@@ -52,7 +52,7 @@
 </div>
 
 <div class="card">
-  <div class="section-title">📄 Pages</div>
+  <div class="section-title">{{ ic('page') }} Pages</div>
   {% for p in pages %}
   <div class="row-item">
     <div class="grow">

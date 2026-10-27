@@ -9,7 +9,7 @@
   </div>
 
   {% if box == 'sent' %}
-  <div class="section-title">📤 Sent Messages</div>
+  <div class="section-title">{{ ic('send') }} Sent Messages</div>
   {% for m in sent %}
   <div class="row-item" style="border-radius:8px;padding-left:8px;padding-right:8px">
     <a class="conv-link" href="/messages/{{ m.friend_id }}">
@@ -30,7 +30,7 @@
   <p style="color:var(--muted);font-size:14px">No sent messages yet.</p>
   {% endfor %}
   {% else %}
-  <div class="section-title">💬 Messages</div>
+  <div class="section-title">{{ ic('messages') }} Messages</div>
   {% for t in threads %}
   <div class="row-item{% if t.unread %} unread-hl{% endif %}" style="border-radius:8px;padding-left:8px;padding-right:8px">
     <a class="conv-link" href="/messages/{{ t.friend_id }}">

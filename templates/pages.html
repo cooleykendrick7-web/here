@@ -4,10 +4,10 @@
 
 <div class="card" style="display:flex;align-items:center;gap:12px">
   <div class="grow" style="flex:1">
-    <div class="section-title">📄 Pages</div>
+    <div class="section-title">{{ ic('page') }} Pages</div>
     <p style="color:var(--muted);font-size:14px">Community, market, fan club & seller pages.</p>
   </div>
-  <a class="btn btn-sm" href="/pages/new">➕ Create Page</a>
+  <a class="btn btn-sm" href="/pages/new">{{ ic('create') }} Create Page</a>
 </div>
 
 <div class="pages-grid">
@@ -25,7 +25,7 @@
       <div class="pmeta">{{ p.members }} members · by {{ p.owner_name|e }}</div>
       {% if p.joined %}
       <form class="inline-form" action="/page/{{ p.id }}/leave" method="post">
-        <button type="submit" class="btn-ghost btn-sm">✓ Joined — Leave</button>
+        <button type="submit" class="btn-ghost btn-sm">{{ ic('check') }} Joined — Leave</button>
       </form>
       {% else %}
       <form class="inline-form" action="/page/{{ p.id }}/join" method="post">
