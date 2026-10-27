@@ -1,19 +1,19 @@
 {% extends "base.html" %}
-{% block title %}Reels — HERE{% endblock %}
+{% block title %}Peeps — HERE{% endblock %}
 {% block content %}
-<div class="module-head"><b>🎬 Reels</b><a href="/home?compose=video#composer-body">Post a reel</a></div>
+<div class="module-head"><b>🎬 Peeps</b><a href="/home?compose=video#composer-body">Post a peep</a></div>
 {% if videos %}
 <div class="reels-grid">
   {% for post in videos %}
   <a class="reel-card" href="/post/{{ post.id }}">
     <video muted playsinline preload="metadata" src="{{ post.media|e }}"></video>
     <span class="rc-shade"></span>
-    <span class="rc-play">▶ Reel</span>
+    <span class="rc-play">▶ Peep</span>
     <span class="rc-name">{{ post.author_name|e }}</span>
   </a>
   {% endfor %}
 </div>
 {% else %}
-<div class="card"><p style="color:var(--muted)">No video posts yet — post the first reel!</p></div>
+<div class="card"><p style="color:var(--muted)">No video posts yet — post the first peep!</p></div>
 {% endif %}
 {% endblock %}

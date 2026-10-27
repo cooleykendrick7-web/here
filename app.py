@@ -4158,6 +4158,7 @@ def _feed_people_suggestions(viewer_id, limit=6):
 
 
 @app.get("/reels", response_class=HTMLResponse)
+@app.get("/peeps", response_class=HTMLResponse)
 async def reels_page(request: Request):
     """Reels (redesign Phase 1): a grid of video posts from
     the same universe as the home feed. Phase 3 turns this
@@ -7339,6 +7340,15 @@ def look_scope_style_for(u):
     always all of them, so a viewer's own vars can never cascade into
     somebody else's profile (the spot_scope_style_for discipline)."""
     alpha, soft, rgb, accent, _cls = look_vars_for(u)
+    # Transparency (Ken's order): a profile with a custom
+    # background must SHOW it. An owner who never touched the
+    # transparency slider gets a clearer scope default (0.55)
+    # so visitors see the background through the profile's
+    # boxes; an explicit slider choice always wins, and only
+    # the Glass scheme is see-through by design.
+    if (u and u.get("background") and not u.get("glass_set")
+            and look_scheme_for(u) == "glass"):
+        alpha = "0.55"
     return (f"--glass-alpha:{alpha};--glass-alpha-soft:{soft}"
             f";--glass-rgb:{rgb};--look-accent:{accent}"
             f";--look-accent-rgb:{look_accent_rgb_str_for(u)}")
@@ -8013,8 +8023,11 @@ async def settings_boxes(request: Request):
 
     Only ever touches the caller's own row, and it is purely a
     per-viewer display preference: it changes how see-through the
-    boxes are on THEIR screen, everywhere on HERE, and changes
-    nothing for anybody else. A non-number changes nothing.
+    boxes are on THEIR screen, everywhere on HERE. One exception
+    (Ken's transparency order): on their own PROFILE page the
+    owner's saved value rules what visitors see, so their custom
+    background shows the way they set it. A non-number changes
+    nothing.
     """
     user, err = require_login(request)
     if err:

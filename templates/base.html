@@ -1311,7 +1311,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   <div class="menu-group">Fun</div>
   <a href="/games"><span>🎮</span> Games</a>
   <a href="/tickets"><span>🎟️</span> Tickets</a>
-  <a href="/views"><span>🎬</span> My Views</a>
+  <a href="/views"><span>🎬</span> Peeps</a>
   <a href="/discover"><span>🧭</span> Discover</a>
   <a href="/daily"><span>🔥</span> Daily</a>
   <a href="/contest"><span>🏆</span> Contest</a>
@@ -1328,7 +1328,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
   <a href="/settings/profile"><span>✏️</span> Edit Profile</a>
   <a href="/settings/profile#spot"><span>🏠</span> Your Spot</a>
   <a href="/settings/profile#status"><span>⚡</span> Status</a>
-  <a href="/settings/profile#boxes"><span>🪟</span> Boxes</a>
+  <a href="/settings/profile#boxes"><span>🪟</span> Glass transparency</a>
   <a href="/settings/profile#privacy"><span>🔒</span> Privacy</a>
   <div class="menu-group">More</div>
   <a href="/notifications"><span>🔔</span> Notifications</a>
@@ -1354,7 +1354,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <div class="menu-group">Fun</div>
     <a class="menu-item" href="/games"><span class="menu-ic">🎮</span> Games</a>
     <a class="menu-item" href="/tickets"><span class="menu-ic">🎟️</span> Tickets</a>
-    <a class="menu-item" href="/views"><span class="menu-ic">🎬</span> My Views</a>
+    <a class="menu-item" href="/views"><span class="menu-ic">🎬</span> Peeps</a>
     <a class="menu-item" href="/discover"><span class="menu-ic">🧭</span> Discover</a>
     <a class="menu-item" href="/daily"><span class="menu-ic">🔥</span> Daily</a>
     <a class="menu-item" href="/contest"><span class="menu-ic">🏆</span> Contest</a>
@@ -1371,7 +1371,7 @@ body.has-profile-bg{background-image:linear-gradient(rgba(8,8,14,.58),rgba(8,8,1
     <a class="menu-item" href="/settings/profile"><span class="menu-ic">✏️</span> Edit Profile</a>
     <a class="menu-item" href="/settings/profile#spot"><span class="menu-ic">🏠</span> Your Spot</a>
     <a class="menu-item" href="/settings/profile#status"><span class="menu-ic">⚡</span> Status</a>
-    <a class="menu-item" href="/settings/profile#boxes"><span class="menu-ic">🪟</span> Boxes</a>
+    <a class="menu-item" href="/settings/profile#boxes"><span class="menu-ic">🪟</span> Glass transparency</a>
     <a class="menu-item" href="/settings/profile#privacy"><span class="menu-ic">🔒</span> Privacy</a>
     <div class="menu-group">More</div>
     <a class="menu-item" href="/notifications"><span class="menu-ic">🔔</span> Notifications</a>
@@ -3089,12 +3089,12 @@ document.addEventListener('click', function(ev){
   <div class="create-grip"></div>
   <a class="create-row" href="/home#composer-body"><span class="create-ic">✍️</span><span><b>Post</b><small>Share a thought, photo or video</small></span></a>
   <a class="create-row" href="/stories/new"><span class="create-ic">📸</span><span><b>Story</b><small>Here for 24 hours</small></span></a>
-  <a class="create-row" href="/home?compose=video#composer-body"><span class="create-ic">🎬</span><span><b>Reel</b><small>Post a video to the feed</small></span></a>
+  <a class="create-row" href="/home?compose=video#composer-body"><span class="create-ic">🎬</span><span><b>Peep</b><small>Post a video — it lands in Peeps</small></span></a>
   <button type="button" class="create-row" id="create-golive"><span class="create-ic">🔴</span><span><b>Live</b><small>Go live with your people</small></span></button>
 </div>
 <nav id="site-tabbar" aria-label="Main">
   <a class="tab-it" data-tab="/home" href="/home"><span class="tab-ic">🏠</span>Home</a>
-  <a class="tab-it" data-tab="/reels" href="/reels"><span class="tab-ic">🎬</span>Reels</a>
+  <a class="tab-it" data-tab="/views" href="/views"><span class="tab-ic">🎬</span>Peeps</a>
   <a class="tab-it" data-tab="/friends" href="/friends"><span class="tab-ic">👥</span>Friends{% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}</a>
   <a class="tab-it" data-tab="/market" href="/market"><span class="tab-ic">🛒</span>Market</a>
   <a class="tab-it" data-tab="/notifications" href="/notifications"><span class="tab-ic">🔔</span>Alerts{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>

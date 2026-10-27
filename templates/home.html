@@ -173,13 +173,13 @@
     </div>
   {% elif item.kind == 'reels' %}
     <div class="card">
-      <div class="module-head"><b>🎬 Reels</b><a href="/reels">See all</a></div>
+      <div class="module-head"><b>🎬 Peeps</b><a href="/peeps">See all</a></div>
       <div class="reels-rail">
         {% for v in item.videos %}
         <a class="reel-card" href="/post/{{ v.id }}">
           <video muted playsinline preload="metadata" src="{{ v.media|e }}"></video>
           <span class="rc-shade"></span>
-          <span class="rc-play">▶ Reel</span>
+          <span class="rc-play">▶ Peep</span>
           <span class="rc-name">{{ v.name|e }}</span>
         </a>
         {% endfor %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}🎬 My Views · HERE{% endblock %}
+{% block title %}🎬 Peeps · HERE{% endblock %}
 {% block content %}
 
 <style>
@@ -160,14 +160,14 @@
 
 <div id="views-root">
   <div id="mv-feed"></div>
-  <div id="mv-loading">🎬 Loading Views…</div>
+  <div id="mv-loading">🎬 Loading Peeps…</div>
 
   <div id="mv-topbar">
     <div class="mv-toprow">
-      <div class="mv-title">🎬 My Views</div>
+      <div class="mv-title">🎬 Peeps</div>
       <button class="mv-iconbtn" id="mv-post-btn" type="button">➕ Post a View</button>
       <button class="mv-iconbtn" id="mv-sound-btn" type="button" title="Sound on/off" aria-label="Toggle sound">🔇</button>
-      <a class="mv-iconbtn" href="/home" title="Close" aria-label="Close My Views">✕</a>
+      <a class="mv-iconbtn" href="/home" title="Close" aria-label="Close Peeps">✕</a>
     </div>
     <div class="mv-tagrow">
       <button class="mv-tag" id="mv-active-filter" type="button" hidden></button>
@@ -456,7 +456,7 @@
       clear.addEventListener('click', function () { applyFilter(''); });
       center.appendChild(clear);
     } else {
-      msg.textContent = 'No Views yet. Be the first to post one!';
+      msg.textContent = 'No Peeps yet. Be the first to post one!';
       var add = document.createElement('button');
       add.type = 'button';
       add.className = 'btn';
