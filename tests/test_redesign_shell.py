@@ -307,6 +307,22 @@ check("profile tools: visitors keep Lives + Share visible",
       'class="btn-ghost" href="/lives"' in visp.text
       and "Share profile" in visp.text)
 
+# ------------- Go Live sheet wears the user's glass --------------
+# Ken's report (Oct 27): the Go Live popup was a solid WHITE box on
+# his dark glass profile. It must paint from the glass vars like the
+# other sheets, take theme text colors, and its input too.
+_home = A.get("/home").text
+_i = _home.find("#golive-sheet{")
+check("golive sheet: paints from the glass vars, not var(--card)",
+      _i >= 0 and "rgba(var(--glass-rgb,255,255,255),var(--glass-alpha))"
+      in _home[_i:_i + 400] and "background:var(--card)" not in
+      _home[_i:_i + 400])
+check("golive sheet: dark-look text color list includes it",
+      "body.look-on-dark #golive-sheet" in _home)
+_j = _home.find("#golive-sheet input{")
+check("golive sheet: the title input is glass too",
+      _j >= 0 and "glass-alpha-soft" in _home[_j:_j + 400])
+
 failed = [n for n, ok in RESULTS if not ok]
 print()
 print(f"{len(RESULTS) - len(failed)}/{len(RESULTS)} passed")

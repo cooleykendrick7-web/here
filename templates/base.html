@@ -197,7 +197,7 @@ body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dm
 body.boxes-glass #incoming-sheet, body.boxes-glass #request-sheet{background:rgba(17,17,17,var(--box-alpha))}
 body.boxes-glass .kind-tab, body.boxes-glass .picker-chip, body.boxes-glass .poll-opt-btn{background:rgba(245,246,247,var(--box-alpha))}
 body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
-@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ body.boxes-glass .card, body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass .topbar, body.boxes-glass .mobmenu, body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet {backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)} }
+@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ body.boxes-glass .card, body.boxes-glass .page-card, body.boxes-glass .stat-card, body.boxes-glass .topbar, body.boxes-glass .mobmenu, body.boxes-glass .aud-popup, body.boxes-glass #cmenu-sheet, body.boxes-glass #dmenu-sheet, body.boxes-glass #golive-sheet {backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)} }
 
 /* Build GLASS: the glass blur applies to the LARGE surfaces for
    EVERYONE now (the fills already carry --glass-alpha above) — same
@@ -205,7 +205,7 @@ body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
    Small bubbles and chips (.cbub, .msg-theirs, chips) intentionally
    get NO backdrop blur: dozens of them on screen would jank a phone;
    their translucent fill alone reads as glass. */
-@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ .card, .page-card, .stat-card, .topbar, .mobmenu, .aud-popup, #cmenu-sheet, #dmenu-sheet {backdrop-filter:blur(6px) saturate(1.15);-webkit-backdrop-filter:blur(6px) saturate(1.15)} }
+@supports ((backdrop-filter:blur(6px)) or (-webkit-backdrop-filter:blur(6px))){ .card, .page-card, .stat-card, .topbar, .mobmenu, .aud-popup, #cmenu-sheet, #dmenu-sheet, #golive-sheet {backdrop-filter:blur(6px) saturate(1.15);-webkit-backdrop-filter:blur(6px) saturate(1.15)} }
 
 /* Build LOOKS readability guardrail: when a surface color is set,
    the server computes its luminance and stamps look-on-dark /
@@ -218,7 +218,7 @@ body.boxes-glass .unread-hl{background:rgba(253,238,240,var(--box-alpha))}
    more specific and come later). */
 body.look-on-dark .card, body.look-on-dark .page-card, body.look-on-dark .stat-card,
 body.look-on-dark table.admin, body.look-on-dark .aud-popup, body.look-on-dark #cmenu-sheet,
-body.look-on-dark #dmenu-sheet, body.look-on-dark .tag-suggest, body.look-on-dark .react-picker,
+body.look-on-dark #dmenu-sheet, body.look-on-dark #golive-sheet, body.look-on-dark .tag-suggest, body.look-on-dark .react-picker,
 .spot-scope.look-on-dark .card, .spot-scope.look-on-dark .page-card,
 .spot-scope.look-on-dark .stat-card{color:#f4f4f6}
 body.look-on-dark .card .post-meta, body.look-on-dark .card .sub,
@@ -227,7 +227,7 @@ body.look-on-dark .card .comment .cmeta, body.look-on-dark .stat-card .post-meta
 .spot-scope.look-on-dark .card .comment .cmeta{color:#c3c7d1}
 body.look-on-light .card, body.look-on-light .page-card, body.look-on-light .stat-card,
 body.look-on-light table.admin, body.look-on-light .aud-popup, body.look-on-light #cmenu-sheet,
-body.look-on-light #dmenu-sheet, body.look-on-light .tag-suggest, body.look-on-light .react-picker,
+body.look-on-light #dmenu-sheet, body.look-on-light #golive-sheet, body.look-on-light .tag-suggest, body.look-on-light .react-picker,
 .spot-scope.look-on-light .card, .spot-scope.look-on-light .page-card,
 .spot-scope.look-on-light .stat-card{color:#1c1e21}
 
@@ -487,10 +487,16 @@ body.viewer-spot-text .card .with-line{color:var(--spot-text);opacity:.72}
 #golive-btn:hover{background:var(--red-dark)}
 #golive-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
 #golive-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:min(92vw,380px);background:var(--card);border-radius:14px;padding:16px;
+  width:min(92vw,380px);
+  background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));
+  border:1px solid var(--border);border-radius:14px;padding:16px;
   z-index:2000;box-shadow:0 12px 34px rgba(0,0,0,.4)}
+#golive-sheet .aud-title, #golive-sheet .cmenu-item{color:inherit}
+#golive-sheet .cmenu-item.danger{color:var(--red)}
 #golive-sheet input{width:100%;border:1px solid var(--border);border-radius:10px;
-  padding:11px 12px;font-size:15px;margin:8px 0 12px}
+  padding:11px 12px;font-size:15px;margin:8px 0 12px;color:inherit;
+  background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha-soft))}
+#golive-sheet input::placeholder{color:var(--muted)}
 #golive-error{color:var(--red);font-size:13px;font-weight:600;min-height:16px}
 @keyframes livepulse{0%,100%{opacity:1}50%{opacity:.55}}
 .photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
