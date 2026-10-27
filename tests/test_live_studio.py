@@ -1,20 +1,23 @@
-"""Studio suite (Build STUDIO): 🎬 Studio on the live page —
-game + facecam multitask compositing, face effects, green
-screen, picture-on-screen, and the PC bottom-bar fix.
+"""Studio suite (Build STUDIO + fix round): 🎬 Studio on the
+live page — game + facecam multitask compositing, face effects,
+green screen, picture-on-screen, and the PC bottom-bar fix.
 
-Static: the 🎬 Studio button, the floating PC bar rules, the
-mouse-wake hook, and every load-bearing Studio string on a
-TestClient-rendered live page + node --check.
+Round 2 (Ken: "none of the effects actually work"): the first
+suite proved plumbing (state, tracks, tiles) but never looked at
+a single PIXEL. This one does. The host's mediaDevices are
+MOCKED with deterministic donor canvases — main camera = solid
+blue; facecam = green field with a red disc — so the outgoing
+Studio canvas can be sampled pixel-by-pixel to prove: the main
+picture flows, the face effect (Noir) visibly desaturates, the
+Safari compatibility filter path (per-pixel, ctx.filter absent)
+does the same, the facecam box shows the face donor, the green
+screen keys the green away to the main picture, a shared
+picture lands on screen, and the Studio sheet does NOT rebuild
+itself in a loop (the render->enumerate->render bug that made
+every button in the sheet feel dead).
 
-DOM: one headless Chromium host on a real uvicorn (harness
-pattern from tests/test_live_connect.py — Fetch-relayed HTTP,
-fake media devices). Proves Studio starts (canvas track live,
-own tile shows the 1280x720 Studio picture), facecam turns on,
-the sheet's effect/green-screen controls land in state, a
-picture file lands as an overlay, and Stop restores the plain
-camera picture. Sender-side proof with a real watcher peer is
-the same replaceTrack funnel Live Connect's suite proves; here
-the peer-less publish path + tile binding are what's new.
+Static: buttons, PC bar rules, no lcEnumerate inside
+renderStudioSheet, compat-filter machinery, node --check.
 
 Run:  ./venv/bin/python tests/test_live_studio.py
 """
@@ -91,8 +94,17 @@ for needle, label in [
         ("Put behind me", "backdrop picker"),
         ("Key strength", "key sensitivity slider"),
         ("viewers see the finished picture", "sender-composite note"),
+        ("studioFilterOK", "ctx.filter capability detection"),
+        ("studioPixelFilter", "per-pixel compat filters"),
+        ("studioWorked", "compat person-layer pass"),
+        ("isn't supported in this browser", "honest start-failure toast"),
+        ("Studio could not start", "start exception toast"),
+        ("Compatibility mode on this browser", "sheet compat note"),
 ]:
     check(f"static: {label} present", needle in page)
+check("static: faceOn render no longer enumerates unconditionally (loop fix)",
+      "if (studio.faceOn){\n      lcEnumerate" not in page
+      and "if (studio.faceOn){\n      (lcDevices" in page)
 check("static: PC bar floats as a centered pill on wide screens",
       "@media (min-width:900px)" in page
       and "transform:translateX(-50%)" in page
@@ -119,6 +131,76 @@ check("node --check: live page inline JS parses", all_ok, "; ".join(bad))
 
 PORT = 8995
 ORIGIN = f"http://127.0.0.1:{PORT}"
+
+MOCK_JS = r"""
+(function(){
+  try {
+    var md = navigator.mediaDevices;
+    if (!md) return;
+    function donor(w, h, paint){
+      var c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      paint(c.getContext('2d'), w, h);
+      return c;
+    }
+    function paintMain(x, w, h){
+      x.fillStyle = 'rgb(10,40,220)'; x.fillRect(0, 0, w, h);
+    }
+    function paintFace(x, w, h){
+      x.fillStyle = 'rgb(0,200,0)'; x.fillRect(0, 0, w, h);
+      x.fillStyle = 'rgb(230,30,30)';
+      x.beginPath(); x.arc(w / 2, h / 2, 110, 0, 7); x.fill();
+    }
+    var mainC = donor(640, 480, paintMain);
+    var faceC = donor(640, 480, paintFace);
+    setInterval(function(){
+      paintMain(mainC.getContext('2d'), 640, 480);
+      paintFace(faceC.getContext('2d'), 640, 480);
+    }, 120);
+    var gumCalls = 0, actx = null;
+    function vtrack(canvas, id){
+      var tr = canvas.captureStream(30).getVideoTracks()[0];
+      tr.getSettings = function(){
+        return {deviceId: id, width: canvas.width,
+                height: canvas.height};
+      };
+      return tr;
+    }
+    function atrack(){
+      try {
+        actx = actx || new (window.AudioContext
+                            || window.webkitAudioContext)();
+        return actx.createMediaStreamDestination()
+          .stream.getAudioTracks()[0];
+      } catch (e) { return null; }
+    }
+    md.getUserMedia = function(cons){
+      gumCalls++;
+      var tracks = [];
+      if (cons && cons.audio){
+        var a = atrack();
+        if (a) tracks.push(a);
+      }
+      if (cons && cons.video){
+        var first = gumCalls === 1;
+        tracks.push(vtrack(first ? mainC : faceC,
+                           first ? 'cam-main' : 'cam-face'));
+      }
+      return Promise.resolve(new MediaStream(tracks));
+    };
+    md.enumerateDevices = function(){
+      return Promise.resolve([
+        {deviceId: 'cam-main', kind: 'videoinput',
+         label: 'Main Cam', groupId: 'g1'},
+        {deviceId: 'cam-face', kind:'videoinput',
+         label: 'Face Cam', groupId: 'g1'},
+        {deviceId: 'mic-1', kind: 'audioinput',
+         label: 'Desk Mic', groupId: 'g1'}
+      ]);
+    };
+  } catch (e) {}
+})();
+"""
 
 class Browser:
     def __init__(self, label, cdp_port, token):
@@ -311,7 +393,7 @@ def pump_all(seconds):
                 pass
         time.sleep(0.1)
 
-# ================= DOM: real Chromium host =================
+# ================= DOM: Chromium host, mocked donors =================
 env = dict(os.environ)
 server = subprocess.Popen(
     [sys.executable, "-m", "uvicorn", "app:app",
@@ -319,6 +401,26 @@ server = subprocess.Popen(
     cwd=BASE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     text=True)
 host_b = None
+
+
+def px(b, x, y):
+    return b.ev(
+        "(function(){var c=__liveStudio.canvasEl();"
+        "var t=document.createElement('canvas');"
+        "t.width=1280;t.height=720;"
+        "var g=t.getContext('2d'); g.drawImage(c,0,0);"
+        "var d=g.getImageData(" + str(x) + "," + str(y) + ",1,1).data;"
+        "return [d[0],d[1],d[2]];})()")
+
+
+def click_text(b, sel, needle):
+    return b.ev(
+        "(function(){var bs=document.querySelectorAll('" + sel + "');"
+        "for(var i=0;i<bs.length;i++){"
+        " if(bs[i].textContent.indexOf('" + needle + "')>=0){"
+        "  bs[i].click(); return true;}} return false;})()")
+
+
 try:
     deadline = time.time() + 30
     while True:
@@ -332,18 +434,20 @@ try:
             time.sleep(0.25)
 
     host_b = Browser("studiohost", 8996, H_TOKEN)
+    host_b.cdp("Page.addScriptToEvaluateOnNewDocument",
+               {"source": MOCK_JS})
     LID = H.post("/live/start", json={"title": "Studio DOM"}).json()["id"]
     host_b.navigate(f"/live/{LID}")
     ok = wait_js(host_b,
                  "window.__liveConnect && __liveConnect.localTracks()"
                  ".some(function(t){return t.kind==='video'})", 25)
-    check("boot: host local video live (fake camera)", ok)
+    check("boot: host local video live (mocked main camera)", ok)
     ok = wait_js(host_b,
                  "var b=document.getElementById('ctl-studio');"
                  "!!b && !b.hidden", 15)
     check("boot: 🎬 Studio button visible for the host", ok)
 
-    # ---- PC bar: wide viewport -> floating pill geometry ----
+    # ---- PC bar geometry (wide viewport) ----
     host_b.cdp("Emulation.setDeviceMetricsOverride",
                {"width": 1400, "height": 900, "deviceScaleFactor": 1,
                 "mobile": False})
@@ -351,16 +455,14 @@ try:
     geo = host_b.ev(
         "(function(){var b=document.getElementById('live-controls');"
         "var r=b.getBoundingClientRect();"
-        "return {top:r.top,bottom:r.bottom,height:r.height,"
-        "vh:window.innerHeight,"
-        "fully: r.bottom<=window.innerHeight-10 && r.top>=0,"
+        "return {fully: r.bottom<=window.innerHeight-10 && r.top>=0,"
         "radius:getComputedStyle(b).borderRadius};})()")
     check("PC bar: whole floating bar inside the viewport",
           bool(geo and geo["fully"]), str(geo))
     check("PC bar: pill shape on wide screens (rounded)",
           bool(geo and geo["radius"] not in ("0px", "")), str(geo))
 
-    # ---- open Studio and start it ----
+    # ---- start Studio; the main picture must FLOW (pixels) ----
     host_b.ev("window.__liveStudio.openPanel()")
     time.sleep(0.4)
     txt = host_b.ev("document.getElementById('live-sheet-actions')"
@@ -369,62 +471,49 @@ try:
                    "green screen", "Picture on screen"):
         check(f"sheet: shows {needle!r}", needle in (txt or ""),
               (txt or "")[:200])
-    host_b.ev("(function(){var bs=document.querySelectorAll("
-              "'#live-sheet-actions button');"
-              "for(var i=0;i<bs.length;i++){"
-              " if(bs[i].textContent.indexOf('Start Studio')>=0){"
-              "  bs[i].click(); return true;}} return false;})()")
+    click_text(host_b, "#live-sheet-actions button", "Start Studio")
     ok = wait_js(host_b,
                  "window.__liveStudio && __liveStudio.state().on"
                  " && __liveStudio.state().trackLive", 20)
     check("studio: starts — canvas track live", ok)
-    st = host_b.ev("window.__liveStudio.state()")
+    time.sleep(0.8)
+    c = px(host_b, 640, 360)
+    check("pixels: main camera (blue) flows into the Studio picture",
+          bool(c and c[2] > 150 and c[2] - c[0] > 100), str(c))
     tile = host_b.ev(
         "(function(){var vs=document.querySelectorAll('video');"
         "for(var i=0;i<vs.length;i++){"
         " if(vs[i].srcObject && vs[i].videoWidth===1280)"
-        "  return {w:vs[i].videoWidth,h:vs[i].videoHeight};}"
-        "return null;})()")
-    check("studio: own tile shows the 1280x720 Studio picture",
-          bool(tile and tile["w"] == 1280), str(tile))
+        "  return vs[i].videoWidth;} return 0;})()")
+    check("studio: own tile shows the 1280-wide Studio picture",
+          tile == 1280, str(tile))
 
-    # ---- facecam on (fake device doubles as the second camera) ----
-    host_b.ev("window.__liveStudio.openPanel()")
-    time.sleep(0.3)
-    host_b.ev("(function(){var bs=document.querySelectorAll("
-              "'#live-sheet-actions .studio-seg button');"
-              "for(var i=0;i<bs.length;i++){"
-              " if(bs[i].textContent.indexOf('Facecam on')>=0){"
-              "  bs[i].click(); return true;}} return false;})()")
-    ok = wait_js(host_b,
-                 "__liveStudio.state().faceOn"
-                 " && __liveStudio.state().faceLive", 20)
-    check("studio: facecam turns on (second camera live)", ok)
+    # ---- face effect, NATIVE filter path: Noir desaturates ----
+    click_text(host_b, "#live-sheet-actions .studio-seg button", "Noir")
+    time.sleep(0.6)
+    c = px(host_b, 640, 360)
+    check("pixels: Noir effect visibly desaturates the picture",
+          bool(c and sum(c) > 45 and max(c) - min(c) < 30), str(c))
+    click_text(host_b, "#live-sheet-actions .studio-seg button", "None")
+    time.sleep(0.6)
+    c = px(host_b, 640, 360)
+    check("pixels: effect off restores the blue",
+          bool(c and c[2] > 150 and c[2] - c[0] > 100), str(c))
 
-    # ---- effect + green screen state via the sheet ----
-    host_b.ev("(function(){var bs=document.querySelectorAll("
-              "'#live-sheet-actions .studio-seg button');"
-              "for(var i=0;i<bs.length;i++){"
-              " var t=bs[i].textContent;"
-              " if(t.indexOf('Vivid')>=0) bs[i].click();}"
-              "return true;})()")
-    time.sleep(0.3)
+    # ---- face effect, SAFARI COMPAT path (per-pixel filters) ----
+    host_b.ev("window.__liveStudio.forceCompat()")
     st = host_b.ev("window.__liveStudio.state()")
-    check("studio: effect picker lands (vivid)",
-          bool(st and st["effect"] == "vivid"), str(st))
-    host_b.ev("(function(){var bs=document.querySelectorAll("
-              "'#live-sheet-actions .studio-seg button');"
-              "for(var i=0;i<bs.length;i++){"
-              " if(bs[i].textContent.indexOf('Green screen on')>=0){"
-              "  bs[i].click(); return true;}} return false;})()")
-    time.sleep(0.3)
-    st = host_b.ev("window.__liveStudio.state()")
-    check("studio: green screen turns on in state",
-          bool(st and st["keyOn"]), str(st))
-    check("studio: still on + track live after all the mixing",
-          bool(st and st["on"] and st["trackLive"]), str(st))
+    check("compat: filterOK reports false once forced",
+          bool(st and st["filterOK"] is False), str(st))
+    click_text(host_b, "#live-sheet-actions .studio-seg button", "Noir")
+    time.sleep(0.8)
+    c = px(host_b, 640, 360)
+    check("pixels: Noir still desaturates via the compat path",
+          bool(c and sum(c) > 45 and max(c) - min(c) < 30), str(c))
+    click_text(host_b, "#live-sheet-actions .studio-seg button", "None")
+    time.sleep(0.6)
 
-    # ---- picture overlay via a real File on the sheet input ----
+    # ---- picture on screen (real File through the sheet input) ----
     host_b.ev(
         "(function(){var inp=document.querySelector("
         "'#live-sheet-actions input[type=file]');"
@@ -443,20 +532,73 @@ try:
     st = host_b.ev("window.__liveStudio.state()")
     check("studio: picture lands as an on-screen overlay",
           bool(st and st["hasPic"]), str(st))
+    time.sleep(0.5)
+    c = px(host_b, 186, 131)
+    check("pixels: the shared picture is ON the picture (red, top-left)",
+          bool(c and c[0] > 150 and c[0] - c[2] > 80), str(c))
+    click_text(host_b, "#live-sheet-actions button",
+               "Take the picture down")
+    time.sleep(0.4)
+    st = host_b.ev("window.__liveStudio.state()")
+    check("studio: picture removes cleanly",
+          bool(st and not st["hasPic"]), str(st))
+
+    # ---- facecam: box shows the face donor (red disc / green field) ----
+    click_text(host_b, "#live-sheet-actions .studio-seg button",
+               "Facecam on")
+    ok = wait_js(host_b,
+                 "__liveStudio.state().faceOn"
+                 " && __liveStudio.state().faceLive", 20)
+    check("studio: facecam turns on (second camera live)", ok)
+    time.sleep(0.6)
+    click_text(host_b, "#live-sheet-actions .cmenu-item", "Face Cam")
+    time.sleep(0.8)
+    c = px(host_b, 1086, 568)
+    check("pixels: facecam box center shows the face (red disc)",
+          bool(c and c[0] > 150 and c[0] - c[1] > 80), str(c))
+    c = px(host_b, 945, 470)
+    check("pixels: facecam box corner shows the green field (pre-key)",
+          bool(c and c[1] > 120 and c[1] - c[0] > 60), str(c))
+
+    # ---- the sheet must NOT rebuild itself in a loop ----
+    muts = host_b.ev(
+        "new Promise(function(res){"
+        " var n=0;"
+        " var o=new MutationObserver(function(m){ n+=m.length; });"
+        " o.observe(document.getElementById('live-sheet-actions'),"
+        "  {childList:true, subtree:true, characterData:true});"
+        " setTimeout(function(){ o.disconnect(); res(n); }, 1200);})",
+        await_promise=True)
+    check("sheet: no rebuild loop while facecam is on (<10 mutations)",
+          bool(muts is not None and muts < 10), str(muts))
+
+    # ---- green screen: green keys away to the game, face stays ----
+    click_text(host_b, "#live-sheet-actions .studio-seg button",
+               "Green screen on")
+    time.sleep(0.9)
+    st = host_b.ev("window.__liveStudio.state()")
+    check("studio: green screen on in state",
+          bool(st and st["keyOn"]), str(st))
+    c = px(host_b, 945, 470)
+    check("pixels: green field keyed away — main (blue) shows through",
+          bool(c and c[2] > 120 and c[2] - c[0] > 60), str(c))
+    c = px(host_b, 1086, 568)
+    check("pixels: the face itself survives the key (still red)",
+          bool(c and c[0] > 150 and c[0] - c[1] > 80), str(c))
 
     # ---- stop restores the plain camera ----
     host_b.ev("window.__liveStudio.stop()", await_promise=True)
     time.sleep(0.5)
     st = host_b.ev("window.__liveStudio.state()")
     check("studio: stop turns it off", bool(st and not st["on"]), str(st))
-    plain = host_b.ev(
-        "(function(){var me=document.querySelector('.live-tile')"
-        "||null; var vs=document.querySelectorAll('video');"
-        "for(var i=0;i<vs.length;i++){"
-        " if(vs[i].srcObject) return vs[i].videoWidth;}"
-        "return 0;})()")
-    check("studio: own picture back to the raw camera (not 1280)",
-          plain not in (1280, None), str(plain))
+    ok = wait_js(host_b,
+                 "(function(){var vs=document.querySelectorAll('video');"
+                 "for(var i=0;i<vs.length;i++){"
+                 " if(vs[i].srcObject && vs[i].videoWidth===640)"
+                 "  return true;} return false;})()",
+                 15)
+    check("studio: own picture back to the raw camera (640 donor)",
+          ok)
 finally:
     if host_b:
         host_b.close()

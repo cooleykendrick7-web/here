@@ -2040,6 +2040,8 @@ function liveRoomDiff(prev, next){
     navigator.mediaDevices.addEventListener('devicechange', function(){
       lcEnumerate().then(function(){
         if (lcSheetOpen && !sheetEl.hidden) renderConnectSheet();
+        if (typeof studioSheetOpen !== 'undefined' && studioSheetOpen
+            && !sheetEl.hidden) studioRerender();
         if (amMember && myStream && lcVideoKind === 'camera' && lcVideoId
             && !lcDevices.video.some(function(d){
                  return d.deviceId === lcVideoId; }))
@@ -2140,6 +2142,63 @@ function liveRoomDiff(prev, next){
   };
   var STUDIO_STICKERS = {none: '', crown: '👑', shades: '😎',
                          star: '⭐', fire: '🔥'};
+  /* Canvas 2D filters (ctx.filter) do the face effects on most
+     browsers — but Safari never shipped them, so there the SAME
+     effects are applied per-pixel on the person layer instead
+     (studioPixelFilter). Detected once, honestly. */
+  var studioFilterOK = (function(){
+    try {
+      var c = document.createElement('canvas').getContext('2d');
+      c.filter = 'grayscale(1)';
+      return c.filter === 'grayscale(1)';
+    } catch (e) { return false; }
+  })();
+  function studioPixelFilter(d, i, effect){
+    var r = d[i], g = d[i + 1], b = d[i + 2], l, f;
+    function cl(v){ return v < 0 ? 0 : v > 255 ? 255 : v; }
+    if (effect === 'noir'){
+      l = 0.299 * r + 0.587 * g + 0.114 * b;
+      l = cl(128 + (l - 128) * 1.18);
+      d[i] = l; d[i + 1] = l; d[i + 2] = l;
+    } else if (effect === 'vivid'){
+      l = 0.299 * r + 0.587 * g + 0.114 * b;
+      d[i] = cl(l + (r - l) * 1.7);
+      d[i + 1] = cl(l + (g - l) * 1.7);
+      d[i + 2] = cl(l + (b - l) * 1.7);
+    } else if (effect === 'glow'){
+      l = 0.299 * r + 0.587 * g + 0.114 * b;
+      f = function(c){
+        return cl(128 + ((l + (c - l) * 1.3) * 1.1 - 128) * 1.03);
+      };
+      d[i] = f(r); d[i + 1] = f(g); d[i + 2] = f(b);
+    } else if (effect === 'cool'){
+      l = 0.299 * r + 0.587 * g + 0.114 * b;
+      d[i] = cl((l + (r - l) * 1.25) * 0.94 * 1.04);
+      d[i + 1] = cl((l + (g - l) * 1.25) * 1.04);
+      d[i + 2] = cl((l + (b - l) * 1.25) * 1.16 * 1.04);
+    }
+  }
+  /* The person layer with the chosen effect applied per-pixel,
+     for browsers without ctx.filter. Shares the 640x360 work
+     canvas with the key pass (a frame never needs both for the
+     same layer). Refreshed every 2nd frame. */
+  function studioWorked(vid){
+    if (studio.frame % 2 === 0){
+      var kx = studio.keyCtx;
+      kx.save();
+      kx.clearRect(0, 0, 640, 360);
+      studioDrawFit(kx, vid, 0, 0, 640, 360, false);
+      kx.restore();
+      var img;
+      try { img = kx.getImageData(0, 0, 640, 360); }
+      catch (e) { return studio.keyCanvas; }
+      var d = img.data;
+      for (var i = 0; i < d.length; i += 4)
+        studioPixelFilter(d, i, studio.effect);
+      kx.putImageData(img, 0, 0);
+    }
+    return studio.keyCanvas;
+  }
   (function studioLoadSettings(){
     try {
       var s = JSON.parse(localStorage.getItem('here_studio') || 'null');
@@ -2176,8 +2235,8 @@ function liveRoomDiff(prev, next){
       var v = document.createElement('video');
       v.autoplay = true; v.playsInline = true; v.muted = true;
       v.setAttribute('playsinline', '');
-      v.style.cssText = 'position:fixed;left:-9999px;top:0;width:8px;'
-        + 'height:8px;opacity:0;pointer-events:none';
+      v.style.cssText = 'position:fixed;left:0;top:0;width:16px;'
+        + 'height:16px;opacity:0.01;z-index:-1;pointer-events:none';
       document.body.appendChild(v);
       return v;
     }
@@ -2267,6 +2326,12 @@ function liveRoomDiff(prev, next){
       return Promise.resolve();
     }
     studioEnsureDom();
+    if (!studio.canvas.captureStream){
+      toast("Studio video isn't supported in this browser — "
+            + 'on PC use Chrome or Edge; on iPhone use the '
+            + 'newest Safari.');
+      return Promise.resolve();
+    }
     studioBindMain();
     return studioFaceAcquire().then(function(){
       if (studio.faceOn && !studio.faceStream){
@@ -2284,6 +2349,11 @@ function liveRoomDiff(prev, next){
         toast('🎬 Studio is ON — viewers see your Studio picture.');
         if (studioSheetOpen) renderStudioSheet();
       }
+    }).catch(function(){
+      studio.on = false;
+      toast('Studio could not start — allow camera access, '
+            + 'then tap Start Studio again.');
+      if (studioSheetOpen) renderStudioSheet();
     });
   }
   function studioStop(silent){
@@ -2426,6 +2496,12 @@ function liveRoomDiff(prev, next){
           if (green && g > Math.max(r, b)) d[i + 1] = Math.max(r, b);
           if (!green && b > Math.max(r, g)) d[i + 2] = Math.max(r, g);
         }
+        /* Compat mode (no ctx.filter): the effect rides THIS
+           pass — key dominance above was judged on the ORIGINAL
+           pixels, so noir+key still keys correctly. */
+        if (!studioFilterOK && studio.effect !== 'none'
+            && d[i + 3] > 0)
+          studioPixelFilter(d, i, studio.effect);
       }
       kx.putImageData(img, 0, 0);
     }
@@ -2447,12 +2523,23 @@ function liveRoomDiff(prev, next){
       studioDrawBackdrop(ctx, W, H);
       var keyedMain = studioKeyed(studio.mainVid);
       studioDrawFit(ctx, keyedMain, 0, 0, W, H, false,
-                    filter === 'none' ? null : filter, false);
+                    (filter === 'none' || !studioFilterOK)
+                      ? null : filter, false);
       studioDrawSticker(ctx, W / 2, 118, 92);
     } else {
       /* Main picture: screens/capture feeds keep every pixel
-         (contain); cameras fill the frame (cover). */
-      studioDrawFit(ctx, studio.mainVid, 0, 0, W, H, isScreen, null, false);
+         (contain); cameras fill the frame (cover). SOLO (no
+         facecam), the chosen face effect + sticker land on the
+         main picture itself — this is the plain "effects on my
+         face" case and it must visibly work. */
+      if (!faceWanted && studio.effect !== 'none' && !studioFilterOK)
+        studioDrawFit(ctx, studioWorked(studio.mainVid), 0, 0, W, H,
+                      isScreen, null, false);
+      else
+        studioDrawFit(ctx, studio.mainVid, 0, 0, W, H, isScreen,
+                      (!faceWanted && filter !== 'none') ? filter : null,
+                      false);
+      if (!faceWanted) studioDrawSticker(ctx, W / 2, 118, 92);
       if (!myCamOn && !isScreen){
         ctx.fillStyle = 'rgba(0,0,0,.72)';
         ctx.fillRect(0, 0, W, H);
@@ -2481,16 +2568,22 @@ function liveRoomDiff(prev, next){
           studioRoundBox(ctx, fp.x, fp.y, fw, fh, 18);
           ctx.clip();
           studioDrawFit(ctx, kf, fp.x, fp.y, fw, fh, false,
-                        filter === 'none' ? null : filter,
+                        (filter === 'none' || !studioFilterOK)
+                          ? null : filter,
                         lcMirrorEffective());
           ctx.restore();
         } else {
           ctx.save();
           studioRoundBox(ctx, fp.x, fp.y, fw, fh, 18);
           ctx.clip();
-          studioDrawFit(ctx, studio.faceVid, fp.x, fp.y, fw, fh,
-                        false, filter === 'none' ? null : filter,
-                        lcMirrorEffective());
+          if (!studioFilterOK && studio.effect !== 'none')
+            studioDrawFit(ctx, studioWorked(studio.faceVid),
+                          fp.x, fp.y, fw, fh, false, null,
+                          lcMirrorEffective());
+          else
+            studioDrawFit(ctx, studio.faceVid, fp.x, fp.y, fw, fh,
+                          false, filter === 'none' ? null : filter,
+                          lcMirrorEffective());
           ctx.restore();
         }
         ctx.save();
@@ -2598,6 +2691,8 @@ function liveRoomDiff(prev, next){
       function(v){
         studio.faceOn = v === 'on';
         studioSaveSettings();
+        if (studio.faceOn)
+          lcEnumerate().then(function(){ studioRerender(); });
         if (studio.on){
           if (studio.faceOn)
             studioFaceAcquire().then(function(){ studioRerender(); });
@@ -2612,7 +2707,6 @@ function liveRoomDiff(prev, next){
         studioRerender();
       });
     if (studio.faceOn){
-      lcEnumerate().then(function(){ studioRerender(); });
       (lcDevices.video || []).forEach(function(d, i){
         var isMain = lcVideoKind === 'camera' && d.deviceId === lcVideoId;
         studioRow((d.deviceId === studio.faceId ? '● ' : '○ ')
@@ -2636,6 +2730,9 @@ function liveRoomDiff(prev, next){
         studio.faceSize,
         function(v){ studio.faceSize = v; studioSaveSettings(); studioRerender(); });
     }
+    if (!studioFilterOK)
+      studioNote('Compatibility mode on this browser: effects '
+                 + 'still work — they are applied frame-by-frame.');
     studioSection('✨ Face effects');
     studioSeg([['none', 'None'], ['glow', '✨ Glow'],
                ['vivid', '🎨 Vivid'], ['cool', '🌙 Cool'],
@@ -2750,13 +2847,16 @@ function liveRoomDiff(prev, next){
               trackLive: !!(studio.track
                 && studio.track.readyState === 'live'),
               trackId: studio.track ? studio.track.id : null,
+              filterOK: studioFilterOK,
               faceLive: !!(studio.faceStream
                 && studio.faceStream.getVideoTracks().some(
                   function(tr){ return tr.readyState === 'live'; }))};
     },
     start: studioStart,
     stop: function(){ return studioStop(); },
-    openPanel: openStudioSheet
+    openPanel: openStudioSheet,
+    canvasEl: function(){ return studio.canvas; },
+    forceCompat: function(){ studioFilterOK = false; }
   };
 
   /* ---------------- peers (keyed by user_id) ----------------
