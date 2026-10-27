@@ -502,9 +502,35 @@
 #live-like-count{font-size:10px;font-weight:800;margin-top:1px}
 .live-rail .live-like-btn{box-shadow:none}
 .live-controls{position:absolute;left:0;right:0;bottom:0;margin:0;z-index:9;
-  padding:6px 10px;background:var(--lg-bg);
+  padding:6px 10px calc(6px + env(safe-area-inset-bottom, 0px));
+  background:var(--lg-bg);
   backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm);
   border-top:var(--lg-border)}
+/* ===== Build STUDIO fix (Ken, PC): the bottom glass bar HALF-SHOWED
+   on PC — anchored flush to the bottom edge, wrapped rows and the
+   auto-dim left it half-seen with no mouse way to wake it (wake was
+   pointerdown/touch only). Now: on wide screens the bar FLOATS as a
+   centered glass pill 14px above the bottom edge — the whole bar is
+   always on screen, still transparent glass, still auto-dims and
+   collapses with the chrome; hovering the dimmed chrome or moving
+   the mouse wakes it fully (see wakeChrome's pointermove hook). */
+@media (min-width:900px){
+  .live-controls{left:50%;right:auto;transform:translateX(-50%);
+    bottom:14px;width:max-content;max-width:97vw;justify-content:center;
+    border:var(--lg-border);border-radius:999px;padding:8px 14px;
+    box-shadow:0 10px 30px rgba(0,0,0,.35)}
+}
+#live-fs.chrome-dim .live-chrome:hover{opacity:1}
+#live-fs.chrome-dim .live-chrome:focus-within{opacity:1}
+/* ===== Build STUDIO sheet bits: segmented pickers + slider ===== */
+.studio-seg{display:flex;gap:6px;flex-wrap:wrap;padding:4px 8px 8px}
+.studio-seg button{background:rgba(255,255,255,.12);color:#fff;
+  border:var(--lg-border);border-radius:999px;padding:7px 12px;
+  font-size:13px;font-weight:700;cursor:pointer}
+.studio-seg button.on{background:var(--red);border-color:var(--red-dark)}
+.studio-seg button:disabled{opacity:.45;cursor:default}
+#live-sheet input[type=range].studio-range{width:calc(100% - 16px);
+  margin:2px 8px 10px;accent-color:var(--red)}
 @media (prefers-reduced-motion: reduce){
   .live-chrome,#live-exit{transition:none}
 }
@@ -653,6 +679,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="live-ctl" id="ctl-cam" hidden>📷 Camera on</button>
   <button type="button" class="live-ctl" id="ctl-flip" hidden>🔄 Flip</button>
   <button type="button" class="live-ctl" id="ctl-connect" hidden>🎮 Live Connect</button>
+  <button type="button" class="live-ctl" id="ctl-studio" hidden>🎬 Studio</button>
   <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>🚪 Leave panel</button>
   <!-- host -->
   <button type="button" class="live-ctl danger" id="ctl-end" hidden>🛑 End Live</button>
@@ -1657,6 +1684,12 @@ function liveRoomDiff(prev, next){
        gets verified + reported. */
     var me = panelById[B.me];
     if (me && tiles[B.me]) updateTile(me);
+    /* Build STUDIO: every source change lands here — while Studio
+       is on, the canvas must re-bind the new main source and the
+       senders must be put BACK on the Studio track (the swap just
+       replaced them with the raw one). */
+    if (typeof studioAfterSourceChange === 'function')
+      studioAfterSourceChange();
     if (lcSheetOpen && !sheetEl.hidden
         && sheetTitle.textContent === '🎮 Live Connect')
       renderConnectSheet();
@@ -2062,6 +2095,670 @@ function liveRoomDiff(prev, next){
     enumerate: lcEnumerate
   };
 
+  /* ---------------- Studio (Build STUDIO) ----------------
+     Ken's order (2026-10-26): multitask on live — game on the
+     capture card AND your camera on screen at the same time —
+     plus face effects, green-screen backgrounds, and pictures
+     shared on the screen, all kept neat. And it must work for
+     every panel member, not just the host.
+
+     HOW: OBS-style compositing, entirely on the sender. While
+     Studio is on, a hidden 1280x720 canvas mixes the picture —
+     main source (screen / capture card / camera) full-frame,
+     facecam as a rounded picture-in-picture box, an optional
+     picture overlay, face filters/stickers, and a chroma-key
+     (green screen) pass on the face layer — and the canvas's
+     captureStream track REPLACES the video track on every peer
+     sender (the same replaceTrack discipline as Live Connect).
+     Viewers need NO changes: they receive one finished picture,
+     exactly what the sender sees in their own tile. myStream
+     always keeps the RAW tracks, so mute/camera truth (Build W3),
+     source switching (Build L) and the heartbeat never change —
+     lcAfterSourceChange (the funnel every source change passes
+     through) re-binds the new main source and re-publishes the
+     Studio track after every swap. Peers born mid-Studio get
+     the Studio track from addLocalTracks. */
+
+  var studio = {
+    on: false,
+    faceOn: false, faceId: null, facePos: 'br', faceSize: 'm',
+    effect: 'none', sticker: 'none',
+    keyOn: false, keyColor: 'green', keySens: 60, backdrop: 'game',
+    picImg: null, picPos: 'tl', picSize: 'm',
+    canvas: null, ctx: null, stream: null, track: null, raf: 0,
+    mainVid: null, faceVid: null, faceStream: null,
+    keyCanvas: null, keyCtx: null, mainTrackId: null, frame: 0,
+    bgCache: {}
+  };
+  var studioSheetOpen = false;
+  var STUDIO_FILTERS = {
+    none: 'none',
+    glow: 'brightness(1.1) saturate(1.3) contrast(1.03)',
+    vivid: 'saturate(1.7) contrast(1.12)',
+    cool: 'hue-rotate(-20deg) saturate(1.25) brightness(1.04)',
+    noir: 'grayscale(1) contrast(1.18)'
+  };
+  var STUDIO_STICKERS = {none: '', crown: '👑', shades: '😎',
+                         star: '⭐', fire: '🔥'};
+  (function studioLoadSettings(){
+    try {
+      var s = JSON.parse(localStorage.getItem('here_studio') || 'null');
+      if (!s) return;
+      ['faceId', 'facePos', 'faceSize', 'effect', 'sticker', 'keyOn',
+       'keyColor', 'keySens', 'backdrop', 'picPos', 'picSize']
+        .forEach(function(k){
+          if (s[k] !== undefined) studio[k] = s[k];
+        });
+    } catch (e) {}
+  })();
+  function studioSaveSettings(){
+    try {
+      var s = {};
+      ['faceId', 'facePos', 'faceSize', 'effect', 'sticker', 'keyOn',
+       'keyColor', 'keySens', 'backdrop', 'picPos', 'picSize']
+        .forEach(function(k){ s[k] = studio[k]; });
+      localStorage.setItem('here_studio', JSON.stringify(s));
+    } catch (e) {}
+  }
+  function studioOutgoingTrack(){
+    return studio.on ? studio.track : null;
+  }
+  function studioEnsureDom(){
+    if (studio.canvas) return;
+    studio.canvas = document.createElement('canvas');
+    studio.canvas.width = 1280; studio.canvas.height = 720;
+    studio.ctx = studio.canvas.getContext('2d');
+    studio.keyCanvas = document.createElement('canvas');
+    studio.keyCanvas.width = 640; studio.keyCanvas.height = 360;
+    studio.keyCtx = studio.keyCanvas.getContext('2d',
+      {willReadFrequently: true});
+    function hiddenVid(){
+      var v = document.createElement('video');
+      v.autoplay = true; v.playsInline = true; v.muted = true;
+      v.setAttribute('playsinline', '');
+      v.style.cssText = 'position:fixed;left:-9999px;top:0;width:8px;'
+        + 'height:8px;opacity:0;pointer-events:none';
+      document.body.appendChild(v);
+      return v;
+    }
+    studio.mainVid = hiddenVid();
+    studio.faceVid = hiddenVid();
+  }
+  function studioBindMain(){
+    var tr = currentVideoTrack();
+    if (!tr || !studio.mainVid) return;
+    if (studio.mainTrackId === tr.id && studio.mainVid.srcObject) return;
+    studio.mainTrackId = tr.id;
+    try {
+      studio.mainVid.srcObject = new MediaStream([tr]);
+      studio.mainVid.play().catch(function(){});
+    } catch (e) {}
+  }
+  function studioFaceAcquire(){
+    if (!studio.faceOn) return Promise.resolve();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      studio.faceOn = false;
+      toast('Facecam is not available in this browser.');
+      return Promise.resolve();
+    }
+    if (lcVideoKind === 'camera' && studio.faceId
+        && studio.faceId === lcVideoId){
+      studio.faceOn = false;
+      toast("That's your main camera — pick a different camera "
+            + 'for your facecam.');
+      return Promise.resolve();
+    }
+    var cons = studio.faceId
+      ? {deviceId: {exact: studio.faceId}} : {facingMode: 'user'};
+    return navigator.mediaDevices.getUserMedia({video: cons, audio: false})
+      .then(function(stream){
+        var tr = stream.getVideoTracks()[0];
+        if (!tr){
+          stream.getTracks().forEach(function(x){
+            try { x.stop(); } catch (e) {}
+          });
+          studio.faceOn = false;
+          toast('That facecam gave no picture.');
+          return;
+        }
+        if (studio.faceStream){
+          studio.faceStream.getTracks().forEach(function(x){
+            try { x.stop(); } catch (e) {}
+          });
+        }
+        studio.faceStream = stream;
+        try {
+          var sid = tr.getSettings && tr.getSettings().deviceId;
+          if (sid) studio.faceId = sid;
+        } catch (e) {}
+        studioEnsureDom();
+        studio.faceVid.srcObject = stream;
+        studio.faceVid.play().catch(function(){});
+        studioSaveSettings();
+      })
+      .catch(function(){
+        studio.faceOn = false;
+        toast('Facecam blocked — allow the camera, or pick '
+              + 'another one in Studio.');
+      });
+  }
+  function studioBindLocalTile(){
+    var T = tiles[B.me];
+    if (!T || !studio.stream) return;
+    if (T.video.srcObject !== studio.stream)
+      T.video.srcObject = studio.stream;
+    /* The finished picture is never mirrored — game text and
+       graphics must read correctly; the face inside was drawn
+       the way viewers should see it. */
+    T.video.classList.remove('localvid');
+    T.video.classList.add('localvid-nomirror');
+    T.el.classList.add('has-video');
+    T.video.play().catch(function(){});
+  }
+  function studioPublish(){
+    if (!studio.track) return Promise.resolve();
+    return lcReplaceSenderTrack('video', studio.track)
+      .then(function(){ studioBindLocalTile(); });
+  }
+  function studioStart(){
+    if (studio.on) return Promise.resolve();
+    if (!myStream || !currentVideoTrack()){
+      toast('Your camera is not on yet — let it start, then open Studio.');
+      return Promise.resolve();
+    }
+    studioEnsureDom();
+    studioBindMain();
+    return studioFaceAcquire().then(function(){
+      if (studio.faceOn && !studio.faceStream){
+        /* acquire failed and already toasted; continue without
+           the facecam so effects/key still work on the main. */
+      }
+      studio.stream = studio.canvas.captureStream(30);
+      studio.track = studio.stream.getVideoTracks()[0];
+      studio.on = true;
+      studio.frame = 0;
+      studioDraw();
+      return studioPublish();
+    }).then(function(){
+      if (studio.on){
+        toast('🎬 Studio is ON — viewers see your Studio picture.');
+        if (studioSheetOpen) renderStudioSheet();
+      }
+    });
+  }
+  function studioStop(silent){
+    if (!studio.on) return Promise.resolve();
+    studio.on = false;
+    if (studio.raf) cancelAnimationFrame(studio.raf);
+    studio.raf = 0;
+    if (studio.faceStream){
+      studio.faceStream.getTracks().forEach(function(x){
+        try { x.stop(); } catch (e) {}
+      });
+      studio.faceStream = null;
+    }
+    if (studio.faceVid) studio.faceVid.srcObject = null;
+    var raw = currentVideoTrack();
+    var done = function(){
+      studio.track = null; studio.stream = null;
+      bindLocalTile();
+      lcApplyMirror();
+      if (!silent) toast('🎬 Studio off — back to your plain camera.');
+      if (studioSheetOpen) renderStudioSheet();
+    };
+    if (raw && Object.keys(peers).length)
+      return lcReplaceSenderTrack('video', raw).then(done, done);
+    done();
+    return Promise.resolve();
+  }
+  function studioAfterSourceChange(){
+    if (!studio.on) return;
+    studioBindMain();
+    studioPublish();
+  }
+  /* ---------- drawing helpers ---------- */
+  function studioSrcSize(src){
+    var w = src.videoWidth || src.width || 0;
+    var h = src.videoHeight || src.height || 0;
+    return (w && h) ? {w: w, h: h} : null;
+  }
+  function studioDrawFit(ctx, src, dx, dy, dw, dh, contain, filter, mirror){
+    var s = studioSrcSize(src);
+    if (!s) return false;
+    var scale = contain ? Math.min(dw / s.w, dh / s.h)
+                        : Math.max(dw / s.w, dh / s.h);
+    var w = s.w * scale, h = s.h * scale;
+    var x = dx + (dw - w) / 2, y = dy + (dh - h) / 2;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(dx, dy, dw, dh); ctx.clip();
+    if (filter) ctx.filter = filter;
+    if (mirror){
+      ctx.translate(2 * dx + dw, 0);
+      ctx.scale(-1, 1);
+    }
+    try { ctx.drawImage(src, x, y, w, h); } catch (e) {}
+    ctx.restore();
+    return true;
+  }
+  function studioRoundBox(ctx, x, y, w, h, r){
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+    else ctx.rect(x, y, w, h);
+  }
+  function studioCorner(pos, W, H, w, h, m){
+    if (pos === 'tl') return {x: m, y: m};
+    if (pos === 'tr') return {x: W - w - m, y: m};
+    if (pos === 'bl') return {x: m, y: H - h - m};
+    return {x: W - w - m, y: H - h - m};
+  }
+  function studioBackdrop(kind){
+    if (studio.bgCache[kind]) return studio.bgCache[kind];
+    var c = document.createElement('canvas');
+    c.width = 1280; c.height = 720;
+    var x = c.getContext('2d');
+    var g;
+    if (kind === 'space'){
+      g = x.createLinearGradient(0, 0, 0, 720);
+      g.addColorStop(0, '#0b1030'); g.addColorStop(1, '#2a0a2e');
+      x.fillStyle = g; x.fillRect(0, 0, 1280, 720);
+      x.fillStyle = 'rgba(255,255,255,.85)';
+      for (var i = 0; i < 130; i++){
+        var sx = (i * 379) % 1280, sy = (i * 211) % 720;
+        x.fillRect(sx, sy, i % 3 === 0 ? 3 : 2, i % 3 === 0 ? 3 : 2);
+      }
+    } else if (kind === 'here'){
+      g = x.createLinearGradient(0, 0, 0, 720);
+      g.addColorStop(0, '#1a0505'); g.addColorStop(1, '#7a0d16');
+      x.fillStyle = g; x.fillRect(0, 0, 1280, 720);
+      g = x.createRadialGradient(640, 330, 60, 640, 330, 560);
+      g.addColorStop(0, 'rgba(255,90,100,.35)');
+      g.addColorStop(1, 'rgba(255,90,100,0)');
+      x.fillStyle = g; x.fillRect(0, 0, 1280, 720);
+    } else if (kind === 'rainbow'){
+      g = x.createLinearGradient(0, 0, 1280, 720);
+      ['#ef4444', '#f59e0b', '#facc15', '#22c55e', '#3b82f6', '#a855f7']
+        .forEach(function(col, j, arr){
+          g.addColorStop(j / (arr.length - 1), col);
+        });
+      x.fillStyle = g; x.fillRect(0, 0, 1280, 720);
+    } else { /* black studio */
+      g = x.createRadialGradient(640, 330, 80, 640, 330, 640);
+      g.addColorStop(0, '#2c2c31'); g.addColorStop(1, '#000000');
+      x.fillStyle = g; x.fillRect(0, 0, 1280, 720);
+    }
+    studio.bgCache[kind] = c;
+    return c;
+  }
+  function studioDrawBackdrop(ctx, W, H){
+    if (studio.backdrop === 'pic' && studio.picImg){
+      if (studioDrawFit(ctx, studio.picImg, 0, 0, W, H, false)) return;
+    }
+    var kind = studio.backdrop === 'game' ? 'space' : studio.backdrop;
+    try { ctx.drawImage(studioBackdrop(kind), 0, 0, W, H); }
+    catch (e) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); }
+  }
+  function studioKeyed(vid){
+    /* Chroma-key the face layer into keyCanvas (throttled to
+       every 2nd frame — the canvas persists between passes).
+       Key colour channel dominance over a sensitivity threshold;
+       a soft band + despill keep edges from fringing. */
+    if (studio.frame % 2 === 0){
+      var kx = studio.keyCtx, W2 = 640, H2 = 360;
+      kx.save();
+      kx.filter = 'none';
+      kx.clearRect(0, 0, W2, H2);
+      studioDrawFit(kx, vid, 0, 0, W2, H2, false);
+      kx.restore();
+      var img;
+      try { img = kx.getImageData(0, 0, W2, H2); }
+      catch (e) { return studio.keyCanvas; }
+      var d = img.data;
+      var T = 150 - studio.keySens;         /* 50..140 */
+      var soft = T * 0.55, green = studio.keyColor === 'green';
+      for (var i = 0; i < d.length; i += 4){
+        var r = d[i], g = d[i + 1], b = d[i + 2];
+        var dom = green ? g - Math.max(r, b) : b - Math.max(r, g);
+        if (dom > T) d[i + 3] = 0;
+        else if (dom > soft)
+          d[i + 3] = Math.round(d[i + 3]
+            * (1 - (dom - soft) / Math.max(1, T - soft)));
+        if (d[i + 3] > 0){
+          if (green && g > Math.max(r, b)) d[i + 1] = Math.max(r, b);
+          if (!green && b > Math.max(r, g)) d[i + 2] = Math.max(r, g);
+        }
+      }
+      kx.putImageData(img, 0, 0);
+    }
+    return studio.keyCanvas;
+  }
+  function studioDraw(){
+    if (!studio.on) return;
+    studio.frame++;
+    var ctx = studio.ctx, W = 1280, H = 720;
+    var isScreen = lcVideoKind === 'screen';
+    var faceWanted = studio.faceOn && !!studio.faceStream
+      && !!studio.faceVid.srcObject;
+    var filter = STUDIO_FILTERS[studio.effect] || 'none';
+    ctx.filter = 'none';
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    if (studio.keyOn && !faceWanted){
+      /* Solo green screen: backdrop full-frame, keyed ME on top. */
+      studioDrawBackdrop(ctx, W, H);
+      var keyedMain = studioKeyed(studio.mainVid);
+      studioDrawFit(ctx, keyedMain, 0, 0, W, H, false,
+                    filter === 'none' ? null : filter, false);
+      studioDrawSticker(ctx, W / 2, 118, 92);
+    } else {
+      /* Main picture: screens/capture feeds keep every pixel
+         (contain); cameras fill the frame (cover). */
+      studioDrawFit(ctx, studio.mainVid, 0, 0, W, H, isScreen, null, false);
+      if (!myCamOn && !isScreen){
+        ctx.fillStyle = 'rgba(0,0,0,.72)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff';
+        ctx.font = '800 44px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('📷 Camera off', W / 2, H / 2);
+      }
+      if (faceWanted && !(!myCamOn && isScreen)){
+        var fw = studio.faceSize === 's' ? 248
+               : studio.faceSize === 'l' ? 448 : 336;
+        var fh = Math.round(fw * 0.75);
+        var fp = studioCorner(studio.facePos, W, H, fw, fh, 26);
+        if (studio.keyOn){
+          if (studio.backdrop !== 'game'){
+            ctx.save();
+            studioRoundBox(ctx, fp.x, fp.y, fw, fh, 18);
+            ctx.clip();
+            try { ctx.drawImage(studioBackdrop(
+              studio.backdrop === 'pic' ? 'space' : studio.backdrop),
+              fp.x, fp.y, fw, fh); } catch (e) {}
+            ctx.restore();
+          }
+          var kf = studioKeyed(studio.faceVid);
+          ctx.save();
+          studioRoundBox(ctx, fp.x, fp.y, fw, fh, 18);
+          ctx.clip();
+          studioDrawFit(ctx, kf, fp.x, fp.y, fw, fh, false,
+                        filter === 'none' ? null : filter,
+                        lcMirrorEffective());
+          ctx.restore();
+        } else {
+          ctx.save();
+          studioRoundBox(ctx, fp.x, fp.y, fw, fh, 18);
+          ctx.clip();
+          studioDrawFit(ctx, studio.faceVid, fp.x, fp.y, fw, fh,
+                        false, filter === 'none' ? null : filter,
+                        lcMirrorEffective());
+          ctx.restore();
+        }
+        ctx.save();
+        studioRoundBox(ctx, fp.x, fp.y, fw, fh, 18);
+        ctx.strokeStyle = 'rgba(255,255,255,.55)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.restore();
+        studioDrawSticker(ctx, fp.x + fw / 2, fp.y + 6, 64);
+      }
+    }
+    /* Picture shared on screen — any panelist can put one up
+       on their own picture. */
+    if (studio.picImg){
+      var pw = studio.picSize === 's' ? 220
+             : studio.picSize === 'l' ? 460 : 320;
+      var ph = Math.round(pw * 0.66);
+      var pp = studioCorner(studio.picPos, W, H, pw, ph, 26);
+      ctx.save();
+      studioRoundBox(ctx, pp.x, pp.y, pw, ph, 14);
+      ctx.clip();
+      ctx.fillStyle = '#111';
+      ctx.fillRect(pp.x, pp.y, pw, ph);
+      studioDrawFit(ctx, studio.picImg, pp.x, pp.y, pw, ph, true);
+      ctx.restore();
+      ctx.save();
+      studioRoundBox(ctx, pp.x, pp.y, pw, ph, 14);
+      ctx.strokeStyle = 'rgba(255,255,255,.55)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.restore();
+    }
+    studio.raf = requestAnimationFrame(studioDraw);
+  }
+  function studioDrawSticker(ctx, cx, cy, size){
+    var st = STUDIO_STICKERS[studio.sticker];
+    if (!st) return;
+    ctx.save();
+    ctx.font = size + 'px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    try { ctx.fillText(st, cx, cy); } catch (e) {}
+    ctx.restore();
+  }
+  /* ---------- Studio sheet ---------- */
+  function studioSection(txt){
+    var h = document.createElement('div');
+    h.style.cssText = 'font-weight:800;font-size:13px;margin-top:10px;padding:6px 8px 2px';
+    h.textContent = txt;
+    sheetActions.appendChild(h);
+  }
+  function studioNote(txt){
+    var d = document.createElement('div');
+    d.style.cssText = 'padding:6px 8px;color:rgba(255,255,255,.78);font-size:13px';
+    d.textContent = txt;
+    sheetActions.appendChild(d);
+  }
+  function studioRow(text, fn){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cmenu-item';
+    b.textContent = text;
+    b.addEventListener('click', fn);
+    sheetActions.appendChild(b);
+    return b;
+  }
+  function studioSeg(options, current, onPick){
+    var wrap = document.createElement('div');
+    wrap.className = 'studio-seg';
+    options.forEach(function(opt){
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = opt[1];
+      if (opt[0] === current) b.className = 'on';
+      b.addEventListener('click', function(){ onPick(opt[0]); });
+      wrap.appendChild(b);
+    });
+    sheetActions.appendChild(wrap);
+    return wrap;
+  }
+  function studioRerender(){
+    if (studioSheetOpen && !sheetEl.hidden
+        && sheetTitle.textContent === '🎬 Studio')
+      renderStudioSheet();
+  }
+  function renderStudioSheet(){
+    if (!studioSheetOpen) return;
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    studioNote(studio.on
+      ? '🎬 Studio is ON — viewers see the finished picture below, live.'
+      : 'Studio mixes your picture BEFORE it sends: game + facecam, '
+        + 'effects, green screen, and a picture on screen. Viewers '
+        + 'just see the finished picture.');
+    studioRow(studio.on ? '⏹ Stop Studio' : '▶️ Start Studio',
+      function(){
+        if (studio.on) studioStop();
+        else studioStart();
+      });
+    studioSection('🪟 Facecam (you, over the game)');
+    studioNote('First pick your game in 🎮 Live Connect (capture card '
+               + 'or Share my screen), then turn your facecam on here.');
+    studioSeg([['off', 'Off'], ['on', '🪟 Facecam on']],
+      studio.faceOn ? 'on' : 'off',
+      function(v){
+        studio.faceOn = v === 'on';
+        studioSaveSettings();
+        if (studio.on){
+          if (studio.faceOn)
+            studioFaceAcquire().then(function(){ studioRerender(); });
+          else if (studio.faceStream){
+            studio.faceStream.getTracks().forEach(function(x){
+              try { x.stop(); } catch (e) {}
+            });
+            studio.faceStream = null;
+            studio.faceVid.srcObject = null;
+          }
+        }
+        studioRerender();
+      });
+    if (studio.faceOn){
+      lcEnumerate().then(function(){ studioRerender(); });
+      (lcDevices.video || []).forEach(function(d, i){
+        var isMain = lcVideoKind === 'camera' && d.deviceId === lcVideoId;
+        studioRow((d.deviceId === studio.faceId ? '● ' : '○ ')
+          + '📷 ' + (d.label || ('Camera ' + (i + 1)))
+          + (isMain ? ' (main)' : ''),
+          function(){
+            studio.faceId = d.deviceId;
+            studioSaveSettings();
+            if (studio.on)
+              studioFaceAcquire().then(function(){ studioRerender(); });
+            else studioRerender();
+          });
+      });
+      studioNote('Corner');
+      studioSeg([['tl', '↖ Top left'], ['tr', '↗ Top right'],
+                 ['bl', '↙ Bottom left'], ['br', '↘ Bottom right']],
+        studio.facePos,
+        function(v){ studio.facePos = v; studioSaveSettings(); studioRerender(); });
+      studioNote('Size');
+      studioSeg([['s', 'Small'], ['m', 'Medium'], ['l', 'Large']],
+        studio.faceSize,
+        function(v){ studio.faceSize = v; studioSaveSettings(); studioRerender(); });
+    }
+    studioSection('✨ Face effects');
+    studioSeg([['none', 'None'], ['glow', '✨ Glow'],
+               ['vivid', '🎨 Vivid'], ['cool', '🌙 Cool'],
+               ['noir', '🖤 Noir']],
+      studio.effect,
+      function(v){ studio.effect = v; studioSaveSettings(); studioRerender(); });
+    studioNote('Sticker');
+    studioSeg([['none', 'None'], ['crown', '👑 Crown'],
+               ['shades', '😎 Shades'], ['star', '⭐ Star'],
+               ['fire', '🔥 Fire']],
+      studio.sticker,
+      function(v){ studio.sticker = v; studioSaveSettings(); studioRerender(); });
+    studioSection('🟩 Background — green screen');
+    studioSeg([['off', 'Off'], ['on', '🟩 Green screen on']],
+      studio.keyOn ? 'on' : 'off',
+      function(v){
+        studio.keyOn = v === 'on';
+        studioSaveSettings();
+        studioRerender();
+      });
+    if (studio.keyOn){
+      studioNote('My screen color');
+      studioSeg([['green', '🟩 Green'], ['blue', '🟦 Blue']],
+        studio.keyColor,
+        function(v){ studio.keyColor = v; studioSaveSettings(); studioRerender(); });
+      studioNote('Key strength (higher eats more of the color)');
+      var rng = document.createElement('input');
+      rng.type = 'range';
+      rng.min = '10'; rng.max = '100';
+      rng.value = String(studio.keySens);
+      rng.className = 'studio-range';
+      rng.addEventListener('input', function(){
+        studio.keySens = +rng.value;
+        studioSaveSettings();
+      });
+      sheetActions.appendChild(rng);
+      studioNote('Put behind me');
+      studioSeg([['game', '🎮 The game'], ['space', '🌌 Space'],
+                 ['here', '🔴 HERE'], ['black', '⚫ Black'],
+                 ['rainbow', '🌈 Rainbow'], ['pic', '🖼️ My picture']],
+        studio.backdrop,
+        function(v){ studio.backdrop = v; studioSaveSettings(); studioRerender(); });
+      studioNote('Green screen works on your facecam — or on your '
+                 + 'plain camera when no facecam is on.');
+    }
+    studioSection('🖼️ Picture on screen');
+    var fileLbl = document.createElement('label');
+    fileLbl.className = 'cmenu-item';
+    fileLbl.style.cssText = 'display:block;cursor:pointer';
+    fileLbl.textContent = studio.picImg
+      ? '🖼️ Change the picture' : '🖼️ Pick a picture to show';
+    var fileInp = document.createElement('input');
+    fileInp.type = 'file';
+    fileInp.accept = 'image/*';
+    fileInp.hidden = true;
+    fileInp.addEventListener('change', function(){
+      var f = fileInp.files && fileInp.files[0];
+      if (!f) return;
+      var url = URL.createObjectURL(f);
+      var img = new Image();
+      img.onload = function(){
+        studio.picImg = img;
+        toast('🖼️ Picture is on your screen.');
+        studioRerender();
+      };
+      img.src = url;
+    });
+    fileLbl.appendChild(fileInp);
+    sheetActions.appendChild(fileLbl);
+    if (studio.picImg){
+      studioNote('Corner');
+      studioSeg([['tl', '↖ Top left'], ['tr', '↗ Top right'],
+                 ['bl', '↙ Bottom left'], ['br', '↘ Bottom right']],
+        studio.picPos,
+        function(v){ studio.picPos = v; studioSaveSettings(); studioRerender(); });
+      studioNote('Size');
+      studioSeg([['s', 'Small'], ['m', 'Medium'], ['l', 'Large']],
+        studio.picSize,
+        function(v){ studio.picSize = v; studioSaveSettings(); studioRerender(); });
+      studioRow('✕ Take the picture down', function(){
+        studio.picImg = null;
+        studioRerender();
+      });
+    }
+    if (!studio.on)
+      studioNote('Pick everything first if you like — it all '
+                 + 'applies the moment you tap ▶️ Start Studio.');
+  }
+  function openStudioSheet(){
+    studioSheetOpen = true;
+    sheetTitle.textContent = '🎬 Studio';
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    $('live-sheet-cancel').textContent = 'Done';
+    renderStudioSheet();
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+    lcEnumerate().then(function(){ studioRerender(); });
+  }
+  $('ctl-studio').addEventListener('click', openStudioSheet);
+  /* Diagnostics / test surface (same precedent as __liveConnect). */
+  window.__liveStudio = {
+    state: function(){
+      return {on: studio.on, faceOn: studio.faceOn,
+              faceId: studio.faceId, facePos: studio.facePos,
+              faceSize: studio.faceSize, effect: studio.effect,
+              sticker: studio.sticker, keyOn: studio.keyOn,
+              keyColor: studio.keyColor, keySens: studio.keySens,
+              backdrop: studio.backdrop,
+              hasPic: !!studio.picImg, picPos: studio.picPos,
+              picSize: studio.picSize,
+              trackLive: !!(studio.track
+                && studio.track.readyState === 'live'),
+              trackId: studio.track ? studio.track.id : null,
+              faceLive: !!(studio.faceStream
+                && studio.faceStream.getVideoTracks().some(
+                  function(tr){ return tr.readyState === 'live'; }))};
+    },
+    start: studioStart,
+    stop: function(){ return studioStop(); },
+    openPanel: openStudioSheet
+  };
+
   /* ---------------- peers (keyed by user_id) ----------------
      remoteKind: 'panelist' (they publish; tile + video) or 'watcher'
      (receive-only from me; no tile). Offer rule (glare-free):
@@ -2078,7 +2775,14 @@ function liveRoomDiff(prev, next){
       if (s.track) have[s.track.kind] = 1;
     });
     myStream.getTracks().forEach(function(tr){
-      if (!have[tr.kind]){ try { P.pc.addTrack(tr, myStream); } catch (e) {} }
+      if (!have[tr.kind]){
+        /* Build STUDIO: a peer born while Studio is on must get
+           the Studio (canvas) video track, never the raw one. */
+        var out = tr;
+        if (tr.kind === 'video' && typeof studioOutgoingTrack === 'function')
+          out = studioOutgoingTrack() || tr;
+        try { P.pc.addTrack(out, myStream); } catch (e) {}
+      }
     });
   }
   function isPanelist(uid){ return !!panelById[uid]; }
@@ -3030,6 +3734,7 @@ function liveRoomDiff(prev, next){
     reconcilePeers(); /* hellos/offers resume once media lands too */
   }
   function enterWatcherMode(){
+    if (typeof studioStop === 'function') studioStop(true);
     teardownPeers();
     if (myStream){
       myStream.getTracks().forEach(function(tr){ tr.stop(); });
@@ -3165,6 +3870,7 @@ function liveRoomDiff(prev, next){
   function closeSheet(){
     sheetEl.hidden = true; sheetBd.hidden = true; manageTarget = null;
     lcSheetOpen = false;
+    if (typeof studioSheetOpen !== 'undefined') studioSheetOpen = false;
     giftSheetOpen = false;
     hideBoostChip();
     $('live-sheet-cancel').textContent = 'Cancel';
@@ -4645,6 +5351,7 @@ function liveRoomDiff(prev, next){
     $('ctl-cam').hidden = !member;
     $('ctl-flip').hidden = !member;
     $('ctl-connect').hidden = !member;
+    $('ctl-studio').hidden = !member;
     $('ctl-panel-leave').hidden = !(member && !iAmHost());
     $('ctl-end').hidden = !iAmHost();
     /* The 🔊 prompt is state-driven now (Build N): visible
@@ -5079,6 +5786,7 @@ function liveRoomDiff(prev, next){
   function teardownEnded(){
     if (ended) return;
     ended = true;
+    if (typeof studioStop === 'function') studioStop(true);
     /* Embed (mini player): tell the parent tile so it clears. */
     if (B.embed){
       try { parent.postMessage({hereMini:'ended', id:B.id},
@@ -5112,7 +5820,7 @@ function liveRoomDiff(prev, next){
     closeSheet();
     setStatus('📺 This live has ended.');
     $('live-comment-input').disabled = true;
-    ['ctl-mute','ctl-cam','ctl-flip','ctl-connect','ctl-end','ctl-panel-leave',
+    ['ctl-mute','ctl-cam','ctl-flip','ctl-connect','ctl-studio','ctl-end','ctl-panel-leave',
      'ctl-join','ctl-like','ctl-poll','ctl-games','ctl-gift','ctl-battle','ctl-layout','live-requests-panel','live-people-panel','live-panelctl',
      'live-invite-banner','live-member-banner','live-muted-note','live-cam-note','live-poll-card',
      'live-poll-closed','live-game-card','live-game-closed','live-battle-bar'].forEach(function(id){
@@ -5198,6 +5906,14 @@ function liveRoomDiff(prev, next){
   }
   fsEl.addEventListener('pointerdown', wakeChrome);
   fsEl.addEventListener('touchstart', wakeChrome, {passive: true});
+  /* Build STUDIO (Ken's PC bar): moving the mouse must wake the
+     chrome too — pointerdown alone left PC users staring at a
+     dimmed, half-seen bar until they happened to click. Only
+     wakes while dimmed, so steady mouse work doesn't churn the
+     timer. */
+  fsEl.addEventListener('pointermove', function(){
+    if (fsEl.classList.contains('chrome-dim')) wakeChrome();
+  });
   function minimizeLive(){
     if (minimized || ended) return;
     minimized = true;
