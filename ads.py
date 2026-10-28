@@ -99,6 +99,12 @@ def ensure_schema(conn):
                  "ON ad_events(user_id, kind, id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_adev_ad "
                  "ON ad_events(ad_id, kind, ts)")
+    # Money build: paid ads remember their Stripe session so the
+    # return-verify can never credit the same payment twice.
+    try:
+        conn.execute("ALTER TABLE ads ADD COLUMN paid_session TEXT")
+    except Exception:
+        pass
 
 
 # ---------------- time ----------------

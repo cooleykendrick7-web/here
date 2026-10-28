@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}📣 My ads — HERE{% endblock %}
+{% block content %}
+<div class="card" style="max-width:640px;margin:18px auto;padding:22px">
+  <h2 style="margin:0 0 6px">📣 My ads</h2>
+  <p style="color:var(--muted);margin:0 0 14px"><a href="/ads/buy">➕ New ad — ${{ price }} for 7 days</a></p>
+  {% if msg %}<div style="background:rgba(26,158,75,.15);border:1px solid rgba(26,158,75,.5);padding:10px 12px;border-radius:10px;font-weight:700;margin-bottom:12px">{{ msg|e }}</div>{% endif %}
+  {% if my_ads %}
+    {% for ad in my_ads %}
+    <div style="border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px">
+      <div style="font-weight:800">{{ ad.title|e }}</div>
+      <div style="color:var(--muted);font-size:14px">{{ ad.body|e }}</div>
+      <div style="font-size:13px;margin-top:6px">
+        {% if ad.status == 'active' %}🟢 <strong>Live</strong>{% if ad.ends_on %} until {{ ad.ends_on }}{% endif %} · 👁 {{ ad.impressions }} seen · 👆 {{ ad.clicks }} taps ({{ ad.ctr }}% CTR)
+        {% elif ad.status == 'unpaid' %}⏳ <strong>Not paid yet</strong> — it isn't showing anywhere. <a href="/ads/buy">Start a paid run →</a>
+        {% elif ad.status == 'paused' %}⏸ Paused by the owner
+        {% else %}⚪ {{ ad.status|e }}
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p style="color:var(--muted)">No ads yet. Your first one takes a minute.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,4 +1,4 @@
-<div class="mkt-card">
+<div class="mkt-card">{% if l.boosted %}<div style="background:linear-gradient(135deg,#f5c542,#b8860b);color:#231a00;font-weight:900;font-size:12px;padding:4px 10px">⭐ FEATURED</div>{% endif %}
   <a class="mkt-photo" href="/market/{{ l.id }}">
     {% if l.first_photo %}<img src="{{ l.first_photo|e }}" alt="">
     {% else %}<span class="mkt-ph">🛒</span>{% endif %}

@@ -26,6 +26,43 @@
   <a class="btn" href="/home" style="margin-top:14px;display:inline-block">🏠 Back home</a>
 </div>
 
+{% elif mode == 'entry_gate' %}
+{# Money build: the ticket door. The room behind this card is
+   real — the state endpoint serves a trimmed payload until the
+   viewer pays, so nothing about the panel leaks here either;
+   this card is the poster: host, title, price, one button. #}
+<div class="card" style="text-align:center;padding:34px 20px">
+  <div style="font-size:44px">🎟️</div>
+  <h2 style="margin:10px 0 6px">{{ host.name|e }} is live — with a ticket door</h2>
+  <p style="color:var(--muted)">{% if live.title %}“{{ live.title|e }}” · {% endif %}Entry is <strong>{{ entry_tickets }} 🎟️</strong>, paid once to {{ host.name|e }} — they earn every ticket. Your balance: <strong>{{ my_balance }} 🎟️</strong></p>
+  <div id="door-error" style="color:#e01e26;font-weight:700;margin-top:10px"></div>
+  <button type="button" class="btn" id="door-pay" style="margin-top:12px">🎟 Pay {{ entry_tickets }} tickets &amp; come in</button>
+  <p style="margin-top:12px"><a href="/tickets">Need tickets? Get a pack →</a> · <a href="/home">🏠 Back home</a></p>
+</div>
+<script>
+(function(){
+  var btn = document.getElementById('door-pay');
+  var err = document.getElementById('door-error');
+  if (!btn) return;
+  btn.addEventListener('click', function(){
+    btn.disabled = true;
+    fetch('/live/{{ live.id }}/pay-entry', {method: 'POST',
+      credentials: 'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.ok){ window.location.reload(); return; }
+        btn.disabled = false;
+        err.textContent = (d && d.error)
+          || 'Could not pay the door.';
+      })
+      .catch(function(){
+        btn.disabled = false;
+        err.textContent = 'Could not pay the door.';
+      });
+  });
+})();
+</script>
+
 {% elif mode == 'embed_host' %}
 {# Build GLASS: the host opened their own live in embed mode. The
    mini player is for viewers — render a static card with NO live
@@ -1317,6 +1354,7 @@ function liveRoomDiff(prev, next){
         && member.role !== 'host') b += '⭐ ';
     if (member.captain) b += '🧢 ';
     if (member.founding_no) b += '🏅#' + member.founding_no + ' ';
+    if (member.is_plus) b += '⭐ ';
     if (member.muted) b += '🔇';
     if (T.badges.textContent !== b) T.badges.textContent = b;
     /* Source tag renders from LOCAL state on my OWN tile only —
@@ -5882,6 +5920,13 @@ function liveRoomDiff(prev, next){
       og.style.cssText = 'background:linear-gradient(135deg,#f5c542,#b8860b);color:#231a00';
       og.textContent = '🏅 #' + c.founding_no;
       bodyWrap.appendChild(og);
+    }
+    if (c.is_plus){
+      var pl = document.createElement('span');
+      pl.className = 'rank-chip';
+      pl.style.cssText = 'background:linear-gradient(135deg,#7b2ff7,#e01e26);color:#fff';
+      pl.textContent = '⭐ PLUS';
+      bodyWrap.appendChild(pl);
     }
     var body = document.createElement('div');
     body.textContent = c.body;

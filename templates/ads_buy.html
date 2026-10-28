@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}📣 Advertise on HERE — HERE{% endblock %}
+{% block content %}
+<div class="card" style="max-width:560px;margin:18px auto;padding:22px">
+  <h2 style="margin:0 0 6px">📣 Advertise on HERE</h2>
+  <p style="color:var(--muted);margin:0 0 14px">Your ad rides the home feed for <strong>7 days — ${{ price }}</strong>, paid once. It starts the moment your payment lands. <a href="/ads/mine">My ads →</a></p>
+  <form action="/ads/buy" method="post" style="display:grid;gap:10px">
+    <label style="font-weight:700">Title
+      <input type="text" name="title" maxlength="80" required style="width:100%" placeholder="e.g. Made Man — out now"></label>
+    <label style="font-weight:700">Your line
+      <input type="text" name="body" maxlength="220" required style="width:100%" placeholder="Why should somebody tap?"></label>
+    <label style="font-weight:700">Where it goes (link)
+      <input type="url" name="link_url" maxlength="500" style="width:100%" placeholder="https://…"></label>
+    <label style="font-weight:700">Button words
+      <input type="text" name="cta_label" maxlength="24" style="width:100%" placeholder="Learn more"></label>
+    {% if user_pages %}
+    <label style="font-weight:700">Run it as
+      <select name="page_id" style="width:100%">
+        <option value="">Me — {{ user.name|e }}</option>
+        {% for pg in user_pages %}<option value="{{ pg.id }}">{{ pg.name|e }} (Page)</option>{% endfor %}
+      </select></label>
+    {% endif %}
+    {% if stripe_on %}
+    <button type="submit" class="btn" style="font-size:16px;padding:13px">Pay ${{ price }} &amp; run it for 7 days →</button>
+    <p style="color:var(--muted);font-size:13px;margin:0">Secure checkout by Stripe. No payment = no ad — it never shows until the payment is real.</p>
+    {% else %}
+    <button type="submit" class="btn" style="font-size:16px;padding:13px">Save my ad</button>
+    <p style="color:var(--muted);font-size:13px;margin:0">Ad payments aren't open yet — your ad saves now and can go live the moment they open.</p>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}

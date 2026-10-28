@@ -22,7 +22,7 @@
       data-aname="{{ c.author_name|e }}" data-auid="{{ c.user_id }}"
       data-del="{{ 1 if c.can_delete else 0 }}" data-blk="{{ 1 if c.can_block else 0 }}">⋯</button>
     {% endif %}
-    <div class="cnm"><a href="/user/{{ c.user_id }}">{{ c.author_name|e }}</a>{% if c.author_founding_no %} <span title="Original 100 — seat #{{ c.author_founding_no }}" style="background:linear-gradient(135deg,#f5c542,#b8860b);color:#231a00;font-size:10px;font-weight:900;padding:1px 6px;border-radius:999px">🏅 #{{ c.author_founding_no }}</span>{% endif %}</div>
+    <div class="cnm"><a href="/user/{{ c.user_id }}">{{ c.author_name|e }}</a>{% if c.author_founding_no %} <span title="Original 100 — seat #{{ c.author_founding_no }}" style="background:linear-gradient(135deg,#f5c542,#b8860b);color:#231a00;font-size:10px;font-weight:900;padding:1px 6px;border-radius:999px">🏅 #{{ c.author_founding_no }}</span>{% endif %}{% if c.author_is_plus %} <span title="HERE Plus member" style="background:linear-gradient(135deg,#7b2ff7,#e01e26);color:#fff;font-size:10px;font-weight:900;padding:1px 6px;border-radius:999px">⭐ PLUS</span>{% endif %}</div>
     <div class="ctxt">{% if c.reply_prefix %}<a class="tag-link" href="/user/{{ c.reply_prefix.id }}">@{{ c.reply_prefix.name|e }}</a> {% endif %}{{ c.body_html|safe }}</div>
     <div class="cmeta">{{ c.created_at|e }}{% if not post.viewer_comment_blocked %} · <button type="button" class="clink reply-toggle" data-box="replybox-{{ c.id }}">Reply</button>{% endif %}</div>
   </div>
@@ -59,4 +59,5 @@
   {% endif %}
 </div>
 
+{% include "partials/post_gift.html" %}
 {% endblock %}

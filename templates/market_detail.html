@@ -85,6 +85,9 @@
       <button type="submit" class="btn">{% if listing.sold %}Mark available again{% else %}Mark SOLD{% endif %}</button>
     </form>
     <a class="btn-ghost" href="/market/{{ listing.id }}/edit">{{ ic('post') }} Edit</a>
+    {% if not listing.sold %}
+    <button type="button" class="btn-ghost" id="boost-btn">⭐ {% if listing.boosted %}Boosted — add 7 more days{% else %}Boost — 100 🎟️ for 7 days on top{% endif %}</button>
+    {% endif %}
     {% if listing_live_id %}
     <form class="inline-form" action="/market/{{ listing.id }}/detach-live" method="post">
       <button type="submit" class="btn-ghost">📴 Take off live</button>
@@ -126,6 +129,25 @@
       document.querySelectorAll('[data-mkt-photo]').forEach(function(x){ x.classList.remove('on'); });
       b.classList.add('on');
     });
+  });
+})();
+</script>
+<script>
+(function(){
+  var b = document.getElementById('boost-btn');
+  if (!b) return;
+  b.addEventListener('click', function(){
+    b.disabled = true;
+    fetch('/market/{{ listing.id }}/boost', {method: 'POST',
+      credentials: 'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.ok){ window.location.reload(); return; }
+        b.disabled = false;
+        alert((d && d.error) || 'Could not boost that listing.');
+      })
+      .catch(function(){ b.disabled = false;
+        alert('Could not boost that listing.'); });
   });
 })();
 </script>

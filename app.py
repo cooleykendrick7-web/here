@@ -1203,6 +1203,42 @@ def init_db():
         settled INTEGER NOT NULL DEFAULT 0)""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_auct_live "
               "ON live_auctions(live_id, status)")
+    # Money build: post gifts get their own table (page_gifts
+    # pattern + post_id); the live entry door (entry price on the
+    # session + who paid); market boosts; HERE Plus columns.
+    c.execute("""CREATE TABLE IF NOT EXISTS post_gifts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL,
+        post_id INTEGER NOT NULL,
+        gift_key TEXT NOT NULL DEFAULT '',
+        tickets INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT '')""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_post_gifts_post "
+              "ON post_gifts(post_id, id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_post_gifts_sender "
+              "ON post_gifts(sender_id, recipient_id, id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        tickets INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT '',
+        UNIQUE(live_id, user_id))""")
+    _ls_cols = [r["name"] for r in c.execute(
+        "PRAGMA table_info(live_sessions)").fetchall()]
+    if "entry_tickets" not in _ls_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "entry_tickets INTEGER DEFAULT 0")
+    _ml_cols = [r["name"] for r in c.execute(
+        "PRAGMA table_info(market_listings)").fetchall()]
+    if "boost_until" not in _ml_cols:
+        c.execute("ALTER TABLE market_listings ADD COLUMN "
+                  "boost_until REAL DEFAULT 0")
+    _mu_cols = [r["name"] for r in c.execute(
+        "PRAGMA table_info(users)").fetchall()]
+    if "plus_until" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN plus_until TEXT")
+    if "stripe_sub_id" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN stripe_sub_id TEXT")
     c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
         user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
@@ -1657,6 +1693,7 @@ def render(request: Request, name, ctx=None):
                        # server re-checks on every write regardless).
                        "creator_mode": 1 if u.get("creator_mode") else 0}
         conn = db()
+        ctx.setdefault("post_gift", _post_gift_ctx(u))
         ctx["pending_count"] = conn.execute(
             "SELECT COUNT(*) c FROM friendships WHERE friend_id=? AND status='pending'",
             (u["id"],)).fetchone()["c"]
@@ -2756,11 +2793,15 @@ def post_card(p, viewer, owner_on=False):
         conn.close()
         return None
     a = conn.execute("SELECT id,name,avatar,is_verified,"
-                     "private_profile,founding_no "
+                     "private_profile,founding_no,creator_mode,"
+                     "plus_until "
                      "FROM users WHERE id=?",
                      (p["user_id"],)).fetchone()
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
                          (p["id"],)).fetchone()["c"]
+    gift_count = conn.execute(
+        "SELECT COUNT(*) c FROM post_gifts WHERE post_id=?",
+        (p["id"],)).fetchone()["c"]
     liked = False
     my_reaction = None
     if viewer:
@@ -2870,6 +2911,8 @@ def post_card(p, viewer, owner_on=False):
         "dom_id": ("post-share-%d" % share["id"]) if share else ("post-%d" % p["id"]),
         "author_name": a["name"] if a else "Deleted user",
         "author_founding_no": (a["founding_no"] if a else None),
+        "author_is_plus": _is_plus(a) if a else False,
+        "author_creator": bool(a["creator_mode"]) if a else False,
         "author_avatar": avatar,
         "author_verified": bool(a["is_verified"]) if a else False,
         "kind": p["kind"], "body": p["body"] or "",
@@ -2897,6 +2940,7 @@ def post_card(p, viewer, owner_on=False):
                   if p.get("music_video_id") else None),
         "created_at": fancy_time(p["created_at"]),
         "likes": likes, "liked": liked, "comments_count": cc,
+        "gift_count": gift_count,
         "my_reaction": my_reaction, "reactions_top": reactions_top,
         "reaction_kinds": REACTIONS,
         "share_count": share_count,
@@ -4675,7 +4719,8 @@ def create_post_from_form(user, form, page_id=None):
     # Post videos get the big cap; photos/audio keep the default cap.
     _mname = getattr(media_file, "filename", "") or ""
     _mext = _mname.rsplit(".", 1)[-1].lower() if "." in _mname else ""
-    cap = POST_VIDEO_MAX_MB if _mext in VID_EXTS else 0
+    cap = (PLUS_VIDEO_MB if _is_plus(user)
+           else POST_VIDEO_MAX_MB) if _mext in VID_EXTS else 0
     if poll_options is not None:
         media = ""  # polls are text-only by design; any file is ignored
     elif lock_price:
@@ -4831,7 +4876,8 @@ def _thread_comments(conn, p, viewer, owner_on=False):
     def _author(uid):
         if uid not in _authors:
             _authors[uid] = conn.execute(
-                "SELECT id,name,avatar,founding_no FROM users "
+                "SELECT id,name,avatar,founding_no,plus_until "
+                "FROM users "
                 "WHERE id=?", (uid,)).fetchone()
         return _authors[uid]
 
@@ -4855,6 +4901,7 @@ def _thread_comments(conn, p, viewer, owner_on=False):
             "id": c["id"], "user_id": c["user_id"],
             "author_name": a["name"] if a else "Deleted user",
             "author_founding_no": (a["founding_no"] if a else None),
+            "author_is_plus": _is_plus(a) if a else False,
             "author_avatar": avatar_url(a["avatar"]) if a and a["avatar"] else "",
             "body": c["body"], "body_html": linkify_body(c["body"]),
             "created_at": fancy_time(c["created_at"]),
@@ -7091,7 +7138,9 @@ async def story_create(request: Request):
             return redir("/stories/new", _kerr)
     else:
         try:
-            media = save_upload(form.get("media"), "stories", STORY_EXTS)
+            media = save_upload(
+                form.get("media"), "stories", STORY_EXTS,
+                max_mb=(PLUS_UPLOAD_MB if _is_plus(user) else 0))
         except ValueError as e:
             return redir("/stories/new", str(e))
     # --- visual editor payload + audience + picker media ---------
@@ -8483,6 +8532,7 @@ async def profile(request: Request, uid: int):
         "is_verified": bool(prof.get("is_verified")),
         "founding": bool(prof.get("founding")),
         "founding_no": prof.get("founding_no"),
+        "is_plus": _is_plus(prof),
         "verification_status": prof.get("verification_status") or "none",
         "background": avatar_url(prof.get("background", "")),
         "presence": presence_of(prof),
@@ -10960,6 +11010,7 @@ def _live_comment_json(row, viewer_id, host_id, viewer_is_admin=False,
     if rank is not None:
         out["sender_rank"] = rank
     out["founding_no"] = row.get("founding_no")
+    out["is_plus"] = _is_plus(row)
     return out
 
 
@@ -10967,7 +11018,8 @@ def _live_person(uid):
     u = get_user(uid) or {}
     return {"id": uid, "name": u.get("name", "Deleted user"),
             "avatar": avatar_url(u.get("avatar", "")),
-            "founding_no": u.get("founding_no")}
+            "founding_no": u.get("founding_no"),
+            "is_plus": _is_plus(u)}
 
 
 def live_now_for(viewer_id, owner_on=False):
@@ -10997,6 +11049,7 @@ def live_now_for(viewer_id, owner_on=False):
                     "created_at": live["created_at"],
                     "host_level": lvl["level"],
                     "host_level_label": lvl["label"],
+                    "entry_tickets": live.get("entry_tickets") or 0,
                     "is_self": live["host_id"] == viewer_id})
     conn.close()
     return out
@@ -11175,6 +11228,27 @@ def _is_lobby_captain(conn, live, uid):
     return _lobby_captain_id(conn, live) == uid
 
 
+BOOST_TICKETS = 100          # 7 days Featured on the Market
+BOOST_SECONDS = 7 * 86400
+AD_WEEK_CENTS = 1000         # $10 for a 7-day paid ad run
+AD_DAYS = 7
+PLUS_CENTS = 499             # HERE Plus: $4.99/month
+PLUS_VIDEO_MB = 500
+PLUS_UPLOAD_MB = 100
+
+
+def _is_plus(row):
+    """True when a user row/dict holds a live HERE Plus sub."""
+    if not row:
+        return False
+    try:
+        pu = row["plus_until"]
+    except Exception:
+        pu = (row.get("plus_until") if isinstance(row, dict)
+              else None)
+    return bool(pu) and str(pu) > now_iso()
+
+
 AUCTION_MIN_STEP_CENTS = 50
 AUCTION_SNIPE_WINDOW = 10.0
 AUCTION_SNIPE_EXTEND = 10.0
@@ -11310,6 +11384,322 @@ def _lobby_card(conn):
     return {"id": live["id"], "inside": inside}
 
 
+# ---------------- paid ads (Money build) ----------------
+def _ad_verify_session(user, session_id):
+    """Verify a returned Checkout session against Stripe and, if
+    it truly paid for THIS user's ad, activate the ad for its
+    7-day run. Same discipline as ticket purchases: Stripe is the
+    only witness — payment_status must be 'paid', the metadata
+    must name this user and a real unpaid ad, and the session id
+    is burned onto the ad so it can never activate twice."""
+    if not session_id or not stripe_enabled():
+        return ""
+    conn = db()
+    ad = conn.execute(
+        "SELECT * FROM ads WHERE paid_session=?",
+        (session_id,)).fetchone()
+    conn.close()
+    if ad and ad["status"] != "unpaid":
+        return "Your ad is live 🎉"
+    try:
+        sess = _stripe_api(
+            "GET", f"/v1/checkout/sessions/{session_id}")
+    except Exception:
+        return ""
+    meta = sess.get("metadata") or {}
+    if (sess.get("payment_status") != "paid"
+            or meta.get("kind") != "ad"
+            or str(meta.get("user_id")) != str(user["id"])):
+        return ""
+    try:
+        ad_id = int(meta.get("ad_id") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if not ad_id:
+        return ""
+    import ads as ads_mod
+    start = ads_mod.local_now().date()
+    end = start + timedelta(days=AD_DAYS)
+    conn = db()
+    cur = conn.execute(
+        "UPDATE ads SET status='active', starts_on=?, ends_on=?, "
+        "paid_session=? WHERE id=? AND creator_id=? AND "
+        "status='unpaid'",
+        (start.isoformat(), end.isoformat(), session_id, ad_id,
+         user["id"]))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 1:
+        return "Your ad is live 🎉 — it runs for 7 days."
+    return ""
+
+
+@app.get("/ads/buy", response_class=HTMLResponse)
+async def ads_buy_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    pages = conn.execute(
+        "SELECT id, name FROM pages WHERE owner_id=? ORDER BY name",
+        (user["id"],)).fetchall()
+    conn.close()
+    return render(request, "ads_buy.html",
+                  {"price": AD_WEEK_CENTS // 100,
+                   "stripe_on": stripe_enabled(),
+                   "user_pages": [dict(r) for r in pages]})
+
+
+@app.post("/ads/buy")
+async def ads_buy(request: Request):
+    """Create the ad as 'unpaid', then hand the buyer a Stripe
+    Checkout for the 7-day run. The ad joins the rotation ONLY
+    when _ad_verify_session confirms the payment — creating the
+    row alone never shows anything to anyone."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    title = (form.get("title") or "").strip()[:80]
+    body = (form.get("body") or "").strip()[:220]
+    link = (form.get("link_url") or "").strip()[:500]
+    cta = (form.get("cta_label") or "Learn more").strip()[:24] \
+        or "Learn more"
+    page_id = None
+    try:
+        page_id = int(form.get("page_id") or 0) or None
+    except (TypeError, ValueError):
+        page_id = None
+    if not title or not body:
+        return redir("/ads/buy", "Give your ad a title and a line "
+                                 "of text first.")
+    import ads as ads_mod
+    conn = db()
+    ads_mod.ensure_schema(conn)
+    if page_id:
+        own = conn.execute(
+            "SELECT 1 FROM pages WHERE id=? AND owner_id=?",
+            (page_id, user["id"])).fetchone()
+        if not own:
+            page_id = None
+    cur = conn.execute(
+        "INSERT INTO ads(creator_id, page_id, kind, title, body, "
+        "link_url, cta_label, status, created_at) VALUES(?,?,?,?,?,"
+        "?,?, 'unpaid', ?)",
+        (user["id"], page_id, "paid", title, body, link, cta,
+         now_iso()))
+    ad_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    if not stripe_enabled():
+        return redir("/ads/mine", "Your ad is saved. Payments "
+                                  "aren't open yet — it goes live "
+                                  "as soon as they are.")
+    base = str(request.base_url).rstrip("/")
+    params = {
+        "mode": "payment",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]":
+            str(AD_WEEK_CENTS),
+        "line_items[0][price_data][product_data][name]":
+            "HERE Ad — 7 days",
+        "line_items[0][quantity]": "1",
+        "metadata[user_id]": str(user["id"]),
+        "metadata[kind]": "ad",
+        "metadata[ad_id]": str(ad_id),
+        "success_url": base + "/ads/mine?session_id="
+                              "{CHECKOUT_SESSION_ID}",
+        "cancel_url": base + "/ads/mine",
+    }
+    try:
+        sess = _stripe_api("POST", "/v1/checkout/sessions", params)
+    except Exception as e:
+        return redir("/ads/mine", f"Stripe hiccup: {e}")
+    url = sess.get("url")
+    if not url:
+        return redir("/ads/mine", "Stripe didn't return a checkout "
+                                  "link — your ad is saved, pay "
+                                  "any time from My Ads.")
+    conn = db()
+    conn.execute("UPDATE ads SET paid_session=? WHERE id=?",
+                 (sess.get("id") or "", ad_id))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url, status_code=303)
+
+
+@app.get("/ads/mine", response_class=HTMLResponse)
+async def ads_mine(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    msg = _ad_verify_session(
+        user, (request.query_params.get("session_id") or "").strip())
+    import ads as ads_mod
+    conn = db()
+    ads_mod.ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT * FROM ads WHERE creator_id=? ORDER BY id DESC",
+        (user["id"],)).fetchall()
+    conn.close()
+    mine = []
+    for r in rows:
+        d = dict(r)
+        d["ctr"] = ads_mod.ctr(d)
+        mine.append(d)
+    return render(request, "ads_mine.html",
+                  {"my_ads": mine, "msg": msg,
+                   "price": AD_WEEK_CENTS // 100})
+
+
+# ---------------- HERE Plus (Money build) ----------------
+def _plus_apply_subscription(user_id, sub):
+    """Set plus_until + the subscription id from a Stripe
+    subscription object (the only writer of both)."""
+    end = sub.get("current_period_end")
+    if not end:
+        return False
+    until = datetime.fromtimestamp(
+        int(end), tz=timezone.utc).isoformat()
+    conn = db()
+    conn.execute(
+        "UPDATE users SET plus_until=?, stripe_sub_id=? WHERE id=?",
+        (until, sub.get("id") or "", user_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def _plus_verify_session(user, session_id):
+    """The /plus return path: Stripe is the only witness. The
+    session must be paid, name THIS user with kind='plus', and
+    carry a subscription that Stripe reports active/trialing —
+    only then does Plus switch on."""
+    if not session_id or not stripe_enabled():
+        return ""
+    me = get_user(user["id"]) or {}
+    if me.get("stripe_sub_id") and _is_plus(me):
+        return "⭐ HERE Plus is on — enjoy!"
+    try:
+        sess = _stripe_api(
+            "GET", f"/v1/checkout/sessions/{session_id}")
+    except Exception:
+        return ""
+    meta = sess.get("metadata") or {}
+    if (sess.get("payment_status") != "paid"
+            or meta.get("kind") != "plus"
+            or str(meta.get("user_id")) != str(user["id"])):
+        return ""
+    sub_id = sess.get("subscription")
+    if not sub_id:
+        return ""
+    try:
+        sub = _stripe_api("GET", f"/v1/subscriptions/{sub_id}")
+    except Exception:
+        return ""
+    if sub.get("status") not in ("active", "trialing"):
+        return ""
+    if _plus_apply_subscription(user["id"], sub):
+        return "⭐ HERE Plus is on — enjoy!"
+    return ""
+
+
+def _plus_refresh(user_row):
+    """Lazy renewal check: when a subscriber's period is within
+    3 days of ending (or just ended), ask Stripe once and extend
+    plus_until to the new period end. A canceled subscription
+    simply stops extending — Plus fades at the period end, which
+    is exactly what cancel-at-period-end promises."""
+    sub_id = (user_row or {}).get("stripe_sub_id")
+    if not sub_id or not stripe_enabled():
+        return
+    pu = (user_row or {}).get("plus_until") or ""
+    horizon = (datetime.now(timezone.utc)
+               + timedelta(days=3)).isoformat()
+    if pu and pu > horizon:
+        return
+    try:
+        sub = _stripe_api("GET", f"/v1/subscriptions/{sub_id}")
+    except Exception:
+        return
+    if sub.get("status") in ("active", "trialing"):
+        _plus_apply_subscription(user_row["id"], sub)
+
+
+@app.get("/plus", response_class=HTMLResponse)
+async def plus_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    msg = _plus_verify_session(
+        user, (request.query_params.get("session_id") or "").strip())
+    me = get_user(user["id"]) or {}
+    _plus_refresh(me)
+    me = get_user(user["id"]) or {}
+    return render(request, "plus.html", {
+        "is_plus": _is_plus(me),
+        "plus_until": me.get("plus_until") or "",
+        "has_sub": bool(me.get("stripe_sub_id")),
+        "price": PLUS_CENTS / 100,
+        "stripe_on": stripe_enabled(),
+        "msg": msg})
+
+
+@app.post("/plus/checkout")
+async def plus_checkout(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    if not stripe_enabled():
+        return redir("/plus", "Plus payments aren't open yet — "
+                              "check back soon.")
+    base = str(request.base_url).rstrip("/")
+    params = {
+        "mode": "subscription",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]": str(PLUS_CENTS),
+        "line_items[0][price_data][recurring][interval]": "month",
+        "line_items[0][price_data][product_data][name]":
+            "HERE Plus",
+        "line_items[0][quantity]": "1",
+        "metadata[user_id]": str(user["id"]),
+        "metadata[kind]": "plus",
+        "success_url": base + "/plus?session_id="
+                              "{CHECKOUT_SESSION_ID}",
+        "cancel_url": base + "/plus",
+    }
+    try:
+        sess = _stripe_api("POST", "/v1/checkout/sessions", params)
+    except Exception as e:
+        return redir("/plus", f"Stripe hiccup: {e}")
+    url = sess.get("url")
+    if not url:
+        return redir("/plus", "Stripe didn't return a checkout "
+                              "link — try again in a moment.")
+    return RedirectResponse(url, status_code=303)
+
+
+@app.post("/plus/cancel")
+async def plus_cancel(request: Request):
+    """Cancel at period end — Plus stays on until the paid month
+    runs out, then fades on its own (nothing more to charge)."""
+    user, err = require_login(request)
+    if err:
+        return err
+    me = get_user(user["id"]) or {}
+    sub_id = me.get("stripe_sub_id")
+    if not sub_id:
+        return redir("/plus", "No Plus subscription to cancel.")
+    try:
+        _stripe_api("POST", f"/v1/subscriptions/{sub_id}",
+                    {"cancel_at_period_end": "true"})
+    except Exception as e:
+        return redir("/plus", f"Stripe hiccup: {e}")
+    return redir("/plus", "Done — Plus stays on until the end of "
+                          "this paid month, then stops. No more "
+                          "charges.")
+
+
 @app.get("/founders", response_class=HTMLResponse)
 async def founders_page(request: Request):
     """The Original 100 wall: the first hundred real accounts,
@@ -11347,7 +11737,7 @@ async def lobby_page(request: Request):
     return redir(f"/live/{live['id']}")
 
 
-def _create_live(conn, user, title):
+def _create_live(conn, user, title, entry_tickets=0):
     """Create a live for user (commits, returns the new id).
     Carries the platform's two standing rules: starting your own
     live pulls you off everybody else's panel (Ken, Oct 27), and
@@ -11370,12 +11760,109 @@ def _create_live(conn, user, title):
     stamp = now_iso()
     cur = conn.execute(
         "INSERT INTO live_sessions(host_id, title, status, "
-        "created_at, host_seen_at, like_count, panel_order) "
-        "VALUES(?,?,'live',?,?,0,?)",
-        (user["id"], title, stamp, stamp, json.dumps([user["id"]])))
+        "created_at, host_seen_at, like_count, panel_order, "
+        "entry_tickets) "
+        "VALUES(?,?,'live',?,?,0,?,?)",
+        (user["id"], title, stamp, stamp, json.dumps([user["id"]]),
+         int(entry_tickets or 0)))
     lid = cur.lastrowid
     conn.commit()
     return lid
+
+
+def _live_entered(conn, lid, uid):
+    return bool(conn.execute(
+        "SELECT 1 FROM live_entries WHERE live_id=? AND user_id=?",
+        (lid, uid)).fetchone())
+
+
+def _entry_gate(conn, live, user, panel_ids, owner_on=False):
+    """True when this viewer still owes the door: the live has a
+    ticket price, and the viewer is not the host, not seated, not
+    an admin, not the owner context, and has not paid."""
+    price = live["entry_tickets"] or 0
+    if not price or owner_on:
+        return False
+    if user["id"] == live["host_id"] or user["id"] in panel_ids:
+        return False
+    if conn.execute(
+            "SELECT 1 FROM live_admins WHERE live_id=? AND "
+            "user_id=? AND revoked_at IS NULL",
+            (live["id"], user["id"])).fetchone():
+        return False
+    return not _live_entered(conn, live["id"], user["id"])
+
+
+@app.post("/live/{lid}/pay-entry")
+async def live_pay_entry(request: Request, lid: int):
+    """🎟 Pay the door: the viewer's tickets move to the HOST's
+    earnings in one guarded transaction (twin ledger lines,
+    note='entry'), and a live_entries row remembers the payment
+    for the life of this live. Paying twice never charges twice —
+    the entries row is the receipt."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if not live or live["status"] != "live":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That live isn't running."},
+            status_code=400)
+    price = live["entry_tickets"] or 0
+    if not price:
+        conn.close()
+        return JSONResponse({"ok": True, "free": True})
+    if user["id"] == live["host_id"]:
+        conn.close()
+        return JSONResponse({"ok": True, "host": True})
+    if _live_entered(conn, lid, user["id"]):
+        conn.close()
+        return JSONResponse({"ok": True, "already": True})
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
+        "COALESCE(tickets_balance,0) >= ?",
+        (price, user["id"], price))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Not enough tickets — grab a pack first 🎟️"},
+            status_code=400)
+    host_id = live["host_id"]
+    conn.execute(
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) "
+        "+ ?, gift_lifetime = COALESCE(gift_lifetime,0) + ? "
+        "WHERE id=?", (price, price, host_id))
+    stamp = now_iso()
+    conn.execute(
+        "INSERT OR IGNORE INTO live_entries(live_id, user_id, "
+        "tickets, created_at) VALUES(?,?,?,?)",
+        (lid, user["id"], price, stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
+        (user["id"], "entry_pay", -price, lid, "", "entry", stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
+        (host_id, "entry_receive", price, lid, "", "entry", stamp))
+    conn.commit()
+    bal = conn.execute(
+        "SELECT tickets_balance FROM users WHERE id=?",
+        (user["id"],)).fetchone()["tickets_balance"]
+    conn.close()
+    host = get_user(host_id) or {}
+    notify(host_id, "live_entry",
+           f"{user['name']} paid 🎟 {price} to enter your live",
+           f"/live/{lid}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "balance": bal or 0,
+                         "host": host.get("name") or ""})
 
 
 @app.post("/live/start")
@@ -11390,9 +11877,23 @@ async def live_start(request: Request):
         data = {}
     title = str(data.get("title") or "").strip()[:LIVE_TITLE_MAX] \
         if isinstance(data, dict) else ""
+    entry = 0
+    if isinstance(data, dict):
+        try:
+            entry = int(data.get("entry_tickets") or 0)
+        except (TypeError, ValueError):
+            entry = 0
+    entry = max(0, min(entry, 100000))
+    if entry and not (get_user(user["id"]) or {}).get(
+            "creator_mode"):
+        return JSONResponse(
+            {"ok": False,
+             "error": "Turn on Creator Mode (Settings) to charge "
+                      "a ticket door — that's what lets you earn."},
+            status_code=400)
     conn = db()
     _sweep_lives(conn)
-    lid = _create_live(conn, user, title)
+    lid = _create_live(conn, user, title, entry_tickets=entry)
     conn.close()
     if title:
         flag_item("live_title", lid, user["id"], user["name"], title)
@@ -11405,7 +11906,9 @@ async def live_start(request: Request):
             send_push(fid, f"🔴 {user['name']} is live",
                       title or "Tap to watch now.", f"/live/{lid}",
                       tag=f"live-{lid}", ttl=3600)
-    return JSONResponse({"ok": True, "id": lid, "url": f"/live/{lid}"})
+    return JSONResponse({"ok": True, "id": lid,
+                         "url": f"/live/{lid}",
+                         "entry_tickets": entry})
 
 
 @app.get("/live/{lid}", response_class=HTMLResponse)
@@ -11439,8 +11942,17 @@ async def live_page(request: Request, lid: int):
             "mode": "unavailable", "live": live, "host": host,
             "embed": embed, "hide_golive": True})
     panel_ids = _live_panel_ids(conn, live)
+    if _entry_gate(conn, live, user, panel_ids, owner_on):
+        price = live["entry_tickets"] or 0
+        bal = (get_user(user["id"]) or {}).get(
+            "tickets_balance") or 0
+        conn.close()
+        return render(request, "live.html", {
+            "mode": "entry_gate", "live": live, "host": host,
+            "entry_tickets": price, "my_balance": bal,
+            "embed": embed, "hide_golive": True})
     conn.close()
-    # Boot compat: 'guest' stays the first non-host panelist (or
+    # Boot compat: 'guest' stays the first panelist (oror
     # None); the watch page's state poll carries the full panel.
     guest = _live_person(panel_ids[1]) if len(panel_ids) > 1 else None
     if user["id"] == live["host_id"]:
@@ -11900,6 +12412,15 @@ async def live_state(request: Request, lid: int):
         return JSONResponse(
             {"ok": False, "error": "You can't watch this live."},
             status_code=403)
+    _panel_ids_pre = _live_panel_ids(conn, live)
+    if _entry_gate(conn, live, user, _panel_ids_pre,
+                   is_owner(request)):
+        price = live["entry_tickets"] or 0
+        conn.close()
+        return JSONResponse({
+            "ok": True, "status": "entry_required",
+            "entry_tickets": price, "host": host,
+            "title": live["title"]})
     try:
         since = int(request.query_params.get("since_comment") or 0)
     except (TypeError, ValueError):
@@ -11924,7 +12445,7 @@ async def live_state(request: Request, lid: int):
     # anybody (Ken's 2026-10-23 live report).
     am_member = is_host or user["id"] in member_map
     rows = conn.execute(
-        "SELECT lc.*, u.name, u.avatar, u.founding_no "
+        "SELECT lc.*, u.name, u.avatar, u.founding_no, u.plus_until "
         "FROM live_comments lc "
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.live_id=? AND "
         "lc.id>? ORDER BY lc.id ASC LIMIT 100", (lid, since)).fetchall()
@@ -12062,6 +12583,7 @@ async def live_state(request: Request, lid: int):
         "panel": panel,
         "spotlight_id": live.get("spotlight_id"),
         "is_lobby": bool(live.get("is_lobby")),
+        "entry_tickets": live["entry_tickets"] or 0,
         "captain_id": captain_id,
         "prompt": (daily_prompt() if live.get("is_lobby")
                    else None),
@@ -12710,6 +13232,17 @@ async def live_comment(request: Request, lid: int):
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
+    _cg = db()
+    _gated = _entry_gate(_cg, live, user,
+                         _live_panel_ids(_cg, live),
+                         is_owner(request))
+    _cg.close()
+    if _gated:
+        return JSONResponse(
+            {"ok": False,
+             "error": "🎟 This live has a ticket door — pay the "
+                      "entry to join the chat."},
+            status_code=403)
     try:
         data = await request.json()
     except Exception:
@@ -12731,7 +13264,7 @@ async def live_comment(request: Request, lid: int):
     cid = cur.lastrowid
     conn.commit()
     row = conn.execute(
-        "SELECT lc.*, u.name, u.avatar, u.founding_no "
+        "SELECT lc.*, u.name, u.avatar, u.founding_no, u.plus_until "
         "FROM live_comments lc "
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.id=?",
         (cid,)).fetchone()
@@ -12971,6 +13504,149 @@ async def user_page_gift(request: Request, uid: int):
             status_code=403)
     code, payload = _page_gift_core(user, uid, prof["name"], None,
                                     gift)
+    return JSONResponse(payload, status_code=code)
+
+
+def _post_gift_ctx(user):
+    """Sheet context for post/Peep gifts (partials/post_gift.html):
+    the viewer's balance + the catalog. The endpoint is dynamic —
+    the sheet posts to /post/{id}/gift for whichever post the
+    reader tapped, so there is no fixed recipient here."""
+    me = get_user(user["id"]) or {}
+    gifts = []
+    for k in GIFT_ORDER:
+        g = GIFT_CATALOG[k]
+        gifts.append({"key": k, "name": g["name"],
+                      "tickets": g["tickets"],
+                      "category": g["category"], "img": g["img"],
+                      "anim": g["anim"]})
+    return {"balance": me.get("tickets_balance") or 0,
+            "gifts": gifts}
+
+
+def _post_gift_core(user, post, gift):
+    """The money move for a post/Peep gift — the page-gift
+    transaction with a post attached: guarded debit, the AUTHOR
+    earns into gift_earned (+lifetime), a post_gifts row, and the
+    twin ledger lines stamped note='post'. Free gifts move no
+    ledger and ride the same 1-per-2s anti-spam guard, scoped per
+    sender+post."""
+    cost = gift["tickets"]
+    recipient_id = post["user_id"]
+    conn = db()
+    if cost == 0:
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(seconds=2)).isoformat()
+        recent = conn.execute(
+            "SELECT COUNT(*) c FROM post_gifts WHERE sender_id=? "
+            "AND post_id=? AND tickets=0 AND created_at>?",
+            (user["id"], post["id"], cutoff)).fetchone()["c"]
+        if recent:
+            conn.close()
+            return 429, {"ok": False,
+                         "error": "Easy — one free gift every "
+                                  "couple of seconds 💜"}
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
+        "COALESCE(tickets_balance,0) >= ?", (cost, user["id"], cost))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return 400, {"ok": False,
+                     "error": "Not enough tickets — grab a pack "
+                              "first 🎟️"}
+    conn.execute(
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) "
+        "+ ?, gift_lifetime = COALESCE(gift_lifetime,0) + ? "
+        "WHERE id=?", (cost, cost, recipient_id))
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO post_gifts(sender_id, recipient_id, post_id, "
+        "gift_key, tickets, created_at) VALUES(?,?,?,?,?,?)",
+        (user["id"], recipient_id, post["id"], gift["key"], cost,
+         stamp))
+    gift_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
+        (user["id"], "gift_send", -cost, None, gift["key"], "post",
+         stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
+        (recipient_id, "gift_receive", cost, None, gift["key"],
+         "post", stamp))
+    conn.commit()
+    bal = conn.execute(
+        "SELECT tickets_balance FROM users WHERE id=?",
+        (user["id"],)).fetchone()["tickets_balance"]
+    conn.close()
+    author = get_user(recipient_id) or {}
+    notify(recipient_id, "post_gift",
+           f"{user['name']} sent you {gift['name']} on your post 🎁",
+           f"/post/{post['id']}", actor_id=user["id"])
+    return 200, {"ok": True, "balance": bal or 0,
+                 "gift_id": gift_id,
+                 "recipient_id": recipient_id,
+                 "recipient_name": author.get("name") or "them"}
+
+
+@app.post("/post/{pid}/gift")
+async def post_gift(request: Request, pid: int):
+    """🎁 Gift a post or a Peep: the AUTHOR earns. Gates mirror
+    the post itself (can_view_post) plus the profile-gift rules:
+    the author must run Creator Mode, no self-gifts, no gifts
+    across a block either way."""
+    user, gift, err = await _page_gift_parse(request)
+    if err:
+        return err
+    conn = db()
+    p = conn.execute("SELECT * FROM posts WHERE id=?",
+                     (pid,)).fetchone()
+    conn.close()
+    if not p:
+        return JSONResponse(
+            {"ok": False, "error": "That post isn't available."},
+            status_code=400)
+    post = dict(p)
+    if post.get("shared_post_id"):
+        post_id = post["shared_post_id"]
+        conn = db()
+        p2 = conn.execute("SELECT * FROM posts WHERE id=?",
+                          (post_id,)).fetchone()
+        conn.close()
+        if not p2:
+            return JSONResponse(
+                {"ok": False, "error": "That post isn't available."},
+                status_code=400)
+        post = dict(p2)
+    author = get_user(post["user_id"])
+    if not author:
+        return JSONResponse(
+            {"ok": False, "error": "That post isn't available."},
+            status_code=400)
+    if not author.get("creator_mode"):
+        return JSONResponse(
+            {"ok": False,
+             "error": "That creator can't take gifts — Creator "
+                      "Mode is off."},
+            status_code=403)
+    if post["user_id"] == user["id"]:
+        return JSONResponse(
+            {"ok": False, "error": "You can't gift your own post."},
+            status_code=400)
+    owner_on = is_owner(request)
+    if not owner_on and blocked_either_way(user["id"],
+                                            post["user_id"]):
+        return JSONResponse(
+            {"ok": False, "error": "That post isn't available."},
+            status_code=400)
+    if not can_view_post(user, post, owner_on):
+        return JSONResponse(
+            {"ok": False, "error": "That post isn't available."},
+            status_code=400)
+    code, payload = _post_gift_core(user, post, gift)
     return JSONResponse(payload, status_code=code)
 
 
@@ -16220,7 +16896,7 @@ async def earnings_page(request: Request):
         "SUM(CASE WHEN COALESCE(note,'')='shout' THEN 0 ELSE 1 "
         "END) g FROM ticket_txns WHERE user_id=? AND "
         "kind='gift_receive' AND live_id IS NULL AND "
-        "COALESCE(note,'') != 'page'",
+        "COALESCE(note,'') NOT IN ('page','post','entry')",
         (user["id"],)).fetchone()
     earlier = ({"gifts": (legacy["g"] or 0) if legacy else 0,
                 "tickets": (legacy["s"] or 0) if legacy else 0}
@@ -16237,6 +16913,24 @@ async def earnings_page(request: Request):
     page_gifts = ({"gifts": page_g["c"] or 0,
                    "tickets": page_g["s"] or 0}
                   if page_g and page_g["c"] else None)
+    # Money build: post/Peep gifts (note='post') and ticket-door
+    # earnings (kind='entry_receive') get their own honest lines
+    # too — a creator sees exactly which door the money came
+    # through.
+    post_g = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s FROM "
+        "ticket_txns WHERE user_id=? AND kind='gift_receive' AND "
+        "COALESCE(note,'') = 'post'", (user["id"],)).fetchone()
+    post_gifts_earn = ({"gifts": post_g["c"] or 0,
+                        "tickets": post_g["s"] or 0}
+                       if post_g and post_g["c"] else None)
+    door_r = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s FROM "
+        "ticket_txns WHERE user_id=? AND "
+        "kind='entry_receive'", (user["id"],)).fetchone()
+    door_earn = ({"gifts": door_r["c"] or 0,
+                  "tickets": door_r["s"] or 0}
+                 if door_r and door_r["c"] else None)
     # Build LOCKED CONTENT: unlock credits are their own kind
     # ('unlock_receive', note='unlock') — never gift_receive — so
     # they can't leak into the stream buckets above; they get their
@@ -16285,6 +16979,8 @@ async def earnings_page(request: Request):
             _earned_dollars(CASHOUT_MIN_TICKETS)),
         "streams": streams, "earlier": earlier,
         "page_gifts": page_gifts,
+        "post_gifts_earn": post_gifts_earn,
+        "door_earn": door_earn,
         "locked_content": locked_content,
         "pending": ({"tickets": pending["tickets"],
                      "dollars": _money2(pending["dollars_cents"]),
@@ -16638,6 +17334,9 @@ def _listing_card(row, saved=False):
         "photo_paths": raw,
         "first_photo": ("/uploads/" + raw[0]) if raw else "",
         "status": row["status"], "sold": row["status"] == "sold",
+        "boosted": bool("boost_until" in keys
+                        and row["boost_until"]
+                        and row["boost_until"] > time.time()),
         "created": fancy_time(row["created_at"]),
         "seller_name": row["sname"] if "sname" in keys else "",
         "seller_avatar": (avatar_url(row["savatar"])
@@ -16764,9 +17463,14 @@ async def market_browse(request: Request):
         where.append("l.seller_id NOT IN (%s)"
                      % ",".join("?" * len(blocked)))
         args += sorted(blocked)
-    order = {"new": "l.created_at DESC",
-             "price_asc": "l.price_cents ASC, l.created_at DESC",
-             "price_desc": "l.price_cents DESC, l.created_at DESC"}[sort]
+    _boost_first = ("CASE WHEN COALESCE(l.boost_until,0) > "
+                    "CAST(strftime('%s','now') AS REAL) "
+                    "THEN 0 ELSE 1 END, ")
+    order = {"new": _boost_first + "l.created_at DESC",
+             "price_asc": _boost_first
+             + "l.price_cents ASC, l.created_at DESC",
+             "price_desc": _boost_first
+             + "l.price_cents DESC, l.created_at DESC"}[sort]
     conn = db()
     rows = conn.execute(
         "SELECT l.*, u.name AS sname, u.avatar AS savatar "
@@ -16941,6 +17645,65 @@ def _claim_state(row):
             "by_name": cu["name"] if cu else "Someone",
             "left_s": int((exp - datetime.now(
                 timezone.utc)).total_seconds())}
+
+
+@app.post("/market/{lid}/boost")
+async def market_boost(request: Request, lid: int):
+    """⭐ Boost a listing: BOOST_TICKETS buys 7 days at the top
+    of the Market with a Featured tag. The tickets are spent —
+    burned out of the seller's balance in one guarded update
+    with a 'boost_spend' ledger line; HERE already collected
+    their dollar value when the pack was bought. Stacking adds
+    7 more days to whatever boost is left."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM market_listings WHERE id=?",
+        (lid,)).fetchone()
+    if not row or row["seller_id"] != user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That listing isn't yours."},
+            status_code=400)
+    if row["status"] != "active":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "Only a live listing can be "
+                                   "boosted."},
+            status_code=400)
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
+        "COALESCE(tickets_balance,0) >= ?",
+        (BOOST_TICKETS, user["id"], BOOST_TICKETS))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": f"Boosting takes {BOOST_TICKETS} tickets — "
+                      "grab a pack first 🎟️"},
+            status_code=400)
+    now_e = time.time()
+    until = max(now_e, row["boost_until"] or 0) + BOOST_SECONDS
+    conn.execute(
+        "UPDATE market_listings SET boost_until=? WHERE id=?",
+        (until, lid))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, note, "
+        "created_at) VALUES(?,?,?,?,?)",
+        (user["id"], "boost_spend", -BOOST_TICKETS,
+         f"market {lid}", now_iso()))
+    conn.commit()
+    bal = conn.execute(
+        "SELECT tickets_balance FROM users WHERE id=?",
+        (user["id"],)).fetchone()["tickets_balance"]
+    conn.close()
+    return JSONResponse({"ok": True, "boost_until": until,
+                         "balance": bal or 0})
 
 
 @app.post("/market/{lid}/claim")

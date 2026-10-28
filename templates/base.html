@@ -1629,6 +1629,8 @@ body .bolt .hic{fill:currentColor;stroke:none;filter:none}
   <div class="aud-title">🔴 Go Live</div>
   <p style="font-size:14px;color:var(--muted)">Stream right from your phone. Friends get told the moment you start, and one of them can join you on camera.</p>
   <input id="golive-title" maxlength="80" placeholder="What's this live about? (optional)" autocomplete="off">
+  <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;margin:8px 0 2px">🎟 Entry price
+    <input id="golive-entry" type="number" min="0" max="100000" step="1" value="0" style="width:96px"> tickets <span style="color:var(--muted);font-weight:600">(0 = free · needs Creator Mode)</span></label>
   <div id="golive-error"></div>
   <button type="button" class="cmenu-item danger" id="golive-start" style="text-align:center;font-weight:800">🔴 Start live</button>
   <button type="button" class="cmenu-item" id="golive-cancel">Cancel</button>
@@ -1788,7 +1790,8 @@ document.addEventListener('click', function(ev){
     start.disabled = true;
     fetch('/live/start', {method: 'POST', credentials: 'same-origin',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({title: title.value || ''})})
+      body: JSON.stringify({title: title.value || '',
+        entry_tickets: parseInt((document.getElementById('golive-entry') || {}).value || '0', 10) || 0})})
       .then(function(r){ return r.json(); })
       .then(function(d){
         start.disabled = false;
