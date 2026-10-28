@@ -67,8 +67,8 @@ check("founding: first accounts hold seats",
       and dbq("SELECT founding FROM users WHERE id=?",
               (a_id,))[0]["founding"] == 1)
 r = A.get(f"/user/{host_id}")
-check("founding: profile wears the ORIGINAL 100 chip",
-      "ORIGINAL 100" in r.text)
+check("founding: profile wears the ORIGINAL chip",
+      "ORIGINAL" in r.text)
 # Fill seats to 99, then the next TWO signups race the boundary.
 dbx("INSERT INTO users(name, email, pw_hash, created_at, founding) "
     "SELECT 'Filler ' || n, 'f' || n || '@example.com', 'x', "
@@ -86,7 +86,7 @@ check("founding: seat 101 does not exist",
       dbq("SELECT founding FROM users WHERE id=?",
           (c_id,))[0]["founding"] == 0)
 r = A.get(f"/user/{c_id}")
-check("founding: no chip past the hundred", "ORIGINAL 100" not in r.text)
+check("founding: no chip past the hundred", "ORIGINAL" not in r.text)
 
 # ---------- The Lobby ----------
 r = A.get("/lobby")

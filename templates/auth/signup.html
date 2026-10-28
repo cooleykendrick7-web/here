@@ -51,6 +51,11 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 <div class="tagline">Your people. Your pages. Your world.</div>
 <div class="auth-card">
   <h2>Sign Up — it's free</h2>
+  {% if seats_left %}
+  <a href="/founders" style="display:block;background:linear-gradient(135deg,#8f0f14,#e01e26);color:#fff;border-radius:14px;padding:12px 14px;margin:0 0 14px;text-decoration:none;text-align:center;font-weight:800">
+    🏅 Only {{ seats_left }} of the 100 Original seats are left — join now and yours is forever.
+  </a>
+  {% endif %}
   {% if inviter %}
   <div style="display:flex;align-items:center;gap:10px;background:#1f1f1f;border:1px solid #d41f2e;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:14px">
     {% if inviter.avatar %}<img src="{{ inviter.avatar|e }}" alt="" style="width:36px;height:36px;border-radius:50%;object-fit:cover">{% endif %}

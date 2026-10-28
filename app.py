@@ -1186,6 +1186,23 @@ def init_db():
     if "live_id" not in _mk_cols:
         c.execute("ALTER TABLE market_listings ADD COLUMN "
                   "live_id INTEGER")
+    if "claimed_by" not in _mk_cols:
+        c.execute("ALTER TABLE market_listings ADD COLUMN "
+                  "claimed_by INTEGER")
+        c.execute("ALTER TABLE market_listings ADD COLUMN "
+                  "claim_expires_at TEXT")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_auctions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, listing_id INTEGER,
+        title TEXT NOT NULL DEFAULT '', photo TEXT NOT NULL DEFAULT '',
+        start_cents INTEGER NOT NULL DEFAULT 0,
+        current_cents INTEGER NOT NULL DEFAULT 0,
+        leader_id INTEGER, ends_at REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'running',
+        created_by INTEGER NOT NULL, created_at TEXT NOT NULL,
+        settled INTEGER NOT NULL DEFAULT 0)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_auct_live "
+              "ON live_auctions(live_id, status)")
     c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
         user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
@@ -1248,6 +1265,9 @@ def init_db():
         c.execute("ALTER TABLE users ADD COLUMN gift_lifetime "
                   "INTEGER DEFAULT 0")
         _lifetime_backfill = True
+    if "founding_no" not in _user_cols_lt:
+        c.execute("ALTER TABLE users ADD COLUMN founding_no "
+                  "INTEGER")
     if "founding" not in _user_cols_lt:
         c.execute("ALTER TABLE users ADD COLUMN founding "
                   "INTEGER DEFAULT 0")
@@ -1257,6 +1277,18 @@ def init_db():
         c.execute(
             "UPDATE users SET founding=1 WHERE id IN "
             "(SELECT id FROM users ORDER BY id ASC LIMIT 100)")
+        for _i, _r in enumerate(c.execute(
+                "SELECT id FROM users WHERE founding=1 "
+                "ORDER BY id ASC").fetchall(), start=1):
+            c.execute("UPDATE users SET founding_no=? WHERE id=?",
+                      (_i, _r["id"]))
+    if c.execute("SELECT COUNT(*) c FROM users WHERE founding=1 "
+                 "AND founding_no IS NULL").fetchone()["c"]:
+        for _i, _r in enumerate(c.execute(
+                "SELECT id FROM users WHERE founding=1 "
+                "ORDER BY id ASC").fetchall(), start=1):
+            c.execute("UPDATE users SET founding_no=? WHERE id=?",
+                      (_i, _r["id"]))
     if "stripe_acct_id" not in _user_cols_lt:
         # Build R: the streamer's Stripe Connect (Express) account
         # id, created by POST /payouts/setup; payout_ready is the
@@ -2723,7 +2755,8 @@ def post_card(p, viewer, owner_on=False):
     if viewer and not can_view_post(viewer, p, owner_on):
         conn.close()
         return None
-    a = conn.execute("SELECT id,name,avatar,is_verified,private_profile "
+    a = conn.execute("SELECT id,name,avatar,is_verified,"
+                     "private_profile,founding_no "
                      "FROM users WHERE id=?",
                      (p["user_id"],)).fetchone()
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
@@ -2836,6 +2869,7 @@ def post_card(p, viewer, owner_on=False):
         "id": p["id"], "user_id": p["user_id"],
         "dom_id": ("post-share-%d" % share["id"]) if share else ("post-%d" % p["id"]),
         "author_name": a["name"] if a else "Deleted user",
+        "author_founding_no": (a["founding_no"] if a else None),
         "author_avatar": avatar,
         "author_verified": bool(a["is_verified"]) if a else False,
         "kind": p["kind"], "body": p["body"] or "",
@@ -3208,8 +3242,10 @@ async def signup_page(request: Request):
     if inv:
         inviter = {"name": inv["name"],
                    "avatar": avatar_url(inv.get("avatar", ""))}
+    _taken, _left = founding_seat_counts()
     return render(request, "auth/signup.html",
-                  {"error": request.query_params.get("error", ""),
+                  {"seats_taken": _taken, "seats_left": _left,
+                   "error": request.query_params.get("error", ""),
                    "inviter": inviter})
 
 
@@ -3233,7 +3269,9 @@ async def signup(request: Request):
         # signup takes one. First hundred accounts, ever — when
         # they're gone, they're gone.
         conn.execute(
-            "UPDATE users SET founding=1 WHERE id=? AND "
+            "UPDATE users SET founding=1, founding_no="
+            "(SELECT COUNT(*) FROM users WHERE founding=1) + 1 "
+            "WHERE id=? AND "
             "(SELECT COUNT(*) FROM users WHERE founding=1) < 100",
             (uid,))
         conn.commit()
@@ -3697,7 +3735,10 @@ async def public_profile(request: Request, user_id: int):
                 # card's lit-glass finish too.
                 "look_scheme_class": look_scheme_class_for(prof),
                 "founding": (prof["founding"]
-                             if "founding" in prof.keys() else 0)}
+                             if "founding" in prof.keys() else 0),
+                "founding_no": (prof["founding_no"]
+                                if "founding_no" in prof.keys()
+                                else None)}
     # Share preview = HERE logo (template fallback), never the person's face.
     og_image = ""
     return render(request, "public_profile.html", {
@@ -4475,6 +4516,7 @@ async def home(request: Request):
     cfriends, cpages = composer_choices(user)
     _lc = db()
     lobby_card = _lobby_card(_lc)
+    seats_left = founding_seat_counts(_lc)[1]
     _lc.close()
     return render(request, "home.html",
                   {"posts": posts, "feed_items": feed_items,
@@ -4482,6 +4524,7 @@ async def home(request: Request):
                    "stories_tray": stories_tray(user["id"]),
                    "live_now": live_now_for(user["id"], owner_on),
                    "lobby": lobby_card,
+                   "seats_left": seats_left,
                    "discover_people": discover_people(user["id"], 3),
                    "trends": trending_topics(5, user["id"]),
                    "daily_prompt": daily_prompt(),
@@ -4788,8 +4831,8 @@ def _thread_comments(conn, p, viewer, owner_on=False):
     def _author(uid):
         if uid not in _authors:
             _authors[uid] = conn.execute(
-                "SELECT id,name,avatar FROM users WHERE id=?",
-                (uid,)).fetchone()
+                "SELECT id,name,avatar,founding_no FROM users "
+                "WHERE id=?", (uid,)).fetchone()
         return _authors[uid]
 
     _by_id = {c["id"]: c for c in crows}
@@ -4811,6 +4854,7 @@ def _thread_comments(conn, p, viewer, owner_on=False):
         return {
             "id": c["id"], "user_id": c["user_id"],
             "author_name": a["name"] if a else "Deleted user",
+            "author_founding_no": (a["founding_no"] if a else None),
             "author_avatar": avatar_url(a["avatar"]) if a and a["avatar"] else "",
             "body": c["body"], "body_html": linkify_body(c["body"]),
             "created_at": fancy_time(c["created_at"]),
@@ -8438,6 +8482,7 @@ async def profile(request: Request, uid: int):
         "tap_count": tcount,
         "is_verified": bool(prof.get("is_verified")),
         "founding": bool(prof.get("founding")),
+        "founding_no": prof.get("founding_no"),
         "verification_status": prof.get("verification_status") or "none",
         "background": avatar_url(prof.get("background", "")),
         "presence": presence_of(prof),
@@ -10513,6 +10558,8 @@ def _sweep_lives(conn):
     # and the lives list both pass through), then any finished
     # battle still missing its result posts/notices gets settled.
     _changed = _battle_expire(conn)
+    if _auction_tick(conn):
+        _changed = True
     if stale or _changed or ghosts:
         conn.commit()
     _pending_fx = conn.execute(
@@ -10912,13 +10959,15 @@ def _live_comment_json(row, viewer_id, host_id, viewer_is_admin=False,
                       or bool(viewer_is_admin)}
     if rank is not None:
         out["sender_rank"] = rank
+    out["founding_no"] = row.get("founding_no")
     return out
 
 
 def _live_person(uid):
     u = get_user(uid) or {}
     return {"id": uid, "name": u.get("name", "Deleted user"),
-            "avatar": avatar_url(u.get("avatar", ""))}
+            "avatar": avatar_url(u.get("avatar", "")),
+            "founding_no": u.get("founding_no")}
 
 
 def live_now_for(viewer_id, owner_on=False):
@@ -11088,6 +11137,132 @@ async def lives_json(request: Request):
          "is_self": r["is_self"]} for r in rows]})
 
 
+def founding_seat_counts(conn=None):
+    """(taken, left) for the Original 100 — always the REAL
+    numbers: seats are genuine accounts only."""
+    own = conn is None
+    if own:
+        conn = db()
+    taken = conn.execute(
+        "SELECT COUNT(*) c FROM users WHERE founding=1"
+    ).fetchone()["c"]
+    if own:
+        conn.close()
+    return taken, max(0, 100 - taken)
+
+
+def _lobby_captain_id(conn, live):
+    """The Lobby runs itself (Ken's top-tier round, Oct 28): while
+    the host is NOT in the room, the earliest-seated active
+    panelist is the captain — host-lite moderation (mute / kick /
+    move / spotlight) until the host walks in or they leave.
+    Returns None outside the Lobby or while the host is present."""
+    if not live.get("is_lobby"):
+        return None
+    fresh = (datetime.now(timezone.utc)
+             - timedelta(seconds=120)).isoformat()
+    if (live.get("host_seen_at") or "") >= fresh:
+        return None
+    row = conn.execute(
+        "SELECT user_id FROM live_members WHERE live_id=? AND "
+        "left_at IS NULL AND user_id!=? ORDER BY joined_at ASC, "
+        "user_id ASC LIMIT 1",
+        (live["id"], live["host_id"])).fetchone()
+    return row["user_id"] if row else None
+
+
+def _is_lobby_captain(conn, live, uid):
+    return _lobby_captain_id(conn, live) == uid
+
+
+AUCTION_MIN_STEP_CENTS = 50
+AUCTION_SNIPE_WINDOW = 10.0
+AUCTION_SNIPE_EXTEND = 10.0
+
+
+def _auction_json(conn, a, viewer_id):
+    if not a:
+        return None
+    leader_name = None
+    if a["leader_id"]:
+        lu = get_user(a["leader_id"])
+        leader_name = lu["name"] if lu else "Someone"
+    return {
+        "id": a["id"], "title": a["title"], "photo": a["photo"],
+        "listing_id": a["listing_id"],
+        "start_cents": a["start_cents"],
+        "current_cents": a["current_cents"],
+        "current": _money(a["current_cents"]),
+        "start": _money(a["start_cents"]),
+        "leader_id": a["leader_id"], "leader_name": leader_name,
+        "seller_id": a["created_by"],
+        "ends_at": a["ends_at"], "status": a["status"],
+        "mine_leading": a["leader_id"] == viewer_id,
+        "next_min_cents": (a["current_cents"]
+                           if not a["leader_id"] else
+                           a["current_cents"]
+                           + AUCTION_MIN_STEP_CENTS),
+        "next_min": _money(a["current_cents"]
+                           if not a["leader_id"] else
+                           a["current_cents"]
+                           + AUCTION_MIN_STEP_CENTS)}
+
+
+def _auction_tick(conn):
+    """Lazy auction settlement, riding the live sweep: a running
+    auction past its clock ends here. The winner is NOT charged —
+    HERE's Market never moves money — the seller and winner are
+    notified and connected by a message thread carrying the
+    listing snapshot, exactly like a normal Market inquiry.
+    Returns True when anything changed."""
+    import time as _time
+    now = _time.time()
+    due = conn.execute(
+        "SELECT * FROM live_auctions WHERE status='running' AND "
+        "ends_at<=?", (now,)).fetchall()
+    changed = False
+    for a in due:
+        conn.execute(
+            "UPDATE live_auctions SET status='ended', settled=1 "
+            "WHERE id=?", (a["id"],))
+        changed = True
+        if not a["leader_id"]:
+            continue
+        # notify()/_deliver_message() write through their OWN
+        # connections — release this connection's write lock
+        # first or SQLite deadlocks the settlement.
+        conn.commit()
+        winner = get_user(a["leader_id"])
+        seller = get_user(a["created_by"])
+        if not winner or not seller:
+            continue
+        amt = _money(a["current_cents"])
+        notify(a["leader_id"], "auction_won",
+               f"🏆 You won the auction for “{a['title']}” at "
+               f"{amt}! The seller has your thread — set up "
+               f"payment and pickup with them.",
+               f"/messages/{a['created_by']}",
+               actor_id=a["created_by"])
+        notify(a["created_by"], "auction_sold",
+               f"🏆 Your auction “{a['title']}” ended — "
+               f"{winner['name']} won at {amt}. A thread with "
+               f"them is in your inbox.",
+               f"/messages/{a['leader_id']}",
+               actor_id=a["leader_id"])
+        try:
+            _deliver_message(
+                dict(seller), a["leader_id"],
+                f"🏆 You won my live auction for “{a['title']}” "
+                f"at {amt}! Message me here to set up payment "
+                f"and pickup.",
+                listing_id=a["listing_id"],
+                listing_title=a["title"],
+                listing_price_cents=a["current_cents"])
+        except Exception:
+            pass
+    return changed
+
+
 LOBBY_HOST_EMAIL = os.environ.get(
     "HERE_LOBBY_HOST", "cooleykendrick7@gmail.com")
 LOBBY_TITLE = "\U0001F3E0 The Lobby \u2014 always open"
@@ -11114,7 +11289,9 @@ def _lobby_live(conn):
         "INSERT INTO live_sessions(host_id, title, status, "
         "created_at, host_seen_at, like_count, panel_order, "
         "is_lobby, panel_open) VALUES(?,?,'live',?,?,0,?,1,1)",
-        (host["id"], LOBBY_TITLE, stamp, stamp,
+        (host["id"], LOBBY_TITLE, stamp,
+         (datetime.now(timezone.utc)
+          - timedelta(days=1)).isoformat(),
          json.dumps([host["id"]])))
     conn.commit()
     return _live_get(conn, cur.lastrowid)
@@ -11131,6 +11308,30 @@ def _lobby_card(conn):
                       - timedelta(seconds=180)).isoformat())
         ).fetchone()["c"]
     return {"id": live["id"], "inside": inside}
+
+
+@app.get("/founders", response_class=HTMLResponse)
+async def founders_page(request: Request):
+    """The Original 100 wall: the first hundred real accounts,
+    numbered by join order, with the still-open seats showing —
+    scarcity you can count, because every seat is a real person."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    rows = conn.execute(
+        "SELECT id, name, avatar, founding_no, created_at FROM "
+        "users WHERE founding=1 ORDER BY founding_no ASC").fetchall()
+    taken, left = founding_seat_counts(conn)
+    conn.close()
+    founders = [{"id": r["id"], "name": r["name"],
+                 "avatar": avatar_url(r["avatar"] or ""),
+                 "no": r["founding_no"],
+                 "joined": fancy_time(r["created_at"])}
+                for r in rows]
+    return render(request, "founders.html",
+                  {"founders": founders, "taken": taken,
+                   "left": left})
 
 
 @app.get("/lobby")
@@ -11723,7 +11924,8 @@ async def live_state(request: Request, lid: int):
     # anybody (Ken's 2026-10-23 live report).
     am_member = is_host or user["id"] in member_map
     rows = conn.execute(
-        "SELECT lc.*, u.name, u.avatar FROM live_comments lc "
+        "SELECT lc.*, u.name, u.avatar, u.founding_no "
+        "FROM live_comments lc "
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.live_id=? AND "
         "lc.id>? ORDER BY lc.id ASC LIMIT 100", (lid, since)).fetchall()
     # Gifter ranks for this poll's authors + gift senders (cached
@@ -11741,6 +11943,7 @@ async def live_state(request: Request, lid: int):
                                    rank=_rank_of(r["user_id"]))
                 for r in rows]
     panel_ids = _live_panel_ids(conn, live)
+    captain_id = _lobby_captain_id(conn, live)
     # Live selling (Ken's pick #4): listings riding this live.
     shop = []
     for srow in conn.execute(
@@ -11748,6 +11951,22 @@ async def live_state(request: Request, lid: int):
             "AND status!='deleted' ORDER BY created_at ASC",
             (lid,)).fetchall():
         _ph = _market_photos(srow)
+        _claim = None
+        if srow["claimed_by"] and srow["claim_expires_at"]:
+            _exp = _parse_ts(srow["claim_expires_at"])
+            if _exp and _exp > datetime.now(timezone.utc):
+                _cu = get_user(srow["claimed_by"])
+                _claim = {
+                    "by": srow["claimed_by"],
+                    "by_name": _cu["name"] if _cu else "Someone",
+                    "mine": srow["claimed_by"] == user["id"],
+                    "left_s": int((_exp - datetime.now(
+                        timezone.utc)).total_seconds())}
+            else:
+                conn.execute(
+                    "UPDATE market_listings SET claimed_by=NULL, "
+                    "claim_expires_at=NULL WHERE id=?",
+                    (srow["id"],))
         shop.append({
             "id": srow["id"], "title": srow["title"] or "",
             "price_cents": srow["price_cents"],
@@ -11755,7 +11974,8 @@ async def live_state(request: Request, lid: int):
             "photo": ("/uploads/" + _ph[0]) if _ph else "",
             "status": srow["status"],
             "sold": srow["status"] == "sold",
-            "seller_id": srow["seller_id"]})
+            "seller_id": srow["seller_id"],
+            "claim": _claim})
     panel = []
     for pid in panel_ids:
         person = _live_person(pid)
@@ -11771,14 +11991,10 @@ async def live_state(request: Request, lid: int):
                 # own client is actually in the room; otherwise
                 # his tile honestly reads camera-off (avatar face)
                 # instead of a black connecting box.
-                _hp = conn.execute(
-                    "SELECT last_seen_at, left_at FROM live_viewers "
-                    "WHERE live_id=? AND user_id=?",
-                    (live["id"], pid)).fetchone()
                 _fresh = (datetime.now(timezone.utc)
                           - timedelta(seconds=120)).isoformat()
-                _vok = 1 if (_hp and not _hp["left_at"]
-                             and _hp["last_seen_at"] >= _fresh) else 0
+                _vok = 1 if (live.get("host_seen_at") or "") \
+                    >= _fresh else 0
         else:
             _vok = mrow.get("video_ok") if mrow else None
         panel.append({
@@ -11790,6 +12006,8 @@ async def live_state(request: Request, lid: int):
             "video_ok": True if _vok is None else bool(_vok),
             # Ken: every panel tile wears its owner's gift level
             # at the bottom center — tiles render this chip.
+            "founding_no": person.get("founding_no"),
+            "captain": pid == captain_id,
             "rank": "host" if pid == live["host_id"] else (
                 (mrow.get("rank") if mrow else None) or "guest"),
             "level": _streamer_level(
@@ -11825,6 +12043,13 @@ async def live_state(request: Request, lid: int):
             "id": r["id"],
             "from_name": _live_person(inviter)["name"] if inviter
                          else host["name"]})
+    _now_ep = datetime.now(timezone.utc).timestamp()
+    _arow = conn.execute(
+        "SELECT * FROM live_auctions WHERE live_id=? AND "
+        "(status='running' OR (status='ended' AND ends_at>?)) "
+        "ORDER BY id DESC LIMIT 1", (lid, _now_ep - 90)).fetchone()
+    auction = _auction_json(conn, dict(_arow) if _arow else None,
+                            user["id"])
     out = {
         "ok": True, "status": "live", "title": live["title"],
         "host": host, "guest": guest,
@@ -11836,7 +12061,14 @@ async def live_state(request: Request, lid: int):
         "my_join": None, "pending_requests": [],
         "panel": panel,
         "spotlight_id": live.get("spotlight_id"),
+        "is_lobby": bool(live.get("is_lobby")),
+        "captain_id": captain_id,
+        "prompt": (daily_prompt() if live.get("is_lobby")
+                   else None),
+        "auction": auction,
         "shop": shop,
+        "shop_stats": {"watching": len(viewer_rows),
+                       "sold": sum(1 for s in shop if s["sold"])},
         # Build X: the panel grid's shared state — open or not,
         # and the host's guest-square allowance (1..8).
         "panel_open": bool(live.get("panel_open")),
@@ -12499,7 +12731,8 @@ async def live_comment(request: Request, lid: int):
     cid = cur.lastrowid
     conn.commit()
     row = conn.execute(
-        "SELECT lc.*, u.name, u.avatar FROM live_comments lc "
+        "SELECT lc.*, u.name, u.avatar, u.founding_no "
+        "FROM live_comments lc "
         "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.id=?",
         (cid,)).fetchone()
     viewer_admin = _live_is_admin(conn, lid, user["id"])
@@ -13968,7 +14201,8 @@ async def live_kick(request: Request, lid: int):
             status_code=400)
     conn = db()
     is_host = user["id"] == live["host_id"]
-    caller_admin = _live_is_admin(conn, lid, user["id"])
+    caller_admin = _live_is_admin(conn, lid, user["id"]) \
+        or _is_lobby_captain(conn, live, user["id"])
     if not is_host and not caller_admin:
         conn.close()
         return JSONResponse(
@@ -14044,7 +14278,8 @@ async def live_mute(request: Request, lid: int):
     mute_val = 1 if data.get("mute") else 0
     conn = db()
     is_host = user["id"] == live["host_id"]
-    caller_admin = _live_is_admin(conn, lid, user["id"])
+    caller_admin = _live_is_admin(conn, lid, user["id"]) \
+        or _is_lobby_captain(conn, live, user["id"])
     if not is_host and not caller_admin:
         conn.close()
         return JSONResponse(
@@ -14099,7 +14334,8 @@ async def live_move(request: Request, lid: int):
     step = 1 if step_raw > 0 else (-1 if step_raw < 0 else 0)
     conn = db()
     if live["host_id"] != user["id"] \
-            and not _live_is_admin(conn, lid, user["id"]):
+            and not _live_is_admin(conn, lid, user["id"]) \
+            and not _is_lobby_captain(conn, live, user["id"]):
         conn.close()
         return JSONResponse(
             {"ok": False,
@@ -14119,6 +14355,169 @@ async def live_move(request: Request, lid: int):
         conn.commit()
     conn.close()
     return JSONResponse({"ok": True, "panel_order": ids})
+
+
+@app.post("/live/{lid}/auction/start")
+async def live_auction_start(request: Request, lid: int):
+    """Start a live auction (host only — they run the show). The
+    item is one of the live's shop listings, or a custom title.
+    The listing's SELLER is the deal counterparty when a listing
+    is used. Bids are claims to buy under HERE's Market rules —
+    no money moves in-app; winner and seller settle directly."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if user["id"] != live["host_id"]:
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host can start an auction."},
+            status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    import time as _time
+    seconds = _live_body_int(data, "seconds") or 120
+    seconds = max(30, min(900, seconds))
+    start_cents = _live_body_int(data, "start_cents")
+    listing_id = _live_body_int(data, "listing_id")
+    conn = db()
+    running = conn.execute(
+        "SELECT id FROM live_auctions WHERE live_id=? AND "
+        "status='running'", (lid,)).fetchone()
+    if running:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "An auction is already running — let it "
+                      "finish first."}, status_code=400)
+    title = ""
+    photo = ""
+    seller_id = user["id"]
+    if listing_id:
+        row = conn.execute(
+            "SELECT * FROM market_listings WHERE id=? AND "
+            "live_id=? AND status='active'",
+            (listing_id, lid)).fetchone()
+        if not row:
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "That item isn't on this live's shop."},
+                status_code=400)
+        title = row["title"] or "Item"
+        _ph = _market_photos(row)
+        photo = ("/uploads/" + _ph[0]) if _ph else ""
+        seller_id = row["seller_id"]
+        if not start_cents:
+            start_cents = row["price_cents"]
+    else:
+        title = str(data.get("title") or "").strip()[:80]
+        if not title:
+            conn.close()
+            return JSONResponse(
+                {"ok": False, "error": "Name the item first."},
+                status_code=400)
+    start_cents = max(100, start_cents or 0)
+    cur = conn.execute(
+        "INSERT INTO live_auctions(live_id, listing_id, title, "
+        "photo, start_cents, current_cents, leader_id, ends_at, "
+        "status, created_by, created_at) VALUES(?,?,?,?,?,?,NULL,"
+        "?,'running',?,?)",
+        (lid, listing_id, title, photo, start_cents, start_cents,
+         _time.time() + seconds, seller_id, now_iso()))
+    conn.commit()
+    a = conn.execute("SELECT * FROM live_auctions WHERE id=?",
+                     (cur.lastrowid,)).fetchone()
+    out = _auction_json(conn, dict(a), user["id"])
+    conn.close()
+    return JSONResponse({"ok": True, "auction": out})
+
+
+@app.post("/live/{lid}/auction/bid")
+async def live_auction_bid(request: Request, lid: int):
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    amount = _live_body_int(data, "amount_cents")
+    import time as _time
+    conn = db()
+    a = conn.execute(
+        "SELECT * FROM live_auctions WHERE live_id=? AND "
+        "status='running' ORDER BY id DESC LIMIT 1",
+        (lid,)).fetchone()
+    if not a:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "No auction is running."},
+            status_code=400)
+    if user["id"] == a["created_by"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "The seller can't bid on their own item."},
+            status_code=400)
+    need = (a["current_cents"] if not a["leader_id"] else
+            a["current_cents"] + AUCTION_MIN_STEP_CENTS)
+    if not amount or amount < need:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": f"Bid at least {_money(need)}."},
+            status_code=400)
+    prev = a["leader_id"]
+    ends = a["ends_at"]
+    now = _time.time()
+    if ends - now < AUCTION_SNIPE_WINDOW:
+        ends = now + AUCTION_SNIPE_EXTEND
+    conn.execute(
+        "UPDATE live_auctions SET current_cents=?, leader_id=?, "
+        "ends_at=? WHERE id=?", (amount, user["id"], ends, a["id"]))
+    conn.commit()
+    a2 = conn.execute("SELECT * FROM live_auctions WHERE id=?",
+                      (a["id"],)).fetchone()
+    out = _auction_json(conn, dict(a2), user["id"])
+    conn.close()
+    if prev and prev != user["id"]:
+        notify(prev, "auction_outbid",
+               f"You've been outbid on “{a['title']}” — it's at "
+               f"{_money(amount)} now. Jump back in!",
+               f"/live/{lid}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "auction": out})
+
+
+@app.post("/live/{lid}/auction/cancel")
+async def live_auction_cancel(request: Request, lid: int):
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    conn = db()
+    a = conn.execute(
+        "SELECT * FROM live_auctions WHERE live_id=? AND "
+        "status='running' ORDER BY id DESC LIMIT 1",
+        (lid,)).fetchone()
+    if not a:
+        conn.close()
+        return JSONResponse({"ok": True})
+    if user["id"] != live["host_id"] \
+            and user["id"] != a["created_by"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host or the seller can cancel."},
+            status_code=403)
+    conn.execute(
+        "UPDATE live_auctions SET status='cancelled', settled=1 "
+        "WHERE id=?", (a["id"],))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
 
 
 @app.post("/live/{lid}/rank")
@@ -14198,7 +14597,8 @@ async def live_panel_order(request: Request, lid: int):
                 status_code=400)
     conn = db()
     if live["host_id"] != user["id"] \
-            and not _live_is_admin(conn, lid, user["id"]):
+            and not _live_is_admin(conn, lid, user["id"]) \
+            and not _is_lobby_captain(conn, live, user["id"]):
         conn.close()
         return JSONResponse(
             {"ok": False,
@@ -14239,7 +14639,8 @@ async def live_spotlight(request: Request, lid: int):
                 {"ok": False, "error": "Bad user."}, status_code=400)
     conn = db()
     if live["host_id"] != user["id"] \
-            and not _live_is_admin(conn, lid, user["id"]):
+            and not _live_is_admin(conn, lid, user["id"]) \
+            and not _is_lobby_captain(conn, live, user["id"]):
         conn.close()
         return JSONResponse(
             {"ok": False,
@@ -16526,6 +16927,138 @@ async def market_detail(request: Request, lid: int):
         "is_seller": row["seller_id"] == user["id"],
         "saved": saved, "more_count": more_count,
         "safety_note": MARKET_SAFETY_NOTE})
+
+
+def _claim_state(row):
+    """(active_claim_dict_or_None) — an expired hold is no hold."""
+    if not row["claimed_by"] or not row["claim_expires_at"]:
+        return None
+    exp = _parse_ts(row["claim_expires_at"])
+    if not exp or exp <= datetime.now(timezone.utc):
+        return None
+    cu = get_user(row["claimed_by"])
+    return {"by": row["claimed_by"],
+            "by_name": cu["name"] if cu else "Someone",
+            "left_s": int((exp - datetime.now(
+                timezone.utc)).total_seconds())}
+
+
+@app.post("/market/{lid}/claim")
+async def market_claim(request: Request, lid: int):
+    """✋ Claim it (live selling): while an item rides a live, a
+    watcher can hold it for 10 minutes — first come, one holder.
+    The seller then accepts (item goes SOLD to the claimer) or
+    releases it back to the floor."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "Log in first."},
+                            status_code=401)
+    conn = db()
+    row = _get_listing(conn, lid)
+    if not row or row["status"] != "active":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That item isn't available."},
+            status_code=400)
+    if row["seller_id"] == user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "It's your item."},
+            status_code=400)
+    if not row["live_id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Claims open while the item is live."},
+            status_code=400)
+    lv = conn.execute(
+        "SELECT status FROM live_sessions WHERE id=?",
+        (row["live_id"],)).fetchone()
+    if not lv or lv["status"] != "live":
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "That live is over — message the seller."},
+            status_code=400)
+    cur = _claim_state(row)
+    if cur and cur["by"] != user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": f"{cur['by_name']} is holding this one."},
+            status_code=400)
+    exp = (datetime.now(timezone.utc)
+           + timedelta(minutes=10)).isoformat()
+    conn.execute(
+        "UPDATE market_listings SET claimed_by=?, "
+        "claim_expires_at=? WHERE id=?", (user["id"], exp, lid))
+    conn.commit()
+    conn.close()
+    notify(row["seller_id"], "market_claim",
+           f"✋ {user['name']} claimed “{row['title']}” on your "
+           f"live — 10 minutes to accept in the shop strip.",
+           f"/live/{row['live_id']}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "claim": {
+        "by": user["id"], "by_name": user["name"], "left_s": 600}})
+
+
+@app.post("/market/{lid}/claim-release")
+async def market_claim_release(request: Request, lid: int):
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False}, status_code=401)
+    conn = db()
+    row = _get_listing(conn, lid)
+    if row and (row["claimed_by"] == user["id"]
+                or row["seller_id"] == user["id"]):
+        conn.execute(
+            "UPDATE market_listings SET claimed_by=NULL, "
+            "claim_expires_at=NULL WHERE id=?", (lid,))
+        conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/market/{lid}/claim-accept")
+async def market_claim_accept(request: Request, lid: int):
+    """Seller accepts the hold: the item goes SOLD to the
+    claimer (savers get the usual SOLD notice; the claimer gets
+    their own — message the seller to pay and pick up)."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False}, status_code=401)
+    conn = db()
+    row = _get_listing(conn, lid)
+    if not row or row["seller_id"] != user["id"]:
+        conn.close()
+        return JSONResponse({"ok": False}, status_code=403)
+    cur = _claim_state(row)
+    if not cur:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "No live hold on this item."},
+            status_code=400)
+    claimer = cur["by"]
+    savers = [r["user_id"] for r in conn.execute(
+        "SELECT user_id FROM market_saves WHERE listing_id=?",
+        (lid,)).fetchall()]
+    conn.execute(
+        "UPDATE market_listings SET status='sold', sold_at=?, "
+        "claimed_by=NULL, claim_expires_at=NULL WHERE id=?",
+        (now_iso(), lid))
+    conn.commit()
+    conn.close()
+    for sid in savers:
+        if sid != user["id"] and sid != claimer:
+            notify(sid, "market_sold",
+                   f"An item you saved was marked SOLD: "
+                   f"{row['title']}", f"/market/{lid}",
+                   actor_id=user["id"])
+    notify(claimer, "market_claim_won",
+           f"✅ {user['name']} accepted your claim on "
+           f"“{row['title']}”! Message them to pay and pick up.",
+           f"/messages/{user['id']}", actor_id=user["id"])
+    return JSONResponse({"ok": True})
 
 
 @app.post("/market/{lid}/go-live")

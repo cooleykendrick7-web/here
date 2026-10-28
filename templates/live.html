@@ -430,6 +430,24 @@
 .shop-card .sc-title{display:block;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .shop-card .sc-price{display:block;font-size:12.5px;font-weight:900;color:#ffd257;margin-top:2px}
 .shop-card .sc-sold{position:absolute;top:8px;left:8px;background:#e01e26;color:#fff;font-weight:900;font-size:11px;padding:3px 8px;border-radius:999px;transform:rotate(-8deg);z-index:2}
+.shop-head{flex:none;width:100%;font-size:12.5px;font-weight:800;color:rgba(255,255,255,.85);padding:2px 2px 0}
+.shop-card .sc-actions{display:flex;gap:6px;padding:0 9px 9px}
+.shop-card .sc-btn{flex:1;background:#e01e26;color:#fff;border:none;border-radius:9px;font-weight:800;font-size:12px;padding:6px 4px;cursor:pointer}
+.shop-card .sc-btn.ghost{background:rgba(255,255,255,.14)}
+.shop-card .sc-claim{display:block;padding:0 9px 8px;font-size:12px;font-weight:800;color:#ffd257}
+#live-prompt{margin:8px 0 0;background:linear-gradient(135deg,rgba(143,15,20,.85),rgba(224,30,38,.85));color:#fff;border-radius:12px;padding:9px 13px;font-weight:700;font-size:14px}
+#live-auction{margin:10px 0 0}
+.auct-bar{display:flex;gap:12px;align-items:center;background:rgba(24,18,4,.9);border:1.5px solid #b8860b;border-radius:16px;padding:10px 13px;color:#fff}
+.auct-bar img{width:52px;height:52px;border-radius:10px;object-fit:cover;background:#2a2b2e}
+.auct-bar .a-title{font-weight:900;font-size:14.5px}
+.auct-bar .a-bid{font-weight:900;font-size:17px;color:#ffd257}
+.auct-bar .a-sub{font-size:12px;opacity:.85}
+.auct-bar .a-clock{font-weight:900;font-size:16px;background:#e01e26;border-radius:999px;padding:4px 11px;flex:none}
+.auct-bids{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+.auct-bids button{background:#e01e26;color:#fff;border:none;border-radius:10px;font-weight:800;padding:8px 13px;cursor:pointer;font-size:13.5px}
+.auct-bids button.ghost{background:rgba(255,255,255,.15)}
+.auct-bids input{width:92px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;padding:8px;font-size:13.5px}
+.auct-start{width:100%;background:rgba(24,18,4,.85);border:1.5px dashed #b8860b;color:#ffd257;border-radius:14px;padding:10px;font-weight:900;cursor:pointer;font-size:14px}
 .live-ctl{background:var(--lg-bg);color:#fff;border:var(--lg-border);border-radius:999px;
   height:38px;padding:0 10px;font-size:12.5px;font-weight:700;cursor:pointer;
   display:inline-flex;align-items:center;gap:6px;
@@ -670,6 +688,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
     <div class="live-meta">
       <div class="live-host">{{ host.name|e }}{% if host.live_level %} <span class="lvl-chip" title="Streamer Live Level">{{ host.live_level.label|e }}</span>{% endif %}</div>
       {% if live.title %}<div class="live-title">{{ live.title|e }}</div>{% endif %}
+      <div id="live-prompt" hidden></div>
       <div class="live-topgifters" id="live-top-gifters" hidden></div>
     </div>
     <div class="live-stats">
@@ -707,11 +726,13 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="live-ctl" id="ctl-games" title="🎮 Games" hidden>{{ ic('games') }}</button>
   <button type="button" class="live-ctl" id="ctl-battle" title="⚔️ Live Showdown" hidden>{{ ic('swords') }}</button>
  </div>
+<div id="live-auction"></div>
 <div class="live-shop" id="live-shop"></div>
 <div class="live-controls" id="live-controls">
   <!-- panel members -->
   <button type="button" class="live-ctl" id="ctl-mute" hidden>{{ ic('mic') }} Mute</button>
   <button type="button" class="live-ctl" id="ctl-cam" hidden>{{ ic('camera') }} Camera on</button>
+  <button type="button" class="live-ctl" id="ctl-voice" hidden>🎙 Voice only</button>
   <button type="button" class="live-ctl" id="ctl-flip" hidden>{{ ic('flip') }} Flip</button>
   <button type="button" class="live-ctl" id="ctl-connect" hidden>🎮 Live Connect</button>
   <button type="button" class="live-ctl" id="ctl-studio" hidden>{{ ic('studio') }} Studio</button>
@@ -724,6 +745,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
   {% if role == 'watcher' %}<button type="button" class="live-ctl" id="ctl-minimize" hidden>➖ Minimize</button>{% endif %}
   <button type="button" class="live-ctl" id="ctl-join" hidden>{{ ic('ask') }} Ask to join panel</button>
+  <label id="join-voice-wrap" hidden style="align-items:center;gap:6px;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:999px;padding:7px 13px;font-size:13.5px;font-weight:700;cursor:pointer"><input type="checkbox" id="join-voice" style="accent-color:#e01e26"> 🎙 Join voice only</label>
   <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
   <button type="button" class="live-ctl" id="ctl-leave" hidden>{{ ic('logout') }} Leave</button>
 </div>
@@ -1085,7 +1107,8 @@ function liveRoomDiff(prev, next){
   }
   function iAmHost(){ return !!(myPanel && myPanel.is_host) || isHost; }
   function iAmAdmin(){ return !!(myPanel && myPanel.is_admin); }
-  function canManage(){ return iAmHost() || iAmAdmin(); }
+  function iAmCaptain(){ return !!(window.__capUid && window.__capUid === B.me); }
+  function canManage(){ return iAmHost() || iAmAdmin() || iAmCaptain(); }
   /* Hierarchy for showing actions: the host sees actions on everyone;
      an admin sees none on the host or on other admins. The server
      still enforces everything — this only keeps the UI honest. */
@@ -1093,6 +1116,7 @@ function liveRoomDiff(prev, next){
     if (!target || target.user_id === B.me) return false;
     if (iAmHost()) return true;
     if (iAmAdmin()) return !(target.role === 'host' || target.admin);
+    if (iAmCaptain()) return !(target.role === 'host' || target.admin);
     return false;
   }
 
@@ -1291,6 +1315,8 @@ function liveRoomDiff(prev, next){
     if (member.admin) b += '🛡 ';
     if (member.rank === 'regular' && !member.admin
         && member.role !== 'host') b += '⭐ ';
+    if (member.captain) b += '🧢 ';
+    if (member.founding_no) b += '🏅#' + member.founding_no + ' ';
     if (member.muted) b += '🔇';
     if (T.badges.textContent !== b) T.badges.textContent = b;
     /* Source tag renders from LOCAL state on my OWN tile only —
@@ -5850,6 +5876,13 @@ function liveRoomDiff(prev, next){
       chip.textContent = c.sender_rank.label;
       bodyWrap.appendChild(chip);
     }
+    if (c.founding_no){
+      var og = document.createElement('span');
+      og.className = 'rank-chip';
+      og.style.cssText = 'background:linear-gradient(135deg,#f5c542,#b8860b);color:#231a00';
+      og.textContent = '🏅 #' + c.founding_no;
+      bodyWrap.appendChild(og);
+    }
     var body = document.createElement('div');
     body.textContent = c.body;
     bodyWrap.appendChild(body);
@@ -6544,19 +6577,230 @@ function liveRoomDiff(prev, next){
     });
   }
   $('gift-boost').addEventListener('click', boostSend);
-  function renderShop(items){
-  var box=document.getElementById('live-shop'); if(!box) return;
-  var key=items.map(function(s){return s.id+':'+s.status+':'+s.price_cents;}).join(',');
-  if(box.dataset.k===key) return; box.dataset.k=key;
-  box.innerHTML=items.map(function(s){
-    return '<a class="shop-card" href="/market/'+s.id+'">'
-      +(s.sold?'<span class="sc-sold">SOLD</span>':'')
-      +(s.photo?'<img src="'+esc(s.photo)+'" alt="">':'')
-      +'<span class="sc-body"><span class="sc-title">'+esc(s.title)+'</span>'
-      +'<span class="sc-price">'+esc(s.price)+'</span></span></a>';
-  }).join('');
+  
+function renderPrompt(d){
+  var el = document.getElementById('live-prompt');
+  if (!el) return;
+  var jw = document.getElementById('join-voice-wrap');
+  if (jw) jw.style.display = (d && d.is_lobby && !amMember) ? 'inline-flex' : 'none';
+  if (d && d.is_lobby && d.prompt){
+    var txt = '💬 Today\u2019s question: ' + d.prompt;
+    if (el.textContent !== txt) el.textContent = txt;
+    el.hidden = false;
+  } else {
+    el.hidden = true;
+  }
 }
 
+/* ------- voice only: a seat with a mic and no camera ------- */
+var voiceOnly = false;
+var pendingVoice = false;
+function paintVoiceBtn(){
+  var b = document.getElementById('ctl-voice');
+  if (b) b.textContent = voiceOnly ? '🎙 Voice only: ON' : '🎙 Voice only';
+}
+function applyVoiceOnly(on){
+  voiceOnly = !!on;
+  if (voiceOnly){ myCamOn = false; }
+  applyLocalTrackStates();
+  paintVoiceBtn();
+}
+function applyPendingVoice(){
+  if (pendingVoice && amMember && myStream && !voiceOnly){
+    applyVoiceOnly(true);
+    pendingVoice = false;
+    toast('🎙 You are on the panel voice-only — tap 🎙 again in the controls to change it.');
+  }
+}
+
+/* ------- auctions ------- */
+var curAuction = null;
+function fmtClock(s){
+  s = Math.max(0, Math.ceil(s));
+  var m = Math.floor(s / 60), r = s % 60;
+  return m + ':' + (r < 10 ? '0' : '') + r;
+}
+function renderAuction(a, d){
+  var box = document.getElementById('live-auction');
+  if (!box) return;
+  curAuction = a;
+  if (!a){
+    if (iAmHost()){
+      if (box.dataset.k !== 'host-start'){
+        box.dataset.k = 'host-start';
+        box.innerHTML = '<button type="button" class="auct-start" id="auct-open">🏷 Start an auction — sell to the highest bidder</button>';
+        document.getElementById('auct-open').addEventListener('click', openAuctionSheet);
+      }
+    } else if (box.dataset.k !== 'none'){
+      box.dataset.k = 'none';
+      box.innerHTML = '';
+    }
+    return;
+  }
+  var key = a.id + ':' + a.status + ':' + a.current_cents + ':' + (a.leader_id || 0);
+  if (box.dataset.k === key) return;
+  box.dataset.k = key;
+  if (a.status === 'ended'){
+    box.innerHTML = '<div class="auct-bar"><span style="font-size:24px">🏆</span>'
+      + '<span style="flex:1"><span class="a-title">'
+      + (a.leader_name
+          ? esc(a.leader_name) + ' won \u201C' + esc(a.title) + '\u201D at ' + esc(a.current) + '!'
+          : 'Auction ended — no bids on \u201C' + esc(a.title) + '\u201D.')
+      + '</span><span class="a-sub" style="display:block">Winner and seller have a thread in their inboxes to settle up.</span></span></div>';
+    return;
+  }
+  var mine = a.seller_id === B.me;
+  var html = '<div class="auct-bar">'
+    + (a.photo ? '<img src="' + esc(a.photo) + '" alt="">' : '<span style="font-size:30px">🏷</span>')
+    + '<span style="flex:1;min-width:0"><span class="a-title">🏷 LIVE AUCTION — ' + esc(a.title) + '</span>'
+    + '<span style="display:block"><span class="a-bid">' + esc(a.current) + '</span> '
+    + '<span class="a-sub">' + (a.leader_name ? 'leading: ' + esc(a.leader_name) : 'opening bid — be the first!') + '</span></span></span>'
+    + '<span class="a-clock" data-auct-clock>…</span></div>';
+  if (mine){
+    html += '<div class="auct-bids"><span class="a-sub" style="align-self:center">Your item — the room is bidding. </span>'
+      + '<button type="button" class="ghost" id="auct-cancel">Cancel auction</button></div>';
+  } else if (!iAmHost() || true){
+    html += '<div class="auct-bids">'
+      + '<button type="button" id="auct-bid-min">Bid ' + esc(a.next_min) + '</button>'
+      + '<button type="button" id="auct-bid-1">+' + '$1' + '</button>'
+      + '<button type="button" id="auct-bid-5">+' + '$5' + '</button>'
+      + '<input id="auct-amt" type="number" min="1" step="1" placeholder="$ your bid">'
+      + '<button type="button" id="auct-bid-go">Bid</button>'
+      + (iAmHost() ? '<button type="button" class="ghost" id="auct-cancel">Cancel</button>' : '')
+      + '</div>';
+  }
+  box.innerHTML = html;
+  function sendBid(cents){
+    post('/auction/bid', {amount_cents: cents}).then(function(r){
+      if (r && r.ok){ toast('🏷 You are leading at ' + r.auction.current + '!'); pollState(); }
+      else toast((r && r.error) || 'That bid did not land.');
+    });
+  }
+  var bmin = document.getElementById('auct-bid-min');
+  if (bmin) bmin.addEventListener('click', function(){ sendBid(a.next_min_cents); });
+  var b1 = document.getElementById('auct-bid-1');
+  if (b1) b1.addEventListener('click', function(){ sendBid(a.next_min_cents + 100); });
+  var b5 = document.getElementById('auct-bid-5');
+  if (b5) b5.addEventListener('click', function(){ sendBid(a.next_min_cents + 500); });
+  var bgo = document.getElementById('auct-bid-go');
+  if (bgo) bgo.addEventListener('click', function(){
+    var v = parseFloat(document.getElementById('auct-amt').value || '0');
+    if (v > 0) sendBid(Math.round(v * 100));
+  });
+  var bc = document.getElementById('auct-cancel');
+  if (bc) bc.addEventListener('click', function(){
+    post('/auction/cancel', {}).then(function(){ pollState(); });
+  });
+}
+setInterval(function(){
+  if (!curAuction || curAuction.status !== 'running') return;
+  var el = document.querySelector('[data-auct-clock]');
+  if (el) el.textContent = fmtClock(curAuction.ends_at - Date.now() / 1000);
+}, 500);
+
+function openAuctionSheet(){
+  sheetTitle.textContent = '🏷 Start an auction';
+  sheetActions.innerHTML = '';
+  var items = (window.__shopItems || []).filter(function(s){ return !s.sold; });
+  if (!items.length){
+    var none = document.createElement('div');
+    none.style.cssText = 'padding:10px 8px;color:rgba(255,255,255,.78);font-size:14px';
+    none.textContent = 'Put an item on the shop first (Sell it live from its Market page), or start a custom auction below.';
+    sheetActions.appendChild(none);
+  }
+  items.forEach(function(s){
+    sheetActions.appendChild(sheetBtn('🛍 ' + s.title + ' — start at ' + s.price + ' · 2 min', false, function(){
+      closeSheet();
+      post('/auction/start', {listing_id: s.id, seconds: 120}).then(function(r){
+        if (r && r.ok) { toast('🏷 Auction live!'); pollState(); }
+        else toast((r && r.error) || 'Could not start the auction.');
+      });
+    }));
+  });
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:10px 4px 2px';
+  wrap.innerHTML = '<div style="font-weight:800;margin-bottom:7px">Or auction anything:</div>'
+    + '<input id="auct-title" type="text" maxlength="80" placeholder="What are you selling?" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;padding:9px;margin-bottom:7px">'
+    + '<div style="display:flex;gap:7px"><input id="auct-start-price" type="number" min="1" step="1" placeholder="Start $" style="flex:1;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;padding:9px">'
+    + '<select id="auct-secs" style="background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;padding:9px"><option value="60">1 min</option><option value="120" selected>2 min</option><option value="300">5 min</option></select></div>'
+    + '<button type="button" id="auct-custom-go" style="width:100%;margin-top:9px;background:#e01e26;color:#fff;border:none;border-radius:10px;font-weight:900;padding:11px;cursor:pointer">🏷 Start this auction</button>';
+  sheetActions.appendChild(wrap);
+  document.getElementById('auct-custom-go').addEventListener('click', function(){
+    var title = document.getElementById('auct-title').value.trim();
+    var price = parseFloat(document.getElementById('auct-start-price').value || '0');
+    var secs = parseInt(document.getElementById('auct-secs').value || '120', 10);
+    if (!title || !(price > 0)){ toast('Name the item and a starting price.'); return; }
+    closeSheet();
+    post('/auction/start', {title: title, start_cents: Math.round(price * 100), seconds: secs}).then(function(r){
+      if (r && r.ok) { toast('🏷 Auction live!'); pollState(); }
+      else toast((r && r.error) || 'Could not start the auction.');
+    });
+  });
+  sheetEl.hidden = false;
+  sheetBd.hidden = false;
+}
+
+  function renderShop(items, stats){
+  var box=document.getElementById('live-shop'); if(!box) return;
+  window.__shopItems = items;
+  stats = stats || {};
+  var key=items.map(function(s){
+    var c = s.claim ? (s.claim.by + ':' + Math.floor((s.claim.left_s||0)/15)) : '-';
+    return s.id+':'+s.status+':'+s.price_cents+':'+c;
+  }).join(',') + '|' + (stats.watching||0) + ':' + (stats.sold||0);
+  if(box.dataset.k===key) return; box.dataset.k=key;
+  if (!items.length){ box.innerHTML=''; return; }
+  var myId = B.me;
+  var html = '<div class="shop-head">\U0001F6CD Live shop · ' + (stats.watching||0)
+    + ' watching · ' + (stats.sold||0) + ' sold</div>';
+  html += items.map(function(s){
+    var mine = s.seller_id === myId;
+    var inner = (s.sold?'<span class="sc-sold">SOLD</span>':'')
+      +(s.photo?'<img src="'+esc(s.photo)+'" alt="">':'')
+      +'<span class="sc-body"><span class="sc-title">'+esc(s.title)+'</span>'
+      +'<span class="sc-price">'+esc(s.price)+'</span></span>';
+    var act = '';
+    if (!s.sold){
+      if (s.claim){
+        var mm = Math.floor((s.claim.left_s||0)/60), ss = (s.claim.left_s||0)%60;
+        inner += '<span class="sc-claim">✋ ' + esc(s.claim.by_name) + ' · '
+          + mm + ':' + (ss<10?'0':'') + ss + '</span>';
+        if (s.claim.mine){
+          act = '<span class="sc-actions"><button type="button" class="sc-btn ghost" data-claim="release" data-id="'+s.id+'">Release</button></span>';
+        } else if (mine){
+          act = '<span class="sc-actions"><button type="button" class="sc-btn" data-claim="accept" data-id="'+s.id+'">✅ Accept</button>'
+            + '<button type="button" class="sc-btn ghost" data-claim="release" data-id="'+s.id+'">Release</button></span>';
+        }
+      } else if (!mine){
+        act = '<span class="sc-actions"><button type="button" class="sc-btn" data-claim="claim" data-id="'+s.id+'">✋ Claim it</button></span>';
+      }
+    }
+    return '<span class="shop-card">' + inner + act + '</span>';
+  }).join('');
+  box.innerHTML = html;
+}
+document.addEventListener('click', function(ev){
+  var b = ev.target && ev.target.closest ? ev.target.closest('[data-claim]') : null;
+  if (!b) return;
+  var id = b.getAttribute('data-id'), act = b.getAttribute('data-claim');
+  var path = act === 'claim' ? '/market/' + id + '/claim'
+    : act === 'accept' ? '/market/' + id + '/claim-accept'
+    : '/market/' + id + '/claim-release';
+  b.disabled = true;
+  fetch(path, {method: 'POST', credentials: 'same-origin'}).then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok){
+        toast(act === 'claim' ? '✋ Claimed! The seller has 10 minutes to accept.'
+          : act === 'accept' ? '✅ Sold to the claimer!' : 'Released.');
+        var box = document.getElementById('live-shop');
+        if (box) box.dataset.k = '';
+        pollState();
+      } else {
+        toast((d && d.error) || 'That did not work.');
+        b.disabled = false;
+      }
+    }).catch(function(){ b.disabled = false; });
+});
 function renderTopGifters(list){
     var el = $('live-top-gifters');
     if (!list || !list.length){ el.hidden = true; el.textContent = ''; return; }
@@ -6774,6 +7018,7 @@ function renderTopGifters(list){
     var member = amMember;
     $('ctl-mute').hidden = !member;
     $('ctl-cam').hidden = !member;
+    $('ctl-voice').hidden = !member;
     $('ctl-flip').hidden = !member;
     $('ctl-connect').hidden = !member;
     $('ctl-studio').hidden = !member;
@@ -6836,8 +7081,14 @@ function renderTopGifters(list){
   });
   $('ctl-cam').addEventListener('click', function(){
     if (!myStream) return;
+    if (voiceOnly){ toast('🎙 Voice only is on — tap the 🎙 button to turn it off first.'); return; }
     myCamOn = !myCamOn;
     applyLocalTrackStates();
+  });
+  $('ctl-voice').addEventListener('click', function(){
+    if (!amMember) return;
+    applyVoiceOnly(!voiceOnly);
+    toast(voiceOnly ? '🎙 Voice only — your camera stays off.' : '🎙 Voice only off — camera is yours again.');
   });
   $('ctl-flip').addEventListener('click', function(){
     facing = facing === 'user' ? 'environment' : 'user';
@@ -6865,6 +7116,8 @@ function renderTopGifters(list){
     unlockAudio();
   });
   $('ctl-join').addEventListener('click', function(){
+    var jv = document.getElementById('join-voice');
+    if (jv && jv.checked) pendingVoice = true;
     var msg = $('live-join-msg');
     post('/join-request').then(function(d){
       msg.hidden = false;
@@ -7143,7 +7396,11 @@ function renderTopGifters(list){
           paintTickets();
         }
         (d.recent_gifts || []).forEach(handleGiftEvent);
-        try{renderShop(d.shop || []);}catch(_e){}
+        window.__capUid = d.captain_id || null;
+        try{renderPrompt(d);}catch(_e){}
+        try{renderShop(d.shop || [], d.shop_stats || {});}catch(_e){}
+        try{renderAuction(d.auction || null, d);}catch(_e){}
+        try{applyPendingVoice();}catch(_e){}
         renderTopGifters(d.top_gifters || []);
         var shoutChanged = JSON.stringify(d.active_shout || null)
           !== JSON.stringify(activeShout);
