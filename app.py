@@ -11051,6 +11051,21 @@ async def live_start(request: Request):
         if isinstance(data, dict) else ""
     conn = db()
     _sweep_lives(conn)
+    # Ken's rule (Oct 27): starting your own live pulls you off
+    # everybody else's panel — you cannot broadcast and sit on
+    # someone else's stage at the same time. Every active guest
+    # seat the starter holds in another room is dropped exactly
+    # the way a guest-leave drops it (bye signals to the room's
+    # peers + the roster settles), so that host's next state poll
+    # frees the seat for someone else.
+    seats = conn.execute(
+        "SELECT DISTINCT live_id FROM live_members WHERE user_id=? "
+        "AND left_at IS NULL", (user["id"],)).fetchall()
+    for seat in seats:
+        other = _live_get(conn, seat["live_id"])
+        if other and other["status"] == "live" \
+                and other["host_id"] != user["id"]:
+            _drop_guest(conn, dict(other), user["id"])
     # One live per host: starting a new one ends the old one first.
     old = conn.execute(
         "SELECT * FROM live_sessions WHERE host_id=? AND status='live'",

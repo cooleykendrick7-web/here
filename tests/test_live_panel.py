@@ -272,6 +272,36 @@ check("guest-leave frees the seat", st["my_panel"]["am_member"] is False and len
 r = H.post(f"/live/{L2}/guest-leave", json={})
 check("host bare guest-leave is no-op ok", r.json().get("ok"), r.text[:200])
 
+# ---- Ken's rule: starting your own live exits others' panels ----
+r = H.post("/live/start", json={"title": "Auto-exit room"})
+LX = r.json()["id"]
+for c in (G2,):
+    rr = c.post(f"/live/{LX}/heartbeat")
+    assert rr.status_code == 200, rr.text[:200]
+r = G2.post(f"/live/{LX}/join-request")
+rq = r.json()["request"]["id"]
+r = H.post(f"/live/{LX}/join-decide",
+           json={"request_id": rq, "approve": True})
+check("auto-exit setup: G2 seated on H's panel",
+      r.json().get("ok")
+      and dbq("SELECT left_at FROM live_members WHERE live_id=? "
+              "AND user_id=?", (LX, G2ID))[0]["left_at"] is None)
+r = G2.post("/live/start", json={"title": "G2 goes solo"})
+check("auto-exit: G2's own live starts", r.status_code == 200
+      and r.json().get("ok"), r.text[:200])
+check("auto-exit: G2's seat on H's panel is closed",
+      dbq("SELECT left_at FROM live_members WHERE live_id=? "
+          "AND user_id=?", (LX, G2ID))[0]["left_at"] is not None)
+check("auto-exit: G2's join request settled to left",
+      dbq("SELECT status FROM live_join_requests WHERE id=?",
+          (rq,))[0]["status"] == "left")
+st = H.get(f"/live/{LX}/state").json()
+check("auto-exit: H's panel no longer lists G2",
+      all(m["user_id"] != G2ID for m in st["panel"]), str(st["panel"]))
+st = G2.get(f"/live/{LX}/state").json()
+check("auto-exit: G2 reads as no longer a member there",
+      st["my_panel"]["am_member"] is False)
+
 fails = [n for n, ok in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} passed")
 if fails:

@@ -1484,14 +1484,100 @@ function liveRoomDiff(prev, next){
     var me = panelById[B.me];
     if (!me) return;
     var T = ensureTile(me);
-    if (T.video.srcObject !== myStream){
-      T.video.srcObject = myStream;
+    var src = outgoingStream() || myStream;
+    if (src && T.video.srcObject !== src){
+      T.video.srcObject = src;
       T.video.muted = true;
     }
     lcApplyMirror();
     T.el.classList.add('has-video');
     T.video.play().catch(function(){});
   }
+  /* ---------------- self-view truth (Ken's field fix) --------
+     The self tile used to trust that a bound stream is a visible
+     picture. It is not always: browsers pause tile videos, a
+     source switch changes the published track, a Studio canvas
+     can stall — and the tile sat BLACK with the avatar hidden
+     and no recovery (Ken, Oct 27: "I can't see myself" on his
+     phone AND his PC while the audience saw him fine). The
+     watchdog samples the tile's own video on every state poll:
+     advancing time is the truth. Two dark polls in a row rebind
+     to the OUTGOING stream (what viewers actually receive) and
+     replay; while dark, the tile shows the avatar + an honest
+     status line — never a silent black box. */
+  var selfView = { dark: 0, lastT: -1, lastFrame: -1,
+                   stream: null, track: null };
+  function outgoingVideoTrack(){
+    if (typeof studio !== 'undefined' && studio && studio.on
+        && studio.track)
+      return studio.track;
+    for (var uid in peers){
+      try {
+        var ss = peers[uid].pc.getSenders();
+        for (var i = 0; i < ss.length; i++)
+          if (ss[i].track && ss[i].track.kind === 'video'
+              && ss[i].track.readyState === 'live')
+            return ss[i].track;
+      } catch (e) {}
+    }
+    return currentVideoTrack();
+  }
+  function outgoingStream(){
+    var tr = outgoingVideoTrack();
+    if (!tr) return myStream;
+    if (myStream && myStream.getVideoTracks().indexOf(tr) !== -1)
+      return myStream;
+    if (selfView.stream && selfView.track === tr)
+      return selfView.stream;
+    var tracks = [tr];
+    if (myStream)
+      myStream.getAudioTracks().forEach(function(a){
+        tracks.push(a); });
+    selfView.stream = new MediaStream(tracks);
+    selfView.track = tr;
+    return selfView.stream;
+  }
+  function paintSelfStatus(T, mode){
+    if (!T || !T.phStatus) return;
+    if (mode === 'flow'){
+      T.el.classList.add('has-video');
+      T.phStatus.hidden = true;
+      return;
+    }
+    T.el.classList.remove('has-video');
+    T.phStatus.textContent = mode === 'off'
+      ? '\u{1F4F7} Your camera is off'
+      : '\u{1F4F6} Your picture is not showing \u2014 check your camera';
+    T.phStatus.hidden = false;
+  }
+  function sampleSelfView(){
+    var T = tiles[B.me];
+    if (!amMember || !T || ended) return;
+    if (!myVideoOk){ paintSelfStatus(T, 'off'); selfView.dark = 0; return; }
+    var v = T.video, flowing = false;
+    if (v && v.srcObject && v.videoWidth > 0){
+      if (v.currentTime !== selfView.lastT) flowing = true;
+      selfView.lastT = v.currentTime;
+    }
+    if (typeof studio !== 'undefined' && studio && studio.on){
+      if (studio.frame !== selfView.lastFrame && studio.frame > 0)
+        flowing = true;
+      selfView.lastFrame = studio.frame;
+    }
+    if (flowing){
+      if (selfView.dark) paintSelfStatus(T, 'flow');
+      selfView.dark = 0;
+      return;
+    }
+    selfView.dark++;
+    if (selfView.dark === 2){
+      bindLocalTile();
+      if (v) v.play().catch(function(){});
+    }
+    if (selfView.dark >= 2) paintSelfStatus(T, 'dark');
+  }
+  window.__liveSelfView = { view: selfView, sample: sampleSelfView,
+                            outgoing: outgoingStream };
   function setupLocalMedia(){
     return acquireMedia().then(function(stream){
       errBox.hidden = true;
@@ -3785,6 +3871,13 @@ function liveRoomDiff(prev, next){
      (the sender disabled it — no RTP is not a failure), and no
      live video track at all. */
   var ZERO_FRAME_GRACE_MS = 8000;
+  /* Slow path: with NO audio proof (a guest whose mic is off or
+     denied — Ken's PC guest, Oct 27), the same never-flowed
+     signature still earns a rebuild, just later: 30s of zero
+     frames on a connected peer is not a camera-off pause, it is
+     a dead video path. Camera-off peers stay excluded above via
+     video_ok=false and the receiver-muted check. */
+  var ZERO_FRAME_SLOW_MS = 30000;
   function peerReceiverTrack(P, kind){
     try {
       var found = null;
@@ -3813,9 +3906,11 @@ function liveRoomDiff(prev, next){
     if (P.videoFramesSeen !== 0) return;      /* only never-decoded */
     var vt = peerReceiverTrack(P, 'video');
     if (!vt || vt.readyState !== 'live' || vt.muted) return;
-    if (!peerAudioFlowing(P)) return;
     var since = Math.max(P.bornAt || 0, P.lastRestartAt || 0);
-    if (Date.now() - since < ZERO_FRAME_GRACE_MS) return;
+    var age = Date.now() - since;
+    if (peerAudioFlowing(P)){
+      if (age < ZERO_FRAME_GRACE_MS) return;
+    } else if (age < ZERO_FRAME_SLOW_MS) return;
     fireVideoRebuild(uid, P);
   }
   function fireVideoRebuild(uid, P){
@@ -3864,9 +3959,10 @@ function liveRoomDiff(prev, next){
     var vt = peerReceiverTrack(P, 'video');
     var since = Math.max(P.bornAt || 0, P.lastRestartAt || 0);
     var pastGrace = now - since >= ZERO_FRAME_GRACE_MS;
+    var pastSlow = now - since >= ZERO_FRAME_SLOW_MS;
     if (P.pc.connectionState === 'connected'
         && P.videoFramesSeen === 0 && vt && !vt.muted
-        && pastGrace && peerAudioFlowing(P))
+        && (peerAudioFlowing(P) ? pastGrace : pastSlow))
       return (restartCounts[uid] || 0) >= AUTO_RESTART_MAX
         ? 'zero-frames' : 'reconnecting';
     /* A receiver track starts MUTED until its first packet —
@@ -6816,6 +6912,7 @@ function liveRoomDiff(prev, next){
         updateSoundButton();
         samplePeerStats();
         if (amMember) bindLocalTile();
+        sampleSelfView();
         reconcilePeers();
         renderRequests(d.pending_requests || []);
         renderWatchers(watchersList);
