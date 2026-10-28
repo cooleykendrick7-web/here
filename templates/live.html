@@ -88,6 +88,18 @@
   align-content:start;overflow-y:auto;overflow-x:hidden}
 .live-grid.panel-grid .live-tile{position:relative;width:100%;
   height:auto;aspect-ratio:3/4;z-index:1}
+/* Talk-show spotlight: one tile takes the whole top row — the
+   person talking, or the co-streamer's cast — on every screen. */
+.live-grid.panel-grid.has-spotlight .live-tile.spot-tile{
+  grid-column:1/-1;aspect-ratio:16/9;height:auto;max-height:54vh}
+.live-grid.panel-grid.has-spotlight .live-tile.spot-tile video{
+  object-fit:contain;background:#000}
+/* Drag grip (host/admin): drag a block to its new home. */
+.live-tile .tile-grip{position:absolute;bottom:36px;right:4px;z-index:5;
+  cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;
+  background:rgba(0,0,0,.55);color:#fff;border-radius:6px;
+  padding:3px 6px;font-size:13px;line-height:1;letter-spacing:1px}
+.live-tile.dragging{opacity:.8;z-index:8;outline:2px solid #e50914}
 @media (orientation:landscape){
   .live-grid.panel-grid{height:100%;padding:8px 8px 96px;
     grid-template-rows:repeat(var(--prows,1),1fr);
@@ -949,7 +961,8 @@ function liveRoomDiff(prev, next){
   var battleDeclinedSeen = 0;     /* declined battle id already toasted */
   var battleDurPick = 300;        /* challenge length picker (W2) */
   /* ---- Build X: panel grid state ---- */
-  var panelOpen = false;          /* state payload's panel_open */
+  var panelOpen = false;
+  var spotlightId = null;   /* talk-show spotlight (state-driven) */          /* state payload's panel_open */
   var panelBoxes = 5;             /* state payload's panel_boxes */
   var myJoin = null;              /* state payload's my_join */
   var layoutPref = 'grid';        /* 'grid' | 'rail', per device */
@@ -1109,6 +1122,7 @@ function liveRoomDiff(prev, next){
     if (tiles[uid]){ updateTile(member); return tiles[uid]; }
     var el = document.createElement('div');
     el.className = 'live-tile';
+    el.dataset.uid = uid;
     var ph = document.createElement('div');
     ph.className = 'tile-ph';
     if (member.avatar){
@@ -1152,6 +1166,19 @@ function liveRoomDiff(prev, next){
     if (uid === B.me){
       video.className = 'localvid';
     }
+    var grip = document.createElement('div');
+    grip.className = 'tile-grip';
+    grip.textContent = '\u22EE\u22EE';
+    grip.title = 'Drag to move this block';
+    grip.hidden = true;
+    grip.addEventListener('pointerdown', function(ev){
+      gripDragStart(ev, uid, grip);
+    });
+    grip.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      ev.preventDefault();
+    });
+    el.appendChild(grip);
     var label = document.createElement('div');
     label.className = 'tile-label';
     var dot = null, recon = null;
@@ -1237,6 +1264,7 @@ function liveRoomDiff(prev, next){
                   badges: badges, srcTag: srcTag, menuBtn: menuBtn,
                   member: member, dot: dot, recon: recon,
                   phStatus: phStatus, videoState: '',
+                  grip: grip,
                   roleChip: roleChip, lvlChip: lvlChip};
     updateTile(member);
     var P = peers[uid];
@@ -1252,6 +1280,8 @@ function liveRoomDiff(prev, next){
     var b = '';
     if (member.role === 'host') b += '👑 ';
     if (member.admin) b += '🛡 ';
+    if (member.rank === 'regular' && !member.admin
+        && member.role !== 'host') b += '⭐ ';
     if (member.muted) b += '🔇';
     if (T.badges.textContent !== b) T.badges.textContent = b;
     /* Source tag renders from LOCAL state on my OWN tile only —
@@ -1275,6 +1305,7 @@ function liveRoomDiff(prev, next){
       if (isH) T.roleChip.textContent = 'Host';
     }
     T.menuBtn.hidden = !(canManage() && canActOn(member));
+    if (T.grip) T.grip.hidden = !canManage();
     if (T.lvlChip){
       var lv = member.level && member.level.label;
       T.lvlChip.hidden = !lv;
@@ -1295,11 +1326,61 @@ function liveRoomDiff(prev, next){
      place — re-inserting an in-position playing <video> makes
      mobile browsers repaint it (a blink on every state poll);
      in steady state this loop now touches no DOM structure. */
+  /* Drag-a-block (host/admin): pointer drag on a tile's grip
+     reorders the DOM live; letting go posts the full order to
+     /panel-order and the server becomes the truth again. While
+     a drag runs, renderTiles leaves the DOM order alone. */
+  var dragState = null;
+  function gripDragStart(ev, uid, grip){
+    if (!canManage() || dragState) return;
+    var T = tiles[uid];
+    if (!T) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    dragState = {uid: uid, el: T.el, grip: grip};
+    T.el.classList.add('dragging');
+    try { grip.setPointerCapture(ev.pointerId); } catch (e) {}
+    grip.onpointermove = function(e2){
+      if (!dragState) return;
+      var tilesEls = Array.prototype.slice.call(
+        gridEl.querySelectorAll('.live-tile'));
+      var target = null;
+      for (var i = 0; i < tilesEls.length; i++){
+        var r = tilesEls[i].getBoundingClientRect();
+        if (tilesEls[i] === dragState.el) continue;
+        if (e2.clientY < r.top + r.height / 2
+            && e2.clientX < r.left + r.width + 40){ target = tilesEls[i]; break; }
+        if (e2.clientY < r.bottom && e2.clientX < r.left + r.width / 2)
+          { target = tilesEls[i]; break; }
+      }
+      if (target && target !== dragState.el)
+        gridEl.insertBefore(dragState.el, target);
+      else if (!target && tilesEls.length
+               && tilesEls[tilesEls.length - 1] !== dragState.el)
+        gridEl.appendChild(dragState.el);
+    };
+    grip.onpointerup = grip.onpointercancel = function(){
+      if (!dragState) return;
+      var el = dragState.el;
+      el.classList.remove('dragging');
+      grip.onpointermove = grip.onpointerup
+        = grip.onpointercancel = null;
+      dragState = null;
+      var order = Array.prototype.slice.call(
+        gridEl.querySelectorAll('.live-tile'))
+        .map(function(c){ return +c.dataset.uid; })
+        .filter(function(n){ return n > 0; });
+      if (order.length > 1)
+        post('/panel-order', {order: order}).catch(function(){
+          toast('Could not save that order.');
+        });
+    };
+  }
   function renderTiles(){
     var idx = 0;
     panel.forEach(function(m){
       var T = ensureTile(m);
-      if (gridEl.children[idx] !== T.el)
+      if (!dragState && gridEl.children[idx] !== T.el)
         gridEl.insertBefore(T.el, gridEl.children[idx] || null);
       idx++;
       updateTile(m);
@@ -1307,13 +1388,21 @@ function liveRoomDiff(prev, next){
     Object.keys(tiles).forEach(function(uid){
       if (!panelById[uid]) removeTile(+uid);
     });
+    var spot = (spotlightId && panelById[spotlightId]
+                && panel.length > 1) ? spotlightId : null;
+    panel.forEach(function(m){
+      var T2 = tiles[m.user_id];
+      if (T2) T2.el.classList.toggle('spot-tile',
+                                     !!spot && m.user_id === spot);
+    });
     var mode = stageLayout(), cls, cells = panel.length;
-    if (mode === 'grid'){
+    if (mode === 'grid' || spot){
       /* Cells = people + the host's empty boxes, so filling a
          square never re-flows the grid's shape mid-show. */
       cells += emptySquareCount();
       var cols = gridCols(cells);
-      cls = 'live-grid panel-grid cols-' + cols;
+      cls = 'live-grid panel-grid cols-' + cols
+        + (spot ? ' has-spotlight' : '');
       gridEl.style.setProperty('--pcols', cols);
       gridEl.style.setProperty('--prows',
         Math.max(1, Math.ceil(cells / cols)));
@@ -1324,7 +1413,7 @@ function liveRoomDiff(prev, next){
         + (panel.length > 1 ? ' has-panel' : '');
     }
     if (gridEl.className !== cls) gridEl.className = cls;
-    syncBoxes(mode === 'grid');
+    syncBoxes(mode === 'grid' || !!spot);
     paintLayoutButton();
   }
   /* Empty guest squares (Build X): pure DOM — no media, no
@@ -1403,9 +1492,20 @@ function liveRoomDiff(prev, next){
       savedV = localStorage.getItem('here_lc_video');
       savedA = localStorage.getItem('here_lc_audio');
     } catch (e) {}
+    /* Publish shaping (Ken's viewer black screen, Oct 28): the
+       panel NEVER publishes above 720p/30fps. A capture card left
+       at 1080p60 (or a 4K camera) starves the relay and phones
+       cannot decode it — the audience got a black screen while
+       the host's own screen looked perfect. 720p30 is what every
+       phone decodes in hardware, on any network worth having. */
     var cons = {
       audio: savedA ? {deviceId: {exact: savedA}} : true,
-      video: savedV ? {deviceId: {exact: savedV}} : {facingMode: facing}
+      video: savedV ? {deviceId: {exact: savedV},
+                       width: {max: 1280}, height: {max: 720},
+                       frameRate: {max: 30}}
+                    : {facingMode: facing,
+                       width: {max: 1280}, height: {max: 720},
+                       frameRate: {max: 30}}
     };
     var inner = navigator.mediaDevices.getUserMedia(cons)
       .catch(function(err){
@@ -1417,7 +1517,9 @@ function liveRoomDiff(prev, next){
             toast("A saved camera/mic wasn't found — using your default.");
           }
           return navigator.mediaDevices.getUserMedia({
-            audio: true, video: {facingMode: facing}});
+            audio: true, video: {facingMode: facing,
+              width: {max: 1280}, height: {max: 720},
+              frameRate: {max: 30}}});
         }
         throw err;
       });
@@ -1578,6 +1680,70 @@ function liveRoomDiff(prev, next){
   }
   window.__liveSelfView = { view: selfView, sample: sampleSelfView,
                             outgoing: outgoingStream };
+  /* ---------------- tile truth (the audience fix) -------------
+     Ken, Oct 28: his phone, watching as a VIEWER, got a black
+     screen while the host's own screen was perfect. Every
+     earlier repair judged video by peer statistics — which are
+     role-gated, browser-flavoured, and blind when negotiation
+     half-lands. This sampler judges the only thing that counts:
+     THE TILE ITSELF. For every remote tile, on every client
+     (host, guest, watcher): a live video track is bound, the
+     member's camera is on, and the picture's clock is not
+     advancing (or it has no size) for 3 polls running -> the
+     tile is DARK. The peer gets ONE budgeted rebuild through
+     the shared discipline, the play-guard retries, and while
+     dark the tile wears the honest face (avatar + "No video —
+     tap to retry") via updateTileVideoState's domDark branch.
+     Flow returning clears it. No role gates, no stats shapes. */
+  var tileTruth = {};
+  function sampleTilesTruth(){
+    if (ended) return;
+    Object.keys(tiles).forEach(function(uidStr){
+      var uid = +uidStr;
+      if (uid === B.me) return;
+      var T = tiles[uidStr];
+      var m = panelById[uid];
+      if (!T || !m){ delete tileTruth[uid]; return; }
+      if (m.video_ok === false){
+        delete tileTruth[uid];
+        if (T.domDark) T.domDark = false;
+        return;
+      }
+      var v = T.video, hasLiveVideo = false;
+      if (v && v.srcObject){
+        try {
+          hasLiveVideo = v.srcObject.getVideoTracks()
+            .some(function(tr){ return tr.readyState === 'live'; });
+        } catch (e) {}
+      }
+      if (!hasLiveVideo){
+        delete tileTruth[uid];
+        if (T.domDark) T.domDark = false;
+        return;
+      }
+      var rec = tileTruth[uid]
+        || (tileTruth[uid] = {dark: 0, lastT: -1});
+      var flowing = v.videoWidth > 0 && v.currentTime !== rec.lastT;
+      rec.lastT = v.currentTime;
+      if (flowing){
+        rec.dark = 0;
+        if (T.domDark){ T.domDark = false; updateTileVideoState(uid); }
+        return;
+      }
+      rec.dark++;
+      if (rec.dark >= 3){
+        if (!T.domDark){
+          T.domDark = true;
+          var P = peers[uid];
+          if (P) fireVideoRebuild(uid, P);
+        }
+        guardPlayVideo(v);
+        updateTileVideoState(uid);
+      }
+    });
+  }
+  window.__liveTiles = { truth: tileTruth,
+                         sample: sampleTilesTruth };
   function setupLocalMedia(){
     return acquireMedia().then(function(stream){
       errBox.hidden = true;
@@ -1996,7 +2162,9 @@ function liveRoomDiff(prev, next){
     var dispP;
     try {
       dispP = navigator.mediaDevices.getDisplayMedia({
-        video: true, audio: true});
+        video: {width: {max: 1280}, height: {max: 720},
+                frameRate: {max: 30}},
+        audio: true});
     } catch (e) {
       toast('Could not start screen sharing.');
       return Promise.resolve();
@@ -2105,7 +2273,7 @@ function liveRoomDiff(prev, next){
     manageTarget = null;
     var help = document.createElement('div');
     help.style.cssText = 'padding:10px 8px;color:rgba(255,255,255,.78);font-size:13px';
-    help.textContent = 'Have a capture card? Plug it in, then pick it from this list — it shows up by name.';
+    help.textContent = 'Host or admin co-streaming? Plug in your capture card, then pick it from this list — your block shows your cast instead of your camera. Capture cards show up by name.';
     sheetActions.appendChild(help);
     function lcSection(txt){
       var h = document.createElement('div');
@@ -3611,8 +3779,61 @@ function liveRoomDiff(prev, next){
         var out = tr;
         if (tr.kind === 'video' && typeof studioOutgoingTrack === 'function')
           out = studioOutgoingTrack() || tr;
-        try { P.pc.addTrack(out, myStream); } catch (e) {}
+        try {
+          var snd = P.pc.addTrack(out, myStream);
+          if (out.kind === 'video') shapeVideoSender(P.pc, snd);
+        } catch (e) {}
       }
+    });
+  }
+  /* Shape every video I publish (Oct 28): cap the bitrate and
+     framerate a phone + the relay can carry, scale anything
+     wider than 720p down to it, and prefer H.264 — the codec
+     every phone decodes in hardware — over VP8/VP9 software
+     decoding that can leave a phone tile black forever. Safe
+     to call again after negotiation (stable): setParameters is
+     legal any time; codec prefs only bite before the offer. */
+  function shapeVideoSender(pc, sender){
+    if (!sender || !sender.track || sender.track.kind !== 'video')
+      return;
+    try {
+      var st = (sender.track.getSettings
+                && sender.track.getSettings()) || {};
+      var w = st.width || 1280;
+      var params = sender.getParameters() || {};
+      params.encodings = [{
+        maxBitrate: 1600000, maxFramerate: 30,
+        scaleResolutionDownBy: Math.max(1, w / 1280)}];
+      params.degradationPreference = 'maintain-framerate';
+      var pr = sender.setParameters(params);
+      if (pr && pr.catch) pr.catch(function(){});
+    } catch (e) {}
+    try {
+      if (!pc || !pc.getTransceivers) return;
+      var tcs = pc.getTransceivers();
+      for (var i = 0; i < tcs.length; i++){
+        var tc = tcs[i];
+        if (tc.sender !== sender || !tc.setCodecPreferences) continue;
+        var caps = RTCRtpSender.getCapabilities
+          && RTCRtpSender.getCapabilities('video');
+        if (caps && caps.codecs && caps.codecs.length){
+          var h = [], rest = [];
+          caps.codecs.forEach(function(c){
+            (c.mimeType.toLowerCase() === 'video/h264'
+              ? h : rest).push(c);
+          });
+          if (h.length) tc.setCodecPreferences(h.concat(rest));
+        }
+      }
+    } catch (e) {}
+  }
+  function shapeAllMySenders(){
+    Object.keys(peers).forEach(function(uid){
+      try {
+        peers[uid].pc.getSenders().forEach(function(s){
+          shapeVideoSender(peers[uid].pc, s);
+        });
+      } catch (e) {}
     });
   }
   function isPanelist(uid){ return !!panelById[uid]; }
@@ -3988,6 +4209,16 @@ function liveRoomDiff(prev, next){
   function updateTileVideoState(uid){
     var T = tiles[uid];
     if (!T || uid === B.me || !T.phStatus) return;
+    if (T.domDark){
+      /* The tile itself says the picture is not moving (see
+         sampleTilesTruth): that verdict outranks every
+         stats-shaped guess, including an eternal 'connecting'. */
+      T.el.classList.remove('has-video');
+      T.phStatus.textContent = '\u{1F4F6} No video \u2014 tap \u{1F504} to retry';
+      T.phStatus.hidden = false;
+      T.videoState = 'zero-frames';
+      return;
+    }
     var P = peers[uid];
     var st = peerVideoState(uid, P, panelById[uid]);
     var txt = '', showPh = false;
@@ -4047,6 +4278,7 @@ function liveRoomDiff(prev, next){
   function noteStable(uid){
     var P = peers[uid];
     if (!P) return;
+    shapeAllMySenders();   /* re-assert publish shaping once live */
     if (P.pendingHello){
       P.pendingHello = false;
       if (P.offered) makeOffer(uid);
@@ -4737,7 +4969,8 @@ function liveRoomDiff(prev, next){
       admin: target.admin != null ? !!target.admin
         : (target.is_admin != null ? !!target.is_admin : !!(prow && prow.admin)),
       muted: target.muted != null ? !!target.muted : !!(prow && prow.muted),
-      is_member: prow ? true : !!target.is_member
+      is_member: prow ? true : !!target.is_member,
+      rank: prow ? (prow.rank || 'guest') : 'guest'
     };
   }
   function openManageSheet(uid){
@@ -4764,6 +4997,24 @@ function liveRoomDiff(prev, next){
           });
         }
         if (tg.is_member){
+          if (spotlightId === tg.user_id){
+            sheetBtn('📌 Remove spotlight', false, function(){
+              act('/spotlight', {user_id: null});
+            });
+          } else {
+            sheetBtn('📌 Spotlight', false, function(){
+              act('/spotlight', {user_id: tg.user_id});
+            });
+          }
+          if (tg.rank === 'regular'){
+            sheetBtn('⭐ Remove regular', false, function(){
+              act('/rank', {user_id: tg.user_id, rank: 'guest'});
+            });
+          } else {
+            sheetBtn('⭐ Make regular', false, function(){
+              act('/rank', {user_id: tg.user_id, rank: 'regular'});
+            });
+          }
           sheetBtn('◀ Move left', false, function(){
             act('/move', {user_id: tg.user_id, dir: -1});
           });
@@ -6879,6 +7130,7 @@ function liveRoomDiff(prev, next){
            poll — open/closed, the host's boxes, my own standing
            ask (it paints the empty squares' faces). */
         panelOpen = !!d.panel_open;
+        spotlightId = d.spotlight_id || null;
         if (typeof d.panel_boxes === 'number')
           panelBoxes = d.panel_boxes;
         myJoin = d.my_join || null;
@@ -6911,6 +7163,7 @@ function liveRoomDiff(prev, next){
         });
         updateSoundButton();
         samplePeerStats();
+        sampleTilesTruth();
         if (amMember) bindLocalTile();
         sampleSelfView();
         reconcilePeers();

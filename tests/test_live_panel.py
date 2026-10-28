@@ -272,6 +272,79 @@ check("guest-leave frees the seat", st["my_panel"]["am_member"] is False and len
 r = H.post(f"/live/{L2}/guest-leave", json={})
 check("host bare guest-leave is no-op ok", r.json().get("ok"), r.text[:200])
 
+# ---- Talk-show build: ranks, drag order, spotlight -------------
+r = H.post("/live/start", json={"title": "Talk show"})
+LT = r.json()["id"]
+for c in (G1, A, W):
+    rr = c.post(f"/live/{LT}/heartbeat")
+    assert rr.status_code == 200, rr.text[:200]
+r = G1.post(f"/live/{LT}/join-request")
+rqT = r.json()["request"]["id"]
+r = H.post(f"/live/{LT}/join-decide",
+           json={"request_id": rqT, "approve": True})
+check("talk-show setup: G1 seated", r.json().get("ok"))
+r = A.post(f"/live/{LT}/join-request")
+rqA = r.json()["request"]["id"]
+r = H.post(f"/live/{LT}/join-decide",
+           json={"request_id": rqA, "approve": True})
+r = H.post(f"/live/{LT}/appoint-admin", json={"user_id": AID})
+check("talk-show setup: A seated + appointed admin", r.json().get("ok"))
+
+def panel_row(client, lid, uid):
+    st = client.get(f"/live/{lid}/state").json()
+    return next((m for m in st["panel"] if m["user_id"] == uid), None), st
+
+row, _ = panel_row(H, LT, G1ID)
+check("rank: G1 starts a plain guest", row and row["rank"] == "guest",
+      str(row))
+r = W.post(f"/live/{LT}/rank", json={"user_id": G1ID, "rank": "regular"})
+check("rank: watcher refused (403)", r.status_code == 403,
+      str(r.status_code))
+r = H.post(f"/live/{LT}/rank", json={"user_id": G1ID, "rank": "star"})
+check("rank: unknown rank refused (400)", r.status_code == 400,
+      str(r.status_code))
+r = A.post(f"/live/{LT}/rank", json={"user_id": AID, "rank": "regular"})
+check("rank: admin cannot rank themselves (400, not a member-row "
+      "target check)", r.status_code in (400, 403), str(r.status_code))
+r = H.post(f"/live/{LT}/rank", json={"user_id": G1ID, "rank": "regular"})
+check("rank: host promotes G1 to regular", r.json().get("ok"))
+row, _ = panel_row(H, LT, G1ID)
+check("rank: state carries regular", row and row["rank"] == "regular")
+r = A.post(f"/live/{LT}/rank", json={"user_id": G1ID, "rank": "guest"})
+check("rank: admin may set a non-admin member's rank",
+      r.json().get("ok"))
+
+ids_now = [m["user_id"] for m in H.get(f"/live/{LT}/state")
+           .json()["panel"]]
+r = W.post(f"/live/{LT}/panel-order",
+           json={"order": list(reversed(ids_now))})
+check("panel-order: watcher refused (403)", r.status_code == 403)
+r = H.post(f"/live/{LT}/panel-order", json={"order": ids_now[:-1]})
+check("panel-order: non-permutation refused (400)",
+      r.status_code == 400)
+rev = list(reversed(ids_now))
+r = H.post(f"/live/{LT}/panel-order", json={"order": rev})
+check("panel-order: host sets the full order", r.json().get("ok"))
+ids_after = [m["user_id"] for m in H.get(f"/live/{LT}/state")
+             .json()["panel"]]
+check("panel-order: state serves the new order", ids_after == rev,
+      f"{ids_after} vs {rev}")
+
+r = W.post(f"/live/{LT}/spotlight", json={"user_id": G1ID})
+check("spotlight: watcher refused (403)", r.status_code == 403)
+r = H.post(f"/live/{LT}/spotlight", json={"user_id": WID})
+check("spotlight: non-panelist refused (400)", r.status_code == 400)
+r = A.post(f"/live/{LT}/spotlight", json={"user_id": G1ID})
+check("spotlight: admin can spotlight a panelist", r.json().get("ok"))
+_, st = panel_row(H, LT, G1ID)
+check("spotlight: state carries spotlight_id",
+      st.get("spotlight_id") == G1ID, str(st.get("spotlight_id")))
+r = G1.post(f"/live/{LT}/guest-leave", json={})
+check("spotlight setup: G1 steps down", r.json().get("ok"))
+_, st = panel_row(H, LT, HID)
+check("spotlight: cleared when the member leaves",
+      st.get("spotlight_id") is None, str(st.get("spotlight_id")))
+
 # ---- Ken's rule: starting your own live exits others' panels ----
 r = H.post("/live/start", json={"title": "Auto-exit room"})
 LX = r.json()["id"]

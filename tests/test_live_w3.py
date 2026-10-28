@@ -875,6 +875,78 @@ def tier2():
                 break
         check("self-view: the watchdog rebinds the outgoing "
               "picture and the tile recovers", recovered)
+        # ---------- Phase T: tile truth (the audience fix) ------
+        # Ken's phone-as-viewer (Oct 28): the picture is judged by
+        # the TILE ITSELF now. Sabotage the host tile on the guest
+        # with a live track that never paints a frame: the sampler
+        # must call it dark, fire ONE budgeted rebuild, and put
+        # the honest face up.
+        c0 = gb.js(f"window.__liveMedia.restartCounts[{host_id}] || 0")
+        gb.js(f"var P = window.__liveMedia.peers[{host_id}];"
+              "if (P) P.lastRestartAt = 0; 'ok'")
+        tile = gb.js(
+            "var out = null;"
+            "document.querySelectorAll('.live-tile')"
+            ".forEach(function(t){"
+            "  var lb = t.querySelector('.tile-label');"
+            "  if (lb && lb.textContent.indexOf('W3 Host') !== -1){"
+            "    var vid = t.querySelector('video');"
+            "    var cv = document.createElement('canvas');"
+            "    cv.width = 64; cv.height = 64;"
+            "    vid.srcObject = cv.captureStream(0);"
+            "    window.__liveTiles.sample();"
+            "    window.__liveTiles.sample();"
+            "    window.__liveTiles.sample();"
+            "    var ps = t.querySelector('.ph-status');"
+            "    out = {dark: (window.__liveTiles.truth["
+            + str(host_id) + "] || {}).dark || 0,"
+            "      hasVideo: t.classList.contains('has-video'),"
+            "      status: ps ? ps.textContent : null}; }}); out")
+        check("tile truth: a bound-but-dead tile is called dark "
+              "by its own pixels", tile and tile["dark"] >= 3
+              and tile["hasVideo"] is False
+              and tile["status"] and "No video" in tile["status"],
+              json.dumps(tile))
+        ok = wait_for([hb, gb], lambda: gb.js(
+            f"(window.__liveMedia.restartCounts[{host_id}] || 0)"
+            f" === {c0} + 1"), 15, "tile-truth rebuild fired")
+        check("tile truth: exactly one budgeted rebuild fired", ok)
+
+        # ---------- Phase U: ranks + spotlight on real tiles ----
+        # The rig's guest has been a watcher; seat them first.
+        _c, pl = jreq(guest, f"/live/{lid}/join-request", {},
+                      expect=200)
+        rid = json_of(pl)["request"]["id"]
+        jreq(host, f"/live/{lid}/join-decide",
+             {"request_id": rid, "approve": True}, expect=200)
+        jreq(host, f"/live/{lid}/rank",
+             {"user_id": guest_id, "rank": "regular"}, expect=200)
+        ok = wait_for([hb], lambda: hb.js(
+            "var out = false;"
+            "document.querySelectorAll('.live-tile')"
+            ".forEach(function(t){"
+            "  var lb = t.querySelector('.tile-label');"
+            "  if (lb && lb.textContent.indexOf('W3 Guest') !== -1"
+            "      && lb.textContent.indexOf('⭐') !== -1)"
+            "    out = true; }); out"), 15, "rank star on tile")
+        check("talk-show: a Regular wears the star on their tile",
+              ok)
+        grip = hb.js(
+            "var g = document.querySelector('.tile-grip');"
+            "g ? !g.hidden : null")
+        check("talk-show: the host sees drag grips on the blocks",
+              grip is True)
+        jreq(host, f"/live/{lid}/spotlight",
+             {"user_id": guest_id}, expect=200)
+        ok = wait_for([hb, gb], lambda: gb.js(
+            "var g = document.querySelector('.live-grid');"
+            "var s = document.querySelector('.live-tile.spot-tile');"
+            "!!(g && g.className.indexOf('has-spotlight') !== -1"
+            "  && s)"), 15, "spotlight painted")
+        check("talk-show: spotlight takes the big stage spot on "
+              "a viewer's screen too", ok)
+        jreq(host, f"/live/{lid}/spotlight",
+             {"user_id": None}, expect=200)
     finally:
         for b in browsers:
             b.close()

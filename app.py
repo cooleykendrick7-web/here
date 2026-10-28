@@ -826,6 +826,17 @@ def init_db():
     if "host_video_ok" not in _live_sess_cols:
         c.execute("ALTER TABLE live_sessions ADD COLUMN "
                   "host_video_ok INTEGER")
+    # Talk-show build (Ken, Oct 28): a member's RANK in the room
+    # ('guest' steps up to 'regular' when the host/admin says
+    # they earned it; 'admin' is the appointment in live_admins,
+    # not a rank value) and the room's SPOTLIGHT — the panelist
+    # whose tile takes the big stage spot (NULL = nobody).
+    if "rank" not in _lm_cols:
+        c.execute("ALTER TABLE live_members ADD COLUMN rank "
+                  "TEXT DEFAULT 'guest'")
+    if "spotlight_id" not in _live_sess_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "spotlight_id INTEGER")
     # --- Build X: TikTok-style panel grid state ---
     # panel_open: the host has opened the panel grid (or the first
     # guest was approved onto it — _live_add_member opens it).
@@ -10772,6 +10783,10 @@ def _live_remove_member(conn, live, target_id):
         (stamp, lid, target_id))
     ids = [i for i in _live_panel_ids(conn, live) if i != target_id]
     _live_set_panel_order(conn, lid, ids)
+    if live.get("spotlight_id") == target_id:
+        conn.execute(
+            "UPDATE live_sessions SET spotlight_id=NULL "
+            "WHERE id=?", (lid,))
 
 
 def _live_parse_body(data):
@@ -11650,6 +11665,8 @@ async def live_state(request: Request, lid: int):
             "video_ok": True if _vok is None else bool(_vok),
             # Ken: every panel tile wears its owner's gift level
             # at the bottom center — tiles render this chip.
+            "rank": "host" if pid == live["host_id"] else (
+                (mrow.get("rank") if mrow else None) or "guest"),
             "level": _streamer_level(
                 (get_user(pid) or {}).get("gift_lifetime"))})
     # Compat: the single 'guest' of the old protocol is the first
@@ -11693,6 +11710,7 @@ async def live_state(request: Request, lid: int):
                                            else "watcher"),
         "my_join": None, "pending_requests": [],
         "panel": panel,
+        "spotlight_id": live.get("spotlight_id"),
         # Build X: the panel grid's shared state — open or not,
         # and the host's guest-square allowance (1..8).
         "panel_open": bool(live.get("panel_open")),
@@ -13952,6 +13970,144 @@ async def live_move(request: Request, lid: int):
         conn.commit()
     conn.close()
     return JSONResponse({"ok": True, "panel_order": ids})
+
+
+@app.post("/live/{lid}/rank")
+async def live_rank(request: Request, lid: int):
+    """Talk-show ranks (Ken, Oct 28): a member steps UP by being
+    great on the mic. The host may set any member's rank; an
+    admin may set a non-admin member's. Ranks: 'guest' (just
+    joined the panel) and 'regular' (earned their spot). Admin
+    itself is the live_admins appointment, not a rank."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    target = _live_body_int(data, "user_id")
+    rank = str(data.get("rank") or "").strip().lower()
+    if rank not in ("guest", "regular"):
+        return JSONResponse(
+            {"ok": False, "error": "Unknown rank."}, status_code=400)
+    conn = db()
+    is_host = live["host_id"] == user["id"]
+    if not is_host and not _live_is_admin(conn, lid, user["id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host or an admin can set ranks."},
+            status_code=403)
+    if target == live["host_id"] or not _live_member_row(
+            conn, lid, target):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't on the panel."},
+            status_code=400)
+    if not is_host and _live_is_admin(conn, lid, target):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Admins can't change another admin's rank."},
+            status_code=403)
+    conn.execute(
+        "UPDATE live_members SET rank=? WHERE live_id=? AND "
+        "user_id=? AND left_at IS NULL", (rank, lid, target))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "rank": rank})
+
+
+@app.post("/live/{lid}/panel-order")
+async def live_panel_order(request: Request, lid: int):
+    """Host or admin sets the WHOLE tile order at once (the
+    drag-a-block path; /move remains the one-step swap). The
+    submitted order must be exactly the current panel — a
+    permutation, never an edit of who's on it."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    raw = data.get("order")
+    if not isinstance(raw, list):
+        return JSONResponse(
+            {"ok": False, "error": "Send the full tile order."},
+            status_code=400)
+    order = []
+    for v in raw:
+        try:
+            order.append(int(v))
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"ok": False, "error": "Bad tile order."},
+                status_code=400)
+    conn = db()
+    if live["host_id"] != user["id"] \
+            and not _live_is_admin(conn, lid, user["id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host or an admin can move tiles."},
+            status_code=403)
+    ids = _live_panel_ids(conn, live)
+    if sorted(order) != sorted(ids) or len(order) != len(ids):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "That order doesn't match the panel."},
+            status_code=400)
+    _live_set_panel_order(conn, lid, order)
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "panel_order": order})
+
+
+@app.post("/live/{lid}/spotlight")
+async def live_spotlight(request: Request, lid: int):
+    """Host or admin puts one panelist in the SPOTLIGHT — their
+    tile takes the big stage spot on every screen (the person
+    talking, the co-streamer's cast). user_id null clears it."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = _live_parse_body(data)
+    target = data.get("user_id")
+    if target is not None:
+        try:
+            target = int(target)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"ok": False, "error": "Bad user."}, status_code=400)
+    conn = db()
+    if live["host_id"] != user["id"] \
+            and not _live_is_admin(conn, lid, user["id"]):
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host or an admin can spotlight."},
+            status_code=403)
+    if target is not None and target not in _live_panel_ids(
+            conn, live):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't on the panel."},
+            status_code=400)
+    conn.execute(
+        "UPDATE live_sessions SET spotlight_id=? WHERE id=?",
+        (target, lid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "spotlight_id": target})
 
 
 @app.post("/live/{lid}/like")
