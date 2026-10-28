@@ -837,6 +837,12 @@ def init_db():
     if "spotlight_id" not in _live_sess_cols:
         c.execute("ALTER TABLE live_sessions ADD COLUMN "
                   "spotlight_id INTEGER")
+    # Ken's 2-4-7 build (Oct 28): the Lobby (a live that never
+    # auto-ends), live selling (a listing can ride a live), and
+    # Original 100 founding seats.
+    if "is_lobby" not in _live_sess_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "is_lobby INTEGER DEFAULT 0")
     # --- Build X: TikTok-style panel grid state ---
     # panel_open: the host has opened the panel grid (or the first
     # guest was approved onto it — _live_add_member opens it).
@@ -1174,6 +1180,12 @@ def init_db():
               "ON market_listings(seller_id, status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_market_status "
               "ON market_listings(status, created_at)")
+    _mk_cols = [r["name"] for r in
+                c.execute("PRAGMA table_info(market_listings)")
+                .fetchall()]
+    if "live_id" not in _mk_cols:
+        c.execute("ALTER TABLE market_listings ADD COLUMN "
+                  "live_id INTEGER")
     c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
         user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
@@ -1236,6 +1248,15 @@ def init_db():
         c.execute("ALTER TABLE users ADD COLUMN gift_lifetime "
                   "INTEGER DEFAULT 0")
         _lifetime_backfill = True
+    if "founding" not in _user_cols_lt:
+        c.execute("ALTER TABLE users ADD COLUMN founding "
+                  "INTEGER DEFAULT 0")
+        # Original 100 backfill: the earliest 100 REAL accounts
+        # (by id, survivors — deleted test accounts hold no seat)
+        # are the founding members. Runs once, at column birth.
+        c.execute(
+            "UPDATE users SET founding=1 WHERE id IN "
+            "(SELECT id FROM users ORDER BY id ASC LIMIT 100)")
     if "stripe_acct_id" not in _user_cols_lt:
         # Build R: the streamer's Stripe Connect (Express) account
         # id, created by POST /payouts/setup; payout_ready is the
@@ -3208,6 +3229,13 @@ async def signup(request: Request):
             "VALUES(?,?,?,?,?)",
             (name, email, pw_hash, now_iso(), gen_invite_code(conn)))
         uid = cur.lastrowid
+        # Original 100: while founding seats remain, this real
+        # signup takes one. First hundred accounts, ever — when
+        # they're gone, they're gone.
+        conn.execute(
+            "UPDATE users SET founding=1 WHERE id=? AND "
+            "(SELECT COUNT(*) FROM users WHERE founding=1) < 100",
+            (uid,))
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
@@ -3667,7 +3695,9 @@ async def public_profile(request: Request, user_id: int):
                 "look_classes": look_scope_class_for(prof),
                 # Build SHINE: the owner's scheme gates the public
                 # card's lit-glass finish too.
-                "look_scheme_class": look_scheme_class_for(prof)}
+                "look_scheme_class": look_scheme_class_for(prof),
+                "founding": (prof["founding"]
+                             if "founding" in prof.keys() else 0)}
     # Share preview = HERE logo (template fallback), never the person's face.
     og_image = ""
     return render(request, "public_profile.html", {
@@ -4443,11 +4473,15 @@ async def home(request: Request):
             0 if (c["presence"] and c["presence"]["status"] == "online") else 1,
             c["name"].lower()))
     cfriends, cpages = composer_choices(user)
+    _lc = db()
+    lobby_card = _lobby_card(_lc)
+    _lc.close()
     return render(request, "home.html",
                   {"posts": posts, "feed_items": feed_items,
                    "contacts": contacts,
                    "stories_tray": stories_tray(user["id"]),
                    "live_now": live_now_for(user["id"], owner_on),
+                   "lobby": lobby_card,
                    "discover_people": discover_people(user["id"], 3),
                    "trends": trending_topics(5, user["id"]),
                    "daily_prompt": daily_prompt(),
@@ -8403,6 +8437,7 @@ async def profile(request: Request, uid: int):
         "req_status": status,
         "tap_count": tcount,
         "is_verified": bool(prof.get("is_verified")),
+        "founding": bool(prof.get("founding")),
         "verification_status": prof.get("verification_status") or "none",
         "background": avatar_url(prof.get("background", "")),
         "presence": presence_of(prof),
@@ -10441,7 +10476,8 @@ def _sweep_lives(conn):
               - timedelta(seconds=LIVE_STALE_SECONDS)).isoformat()
     stale = conn.execute(
         "SELECT * FROM live_sessions WHERE status='live' AND "
-        "host_seen_at<?", (cutoff,)).fetchall()
+        "COALESCE(is_lobby,0)=0 AND host_seen_at<?",
+        (cutoff,)).fetchall()
     for row in stale:
         _end_live_row(conn, dict(row))
     # Panel hygiene: a member who is GONE must not squat on the
@@ -11052,6 +11088,95 @@ async def lives_json(request: Request):
          "is_self": r["is_self"]} for r in rows]})
 
 
+LOBBY_HOST_EMAIL = os.environ.get(
+    "HERE_LOBBY_HOST", "cooleykendrick7@gmail.com")
+LOBBY_TITLE = "\U0001F3E0 The Lobby \u2014 always open"
+
+
+def _lobby_live(conn):
+    """The Lobby: ONE standing live room whose door never closes
+    (Ken's pick #2, Oct 28). Hosted by the owner's account; the
+    host need not be present — panelists run the room, and the
+    sweep never auto-ends it. Created lazily; None when the host
+    account does not exist on this deployment."""
+    row = conn.execute(
+        "SELECT * FROM live_sessions WHERE COALESCE(is_lobby,0)=1 "
+        "AND status='live' ORDER BY id DESC LIMIT 1").fetchone()
+    if row:
+        return dict(row)
+    host = conn.execute(
+        "SELECT * FROM users WHERE email=?",
+        (LOBBY_HOST_EMAIL,)).fetchone()
+    if not host:
+        return None
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO live_sessions(host_id, title, status, "
+        "created_at, host_seen_at, like_count, panel_order, "
+        "is_lobby, panel_open) VALUES(?,?,'live',?,?,0,?,1,1)",
+        (host["id"], LOBBY_TITLE, stamp, stamp,
+         json.dumps([host["id"]])))
+    conn.commit()
+    return _live_get(conn, cur.lastrowid)
+
+
+def _lobby_card(conn):
+    live = _lobby_live(conn)
+    if not live:
+        return None
+    inside = conn.execute(
+        "SELECT COUNT(*) c FROM live_viewers WHERE live_id=? "
+        "AND left_at IS NULL AND last_seen_at>?",
+        (live["id"], (datetime.now(timezone.utc)
+                      - timedelta(seconds=180)).isoformat())
+        ).fetchone()["c"]
+    return {"id": live["id"], "inside": inside}
+
+
+@app.get("/lobby")
+async def lobby_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    live = _lobby_live(conn)
+    conn.close()
+    if not live:
+        return redir("/home", "The Lobby isn't open yet.")
+    return redir(f"/live/{live['id']}")
+
+
+def _create_live(conn, user, title):
+    """Create a live for user (commits, returns the new id).
+    Carries the platform's two standing rules: starting your own
+    live pulls you off everybody else's panel (Ken, Oct 27), and
+    one live per host — a new one ends the old, EXCEPT the Lobby,
+    which is not the host's personal live and never dies here."""
+    seats = conn.execute(
+        "SELECT DISTINCT live_id FROM live_members WHERE user_id=? "
+        "AND left_at IS NULL", (user["id"],)).fetchall()
+    for seat in seats:
+        other = _live_get(conn, seat["live_id"])
+        if other and other["status"] == "live" \
+                and other["host_id"] != user["id"]:
+            _drop_guest(conn, dict(other), user["id"])
+    old = conn.execute(
+        "SELECT * FROM live_sessions WHERE host_id=? AND "
+        "status='live' AND COALESCE(is_lobby,0)=0",
+        (user["id"],)).fetchone()
+    if old:
+        _end_live_row(conn, dict(old))
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO live_sessions(host_id, title, status, "
+        "created_at, host_seen_at, like_count, panel_order) "
+        "VALUES(?,?,'live',?,?,0,?)",
+        (user["id"], title, stamp, stamp, json.dumps([user["id"]])))
+    lid = cur.lastrowid
+    conn.commit()
+    return lid
+
+
 @app.post("/live/start")
 async def live_start(request: Request):
     user = current_user(request)
@@ -11066,35 +11191,7 @@ async def live_start(request: Request):
         if isinstance(data, dict) else ""
     conn = db()
     _sweep_lives(conn)
-    # Ken's rule (Oct 27): starting your own live pulls you off
-    # everybody else's panel — you cannot broadcast and sit on
-    # someone else's stage at the same time. Every active guest
-    # seat the starter holds in another room is dropped exactly
-    # the way a guest-leave drops it (bye signals to the room's
-    # peers + the roster settles), so that host's next state poll
-    # frees the seat for someone else.
-    seats = conn.execute(
-        "SELECT DISTINCT live_id FROM live_members WHERE user_id=? "
-        "AND left_at IS NULL", (user["id"],)).fetchall()
-    for seat in seats:
-        other = _live_get(conn, seat["live_id"])
-        if other and other["status"] == "live" \
-                and other["host_id"] != user["id"]:
-            _drop_guest(conn, dict(other), user["id"])
-    # One live per host: starting a new one ends the old one first.
-    old = conn.execute(
-        "SELECT * FROM live_sessions WHERE host_id=? AND status='live'",
-        (user["id"],)).fetchone()
-    if old:
-        _end_live_row(conn, dict(old))
-    stamp = now_iso()
-    cur = conn.execute(
-        "INSERT INTO live_sessions(host_id, title, status, created_at, "
-        "host_seen_at, like_count, panel_order) "
-        "VALUES(?,?,'live',?,?,0,?)",
-        (user["id"], title, stamp, stamp, json.dumps([user["id"]])))
-    lid = cur.lastrowid
-    conn.commit()
+    lid = _create_live(conn, user, title)
     conn.close()
     if title:
         flag_item("live_title", lid, user["id"], user["name"], title)
@@ -11644,6 +11741,21 @@ async def live_state(request: Request, lid: int):
                                    rank=_rank_of(r["user_id"]))
                 for r in rows]
     panel_ids = _live_panel_ids(conn, live)
+    # Live selling (Ken's pick #4): listings riding this live.
+    shop = []
+    for srow in conn.execute(
+            "SELECT * FROM market_listings WHERE live_id=? "
+            "AND status!='deleted' ORDER BY created_at ASC",
+            (lid,)).fetchall():
+        _ph = _market_photos(srow)
+        shop.append({
+            "id": srow["id"], "title": srow["title"] or "",
+            "price_cents": srow["price_cents"],
+            "price": _money(srow["price_cents"]),
+            "photo": ("/uploads/" + _ph[0]) if _ph else "",
+            "status": srow["status"],
+            "sold": srow["status"] == "sold",
+            "seller_id": srow["seller_id"]})
     panel = []
     for pid in panel_ids:
         person = _live_person(pid)
@@ -11654,6 +11766,19 @@ async def live_state(request: Request, lid: int):
         # of a dead/missing video track turns this off.
         if pid == live["host_id"]:
             _vok = live.get("host_video_ok")
+            if live.get("is_lobby"):
+                # The Lobby's host is only "on camera" while his
+                # own client is actually in the room; otherwise
+                # his tile honestly reads camera-off (avatar face)
+                # instead of a black connecting box.
+                _hp = conn.execute(
+                    "SELECT last_seen_at, left_at FROM live_viewers "
+                    "WHERE live_id=? AND user_id=?",
+                    (live["id"], pid)).fetchone()
+                _fresh = (datetime.now(timezone.utc)
+                          - timedelta(seconds=120)).isoformat()
+                _vok = 1 if (_hp and not _hp["left_at"]
+                             and _hp["last_seen_at"] >= _fresh) else 0
         else:
             _vok = mrow.get("video_ok") if mrow else None
         panel.append({
@@ -11711,6 +11836,7 @@ async def live_state(request: Request, lid: int):
         "my_join": None, "pending_requests": [],
         "panel": panel,
         "spotlight_id": live.get("spotlight_id"),
+        "shop": shop,
         # Build X: the panel grid's shared state — open or not,
         # and the host's guest-square allowance (1..8).
         "panel_open": bool(live.get("panel_open")),
@@ -13340,6 +13466,29 @@ async def live_join_request(request: Request, lid: int):
                     {"ok": False, "cooldown": True,
                      "error": f"Take a breather — you can ask again "
                               f"in {left}s."}, status_code=429)
+    if live.get("is_lobby"):
+        # The Lobby's door is open: a join request seats you on
+        # the spot while the panel has room. A full panel falls
+        # back to the normal pending request below.
+        cur = conn.execute(
+            "INSERT INTO live_join_requests(live_id, user_id, "
+            "status, created_at, kind, decided_at) "
+            "VALUES(?,?,'approved',?,'request',?)",
+            (lid, user["id"], now_iso(), now_iso()))
+        rid = cur.lastrowid
+        if _live_add_member(conn, live, user["id"]):
+            conn.commit()
+            conn.close()
+            return JSONResponse({"ok": True, "auto": True,
+                                 "request": {"id": rid,
+                                             "status": "approved"}})
+        conn.execute(
+            "UPDATE live_join_requests SET status='pending', "
+            "decided_at=NULL WHERE id=?", (rid,))
+        conn.commit()
+        conn.close()
+        return JSONResponse({"ok": True, "request": {
+            "id": rid, "status": "pending"}})
     cur = conn.execute(
         "INSERT INTO live_join_requests(live_id, user_id, status, "
         "created_at, kind) VALUES(?,?,'pending',?,'request')",
@@ -16358,9 +16507,17 @@ async def market_detail(request: Request, lid: int):
         "SELECT COUNT(*) c FROM market_listings WHERE seller_id=? "
         "AND id!=? AND status!='deleted'",
         (row["seller_id"], lid)).fetchone()["c"]
+    listing_live_id = None
+    if row["live_id"]:
+        _lv = conn.execute(
+            "SELECT status FROM live_sessions WHERE id=?",
+            (row["live_id"],)).fetchone()
+        if _lv and _lv["status"] == "live":
+            listing_live_id = row["live_id"]
     conn.close()
     seller = get_user(row["seller_id"])
     return render(request, "market_detail.html", {
+        "listing_live_id": listing_live_id,
         "gone": False, "listing": _listing_card(row, saved=saved),
         "seller": ({"id": seller["id"], "name": seller["name"],
                     "avatar": avatar_url(seller.get("avatar", "")),
@@ -16369,6 +16526,61 @@ async def market_detail(request: Request, lid: int):
         "is_seller": row["seller_id"] == user["id"],
         "saved": saved, "more_count": more_count,
         "safety_note": MARKET_SAFETY_NOTE})
+
+
+@app.post("/market/{lid}/go-live")
+async def market_go_live(request: Request, lid: int):
+    """Sell it LIVE (Ken's pick #4): attach this listing to the
+    seller's live — starting one on the spot when they aren't
+    already broadcasting — and land them in the room. The live
+    page's shop strip carries the listing to every watcher."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _get_listing(conn, lid)
+    if not row or row["status"] == "deleted":
+        conn.close()
+        return redir("/market", "Listing not found.")
+    if row["seller_id"] != user["id"]:
+        conn.close()
+        return redir(f"/market/{lid}",
+                      "Only the seller can put this on a live.")
+    _sweep_lives(conn)
+    mine = conn.execute(
+        "SELECT * FROM live_sessions WHERE host_id=? AND "
+        "status='live' AND COALESCE(is_lobby,0)=0",
+        (user["id"],)).fetchone()
+    if mine:
+        live_id = mine["id"]
+    else:
+        live_id = _create_live(
+            conn, user, ("\U0001F6CD " + (row["title"] or "Live sale"))
+            [:LIVE_TITLE_MAX])
+        flag_item("live_title", live_id, user["id"], user["name"],
+                  row["title"] or "")
+    conn.execute(
+        "UPDATE market_listings SET live_id=? WHERE id=?",
+        (live_id, lid))
+    conn.commit()
+    conn.close()
+    return redir(f"/live/{live_id}")
+
+
+@app.post("/market/{lid}/detach-live")
+async def market_detach_live(request: Request, lid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _get_listing(conn, lid)
+    if row and row["seller_id"] == user["id"]:
+        conn.execute(
+            "UPDATE market_listings SET live_id=NULL WHERE id=?",
+            (lid,))
+        conn.commit()
+    conn.close()
+    return redir(f"/market/{lid}")
 
 
 @app.get("/market/{lid}/edit", response_class=HTMLResponse)

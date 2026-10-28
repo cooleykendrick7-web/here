@@ -32,7 +32,7 @@
         {% endif %}
       </div>
       {% else %}
-      <h2 style="font-size:24px">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}
+      <h2 style="font-size:24px">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}{% if profile.founding %} <span title="Original 100 — one of HERE's first hundred members" style="display:inline-block;vertical-align:middle;background:linear-gradient(135deg,#f5c542,#b8860b);color:#231a00;font-size:12px;font-weight:900;padding:3px 9px;border-radius:999px;letter-spacing:.3px">🏅 ORIGINAL 100</span>{% endif %}
         {% if not profile.is_self %}
         <form class="inline-form" action="/tap/{{ profile.id }}" method="post">
           <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">{{ ic('tap') }} Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>

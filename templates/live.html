@@ -422,6 +422,14 @@
 .gift-target[hidden]{display:none}
 /* ===== controls / action bar ===== */
 .live-controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;align-items:center}
+.live-shop{display:flex;gap:10px;overflow-x:auto;padding:10px 2px 2px;scrollbar-width:thin}
+.live-shop:empty{display:none}
+.shop-card{position:relative;flex:none;width:150px;background:rgba(20,20,22,.82);border:1px solid rgba(255,255,255,.16);border-radius:14px;overflow:hidden;color:#fff;text-decoration:none}
+.shop-card img{width:100%;height:84px;object-fit:cover;display:block;background:#2a2b2e}
+.shop-card .sc-body{padding:7px 9px 9px;display:block}
+.shop-card .sc-title{display:block;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shop-card .sc-price{display:block;font-size:12.5px;font-weight:900;color:#ffd257;margin-top:2px}
+.shop-card .sc-sold{position:absolute;top:8px;left:8px;background:#e01e26;color:#fff;font-weight:900;font-size:11px;padding:3px 8px;border-radius:999px;transform:rotate(-8deg);z-index:2}
 .live-ctl{background:var(--lg-bg);color:#fff;border:var(--lg-border);border-radius:999px;
   height:38px;padding:0 10px;font-size:12.5px;font-weight:700;cursor:pointer;
   display:inline-flex;align-items:center;gap:6px;
@@ -699,6 +707,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="live-ctl" id="ctl-games" title="🎮 Games" hidden>{{ ic('games') }}</button>
   <button type="button" class="live-ctl" id="ctl-battle" title="⚔️ Live Showdown" hidden>{{ ic('swords') }}</button>
  </div>
+<div class="live-shop" id="live-shop"></div>
 <div class="live-controls" id="live-controls">
   <!-- panel members -->
   <button type="button" class="live-ctl" id="ctl-mute" hidden>{{ ic('mic') }} Mute</button>
@@ -6535,7 +6544,20 @@ function liveRoomDiff(prev, next){
     });
   }
   $('gift-boost').addEventListener('click', boostSend);
-  function renderTopGifters(list){
+  function renderShop(items){
+  var box=document.getElementById('live-shop'); if(!box) return;
+  var key=items.map(function(s){return s.id+':'+s.status+':'+s.price_cents;}).join(',');
+  if(box.dataset.k===key) return; box.dataset.k=key;
+  box.innerHTML=items.map(function(s){
+    return '<a class="shop-card" href="/market/'+s.id+'">'
+      +(s.sold?'<span class="sc-sold">SOLD</span>':'')
+      +(s.photo?'<img src="'+esc(s.photo)+'" alt="">':'')
+      +'<span class="sc-body"><span class="sc-title">'+esc(s.title)+'</span>'
+      +'<span class="sc-price">'+esc(s.price)+'</span></span></a>';
+  }).join('');
+}
+
+function renderTopGifters(list){
     var el = $('live-top-gifters');
     if (!list || !list.length){ el.hidden = true; el.textContent = ''; return; }
     el.textContent = '🏆 Top gifters: ' + list.map(function(t){
@@ -7121,6 +7143,7 @@ function liveRoomDiff(prev, next){
           paintTickets();
         }
         (d.recent_gifts || []).forEach(handleGiftEvent);
+        try{renderShop(d.shop || []);}catch(_e){}
         renderTopGifters(d.top_gifters || []);
         var shoutChanged = JSON.stringify(d.active_shout || null)
           !== JSON.stringify(activeShout);

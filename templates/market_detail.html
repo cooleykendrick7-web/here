@@ -71,6 +71,13 @@
   {% endif %}
 
   <div class="mkt-safety">⚠️ <b>Stay safe:</b> {{ safety_note|e }}</div>
+  {% if listing_live_id %}
+  <a href="/live/{{ listing_live_id }}" style="display:flex;align-items:center;gap:10px;background:linear-gradient(135deg,#8f0f14,#e01e26);color:#fff;border-radius:14px;padding:12px 14px;margin:0 0 12px;text-decoration:none;font-weight:800">
+    <span style="font-size:20px">🔴</span>
+    <span style="flex:1">{% if is_seller %}This listing is on your live right now{% else %}LIVE NOW — watch it being sold{% endif %}</span>
+    <span>Watch →</span>
+  </a>
+  {% endif %}
 
   <div class="mkt-actions">
     {% if is_seller %}
@@ -78,6 +85,15 @@
       <button type="submit" class="btn">{% if listing.sold %}Mark available again{% else %}Mark SOLD{% endif %}</button>
     </form>
     <a class="btn-ghost" href="/market/{{ listing.id }}/edit">{{ ic('post') }} Edit</a>
+    {% if listing_live_id %}
+    <form class="inline-form" action="/market/{{ listing.id }}/detach-live" method="post">
+      <button type="submit" class="btn-ghost">📴 Take off live</button>
+    </form>
+    {% elif not listing.sold %}
+    <form class="inline-form" action="/market/{{ listing.id }}/go-live" method="post">
+      <button type="submit" class="btn" style="background:linear-gradient(135deg,#8f0f14,#e01e26);color:#fff;border:none">🔴 Sell it live</button>
+    </form>
+    {% endif %}
     <form class="inline-form" action="/market/{{ listing.id }}/delete" method="post" onsubmit="return confirm('Delete this listing? It disappears from the Market (messages about it keep their snapshot card).');">
       <button type="submit" class="btn-danger">{{ ic('delete') }} Delete</button>
     </form>

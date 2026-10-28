@@ -20,6 +20,16 @@
   {% endfor %}
 </div>
 
+{% if lobby %}
+<a href="/live/{{ lobby.id }}" style="display:flex;align-items:center;gap:12px;background:linear-gradient(135deg,#8f0f14,#e01e26);color:#fff;border-radius:18px;padding:14px 16px;margin:2px 0 12px;text-decoration:none;box-shadow:0 8px 24px rgba(224,30,38,.35)">
+  <span style="font-size:30px;line-height:1">🏠</span>
+  <span style="flex:1;min-width:0">
+    <span style="display:block;font-weight:900;font-size:17px">The Lobby — always open</span>
+    <span style="display:block;opacity:.92;font-size:13px">{% if lobby.inside %}{{ lobby.inside }} inside right now · {% endif %}Walk in, hang out, hop on the panel</span>
+  </span>
+  <span style="font-weight:900;background:#fff;color:#b30d13;border-radius:999px;padding:7px 14px;flex:none">Walk in →</span>
+</a>
+{% endif %}
 {% if live_now %}
 <div class="live-strip" style="display:flex;gap:10px;overflow-x:auto;padding:4px 2px 12px">
   {% for l in live_now %}
