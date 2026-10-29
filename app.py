@@ -15537,11 +15537,6 @@ async def media_like(request: Request, tid: int):
     if not t:
         conn.close()
         return JSONResponse({"ok": False}, status_code=404)
-    if t["user_id"] == user["id"]:
-        conn.close()
-        return JSONResponse(
-            {"ok": False, "error": "Can't like your own track."},
-            status_code=400)
     has = conn.execute(
         "SELECT 1 FROM media_track_likes WHERE track_id=? "
         "AND user_id=?", (tid, user["id"])).fetchone()

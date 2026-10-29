@@ -62,7 +62,7 @@
       fetch('/media/' + b.getAttribute('data-tid') + '/like', {method: 'POST'})
         .then(function(r){ return r.json(); })
         .then(function(d){
-          if (!d || !d.ok) return;
+          if (!d || !d.ok){ if (d && d.error) alert(d.error); return; }
           b.innerHTML = (d.liked ? '❤️' : '🤍') + ' <span class="mh-like-n">' + d.likes + '</span>';
         }).catch(function(){});
     });

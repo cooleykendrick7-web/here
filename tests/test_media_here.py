@@ -110,6 +110,23 @@ plays = dbq("SELECT plays FROM media_tracks WHERE id=?",
             (tid,))[0]["plays"]
 check("play pings count", r.status_code == 200 and plays == 1)
 
+r = Ac.post(f"/media/{tid}/like")
+d = r.json()
+n = dbq("SELECT COUNT(*) c FROM media_track_likes "
+        "WHERE track_id=?", (tid,))[0]["c"]
+check("the owner CAN heart their own uploaded track",
+      r.status_code == 200 and d.get("ok") and d.get("liked")
+      and d.get("likes") == 1 and n == 1)
+r = Fc.post(f"/media/{tid}/like")
+d = r.json()
+check("another listener can heart it too",
+      d.get("ok") and d.get("liked") and d.get("likes") == 2)
+r = Ac.post(f"/media/{tid}/like")
+d = r.json()
+check("tapping the heart again un-hearts it",
+      d.get("ok") and d.get("liked") is False
+      and d.get("likes") == 1)
+
 r = Fc.post(f"/media/{tid}/delete", follow_redirects=False)
 check("a stranger cannot delete someone else's track",
       len(dbq("SELECT id FROM media_tracks WHERE id=?",

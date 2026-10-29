@@ -169,7 +169,13 @@ r = Fc.post(f"/media/{OWN_TRACK}/like")
 check("second tap unlikes", r.json().get("liked") is False
       and r.json().get("likes") == 0)
 r = Ac.post(f"/media/{OWN_TRACK}/like")
-check("self-like refused", r.status_code == 400)
+check("self-like lands (Ken's order: the heart works on your "
+      "own uploads)", r.status_code == 200
+      and r.json().get("liked") is True
+      and r.json().get("likes") == 1)
+r = Ac.post(f"/media/{OWN_TRACK}/like")
+check("self un-like lands too", r.json().get("liked") is False
+      and r.json().get("likes") == 0)
 Fc.post(f"/media/{OWN_TRACK}/like")
 
 # ---------- the contract ----------
