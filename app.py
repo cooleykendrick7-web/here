@@ -11397,14 +11397,28 @@ def _cf_turn_fetch(key_id, token):
         + key_id + "/credentials/generate-ice-servers",
         data=body, method="POST",
         headers={"Authorization": "Bearer " + token,
-                 "Content-Type": "application/json"})
+                 "Content-Type": "application/json",
+                 # Cloudflare's edge 403s the default
+                 # Python-urllib signature as a bot — the
+                 # two-403s-with-fresh-keys lesson.
+                 "User-Agent": "Mozilla/5.0 (Macintosh; "
+                 "Intel Mac OS X 10_15_7) "
+                 "AppleWebKit/537.36 (KHTML, like Gecko) "
+                 "Chrome/126.0 Safari/537.36"})
     try:
         with _ur.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read().decode())
     except Exception as e:
-        # Failure class only — never the token or credentials.
+        # Failure class + Cloudflare's own error text (their
+        # error payloads carry a code and message, never the
+        # token or minted credentials) — never our secrets.
+        detail = ""
+        try:
+            detail = e.read().decode()[:200].replace("\n", " ")
+        except Exception:
+            pass
         print("CF TURN mint failed:", type(e).__name__,
-              getattr(e, "code", ""), flush=True)
+              getattr(e, "code", ""), detail, flush=True)
         return None
     raw = (data or {}).get("iceServers")
     if isinstance(raw, dict):
