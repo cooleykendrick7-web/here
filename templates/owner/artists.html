@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artists — HERE Owner</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#101014;color:#eee;margin:0;padding:22px}
+  a{color:#ff5a5a}
+  .topbar{display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+  .topbar h1{font-size:22px;margin:0}
+  .btn-ghost{background:transparent;color:#eee;border:1px solid #3a3a44;border-radius:8px;padding:7px 13px;text-decoration:none;font-size:13.5px;cursor:pointer}
+  .btn{background:#e01e26;color:#fff;border:0;border-radius:8px;padding:7px 13px;text-decoration:none;font-size:13.5px;cursor:pointer;font-weight:700}
+  table{border-collapse:collapse;width:100%;margin:10px 0 22px}
+  th,td{border-bottom:1px solid #26262e;text-align:left;padding:8px 9px;font-size:14px;vertical-align:top}
+  h2{font-size:18px;margin:22px 0 4px}
+  .pill{display:inline-block;border:1px solid #3a3a44;border-radius:99px;padding:1.5px 8px;font-size:11.5px}
+  .card{background:#17181d;border:1px solid #26262e;border-radius:14px;padding:14px 16px;margin:10px 0 20px}
+  input,select{background:#0f0f13;color:#eee;border:1px solid #3a3a44;border-radius:8px;padding:7px 9px}
+  .flash{background:#12351f;border:1px solid #1d9e50;color:#b9f5cc;border-radius:10px;padding:9px 13px;margin-bottom:14px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>🎤 The Label — Artists</h1>
+  <span class="pill">Artist Fund: <strong>{{ fund }}</strong></span>
+  <span class="pill">Fees collected (all time): {{ fees_total }}</span>
+  <span style="flex:1"></span>
+  <a class="btn-ghost" href="/owner">← Dashboard</a>
+</div>
+{% if msg %}<div class="flash">Done.</div>{% endif %}
+
+<h2>📥 Applications ({{ apps|length }})</h2>
+{% if apps %}
+<table>
+  <tr><th>Artist</th><th>Their numbers</th><th>Pitch</th><th>Decide</th></tr>
+  {% for a in apps %}
+  <tr>
+    <td><strong>{{ a.name|e }}</strong><br><span style="color:#9a9a9a">{{ a.email|e }}</span></td>
+    <td>{{ a.stats.plays }} plays · {{ a.stats.likes }} likes · {{ a.stats.tracks }} tracks</td>
+    <td style="max-width:300px">{{ a.note|e }}</td>
+    <td style="white-space:nowrap">
+      <form method="post" action="/owner/artists/app/{{ a.id }}/approve" style="display:inline"><button class="btn" type="submit">🎤 Verify</button></form>
+      <form method="post" action="/owner/artists/app/{{ a.id }}/pass" style="display:inline"><button class="btn-ghost" type="submit">Pass</button></form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p style="color:#9a9a9a">No waiting applications.</p>{% endif %}
+
+<h2>👑 Verified Artists ({{ verified|length }})</h2>
+{% if verified %}
+<table>
+  <tr><th>Artist</th><th>Numbers</th><th>Contract</th><th>Actions</th></tr>
+  {% for v in verified %}
+  <tr>
+    <td><strong>{{ v.name|e }}</strong></td>
+    <td>{{ v.stats.plays }} plays · {{ v.stats.likes }} likes · {{ v.stats.gift_tickets }} 🎟️ gifted{% if v.contract_ready %} · <span class="pill" style="background:#e6ffef;border-color:#1d9e50;color:#0c6b32">📄 CONTRACT-READY ({{ plays_target }}+ plays)</span>{% endif %}</td>
+    <td>{{ v.artist_contract or '—' }}</td>
+    <td style="white-space:nowrap">
+      {% if not v.artist_contract or v.artist_contract == 'ended' %}
+      <form method="post" action="/owner/artists/{{ v.id }}/offer" style="display:inline"><button class="btn" type="submit">📄 Offer contract</button></form>
+      {% elif v.artist_contract == 'offered' %}
+      <span class="pill">offered — awaiting signature</span>
+      <form method="post" action="/owner/artists/{{ v.id }}/contract-end" style="display:inline"><button class="btn-ghost" type="submit">Withdraw</button></form>
+      {% elif v.artist_contract == 'signed' %}
+      <form method="post" action="/owner/artists/{{ v.id }}/contract-end" style="display:inline"><button class="btn-ghost" type="submit">Terminate</button></form>
+      {% endif %}
+      <form method="post" action="/owner/artists/{{ v.id }}/revoke" style="display:inline"><button class="btn-ghost" type="submit">Revoke badge</button></form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p style="color:#9a9a9a">None yet — the first golden note is yours to give.</p>{% endif %}
+
+<h2>🌱 Artists not yet verified</h2>
+{% if hopefuls %}
+<table>
+  <tr><th>Artist</th><th>Numbers</th><th></th></tr>
+  {% for h in hopefuls %}
+  <tr>
+    <td><strong>{{ h.name|e }}</strong></td>
+    <td>{{ h.stats.plays }} plays · {{ h.stats.likes }} likes · {{ h.stats.tracks }} tracks</td>
+    <td><form method="post" action="/owner/artists/{{ h.id }}/verify"><button class="btn" type="submit">🎤 Verify them</button></form></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p style="color:#9a9a9a">Nobody in Artist mode yet.</p>{% endif %}
+
+<h2>💰 Artist Fund — sponsor an artist</h2>
+<div class="card">
+  <p style="margin:0 0 10px;color:#c9c9d2">Fund balance: <strong>{{ fund }}</strong> (feeds from the 3% label fee on signed artists' cash-outs). Granting records the sponsorship and notifies the artist — settle the money through the usual payout rails.</p>
+  <form method="post" action="/owner/artists/fund-grant" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <select name="user_id" required>
+      <option value="">Pick an artist…</option>
+      {% for v in verified %}<option value="{{ v.id }}">{{ v.name|e }}</option>{% endfor %}
+    </select>
+    <input type="number" name="dollars" step="0.01" min="0" placeholder="$ amount" required style="width:110px">
+    <input type="text" name="note" maxlength="200" placeholder="Why — e.g. 'promo push for the new single'" style="flex:1;min-width:200px">
+    <button class="btn" type="submit">Grant</button>
+  </form>
+  {% if grants %}
+  <table>
+    <tr><th>When</th><th>Artist</th><th>Amount</th><th>Note</th></tr>
+    {% for g in grants %}
+    <tr><td>{{ g.created_at|e }}</td><td>{{ g.name|e }}</td><td>{{ "$%.2f"|format(g.cents / 100) }}</td><td>{{ g.note|e }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+</body>
+</html>

@@ -39,7 +39,7 @@
 
 <div class="card">
   <div class="section-title">🎙️ Earnings per stream</div>
-  {% if streams or earlier or page_gifts or post_gifts_earn or door_earn or locked_content or invite_bonus_total %}
+  {% if streams or earlier or page_gifts or post_gifts_earn or track_gifts_earn or door_earn or locked_content or invite_bonus_total %}
   <div style="margin-top:4px">
     {% for s in streams %}
     <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
@@ -67,6 +67,13 @@
       <span><strong>🎁 Post &amp; Peep gifts</strong><br>
       <span style="color:var(--muted);font-size:12.5px">{{ post_gifts_earn.gifts }} gift{% if post_gifts_earn.gifts != 1 %}s{% endif %} received · your posts keep earning while you sleep</span></span>
       <span style="font-weight:800;white-space:nowrap">{{ post_gifts_earn.tickets }} 🎟️</span>
+    </div>
+    {% endif %}
+    {% if track_gifts_earn %}
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <span><strong>🎵 Track gifts</strong><br>
+      <span style="color:var(--muted);font-size:12.5px">{{ track_gifts_earn.gifts }} gift{% if track_gifts_earn.gifts != 1 %}s{% endif %} received · your songs earning on your profile</span></span>
+      <span style="font-weight:800;white-space:nowrap">{{ track_gifts_earn.tickets }} 🎟️</span>
     </div>
     {% endif %}
     {% if invite_bonus_total %}

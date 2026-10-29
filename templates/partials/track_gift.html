@@ -1,0 +1,417 @@
+{# Build PAGE GIFTS: the 🎁 Gift button + sheet + giftfx layer for
+   profiles and Pages. Rendered only when the page_gift context is
+   set (never on your own profile / your own Page, never on a
+   locked profile). The sheet mirrors the live gift sheet: catalog
+   from the server (prices live in GIFT_CATALOG — the client sends
+   keys only), category tabs, ≥500 two-tap confirm, repeated taps
+   re-send behind an in-flight lock, and a successful send plays
+   the gift's own Build RICH giftfx animation across the screen. #}
+{% if post_gift %}
+<div id="trgift-backdrop" hidden></div>
+<div id="trgift-sheet" hidden role="dialog" aria-label="Send a gift">
+  <div class="trgift-head">
+    <span class="trgift-title">{{ ic('gift') }} Gift <span id="trgift-who"></span></span>
+    <button type="button" class="trgift-x" id="trgift-close" aria-label="Close">{{ ic('x') }}</button>
+  </div>
+  <div id="trgift-actions"></div>
+  <div class="trgift-error" id="trgift-error" hidden></div>
+  <div class="trgift-sent" id="trgift-sent" hidden></div>
+  <button type="button" class="btn-ghost btn-sm" id="trgift-done" style="margin-top:10px">Done</button>
+</div>
+<div id="trgift-fx-layer"></div>
+<div id="trgift-banner" hidden>
+  <img id="trgift-banner-img" alt="">
+  <span id="trgift-banner-emoji" hidden></span>
+  <div id="trgift-banner-text"></div>
+</div>
+<style>
+/* ===== Build PAGE GIFTS: the page/profile gift sheet + fx ===== */
+#trgift-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1990}
+#trgift-backdrop[hidden]{display:none}
+#trgift-sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:min(94vw,430px);max-height:86vh;overflow-y:auto;z-index:2000;
+  background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));
+  border:1px solid var(--border);border-radius:14px;padding:14px;
+  box-shadow:0 10px 34px rgba(0,0,0,.4)}
+#trgift-sheet[hidden]{display:none}
+.trgift-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.trgift-title{font-weight:800;font-size:16px}
+.trgift-x{background:none;border:none;font-size:16px;cursor:pointer;color:inherit;padding:4px 8px}
+.trgift-bal{padding:8px 2px;font-size:14px}
+.trgift-target{padding:0 2px 6px;font-size:13px;color:#b8860b;font-weight:700}
+.trgift-tabs{display:flex;gap:6px;margin:6px 0}
+.trgift-tab{flex:1;padding:7px 4px;border-radius:999px;border:1px solid var(--border);
+  background:rgba(127,127,127,.10);font-weight:700;font-size:13px;cursor:pointer;color:inherit}
+.trgift-tab.on{background:var(--red);border-color:var(--red);color:#fff}
+.trgift-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:4px 0}
+.trgift-cell{background:rgba(127,127,127,.08);border:1px solid var(--border);
+  border-radius:12px;padding:10px 4px 8px;text-align:center;cursor:pointer;
+  color:inherit;font:inherit}
+.trgift-cell img.g-art{width:54px;height:54px;object-fit:contain;
+  filter:drop-shadow(0 3px 8px rgba(0,0,0,.35))}
+.trgift-cell.cant{opacity:.45}
+.trgift-cell .g-name{font-size:11px;font-weight:700;margin-top:3px;line-height:1.15}
+.trgift-cell .g-cost{font-size:11.5px;color:#b8860b;font-weight:800;margin-top:2px}
+.trgift-cell .g-cost.free{color:#1a9e4b}
+.trgift-cell.armed{background:rgba(212,31,46,.85);color:#fff}
+.trgift-cell.armed .g-cost{color:#ffd97a}
+.trgift-error{margin-top:10px;padding:9px 12px;border-radius:10px;font-size:13.5px;
+  font-weight:700;color:#fff;background:rgba(212,31,46,.85)}
+.trgift-error[hidden]{display:none}
+.trgift-sent{margin-top:10px;padding:9px 12px;border-radius:10px;font-size:13.5px;
+  font-weight:700;color:#fff;background:rgba(26,158,75,.85)}
+.trgift-sent[hidden]{display:none}
+/* The fx layer + banner: the sender's gift pops across the whole
+   screen, over the sheet — same discipline as the live stage
+   (pointer-events off, capped nodes, removed on animationend). */
+#trgift-fx-layer{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:2100}
+#trgift-banner{position:fixed;left:50%;top:38%;transform:translate(-50%,-50%);
+  z-index:2110;background:rgba(17,17,17,.85);color:#fff;border-radius:18px;
+  padding:18px 22px;text-align:center;pointer-events:none;
+  border:1px solid rgba(255,255,255,.3);box-shadow:0 14px 44px rgba(0,0,0,.5)}
+#trgift-banner[hidden]{display:none}
+#trgift-banner-img{width:124px;height:124px;object-fit:contain}
+#trgift-banner-emoji{font-size:80px;line-height:1.1}
+#trgift-banner-text{font-weight:800;font-size:15.5px;margin-top:8px}
+/* Build RICH giftfx engine pieces (copied from live.html — the
+   same keyframes drive both stages). */
+.gift-fx{position:absolute;pointer-events:none;z-index:7}
+.gift-fx .gift-art-wrap{display:inline-block;will-change:transform,opacity}
+.gift-particle{position:absolute;left:50%;top:50%;width:9px;height:9px;
+  border-radius:50%;background:#ffd97a;pointer-events:none;
+  box-shadow:0 0 8px rgba(255,215,130,.9);
+  animation:giftfx-particle .95s ease-out forwards}
+.gift-rain-piece{position:absolute;top:0;pointer-events:none;
+  animation:giftfx-rain 3.4s ease-in forwards}
+@keyframes giftfx-rise{0%{opacity:0;transform:translate(0,12px) scale(.55)}
+  12%{opacity:1}100%{opacity:0;transform:translate(var(--dx,0px),-46vh) scale(1.12)}}
+@keyframes giftfx-burst{0%{opacity:0;transform:scale(.25) rotate(-14deg)}
+  22%{opacity:1;transform:scale(1.35) rotate(6deg)}
+  45%{transform:scale(1.02) rotate(-3deg)}
+  70%{opacity:1;transform:scale(1.18) rotate(2deg)}
+  100%{opacity:0;transform:scale(1.45) rotate(0deg)}}
+@keyframes giftfx-flyby{0%{opacity:0;transform:translateX(-24vw) translateY(0) scale(.8)}
+  10%{opacity:1}50%{transform:translateX(42vw) translateY(-26px) scale(1.05)}
+  90%{opacity:1}100%{opacity:0;transform:translateX(112vw) translateY(6px) scale(.95)}}
+@keyframes giftfx-spin{0%{opacity:0;transform:translateY(16px) scale(.4) rotate(0deg)}
+  25%{opacity:1}100%{opacity:0;transform:translateY(-34vh) scale(1.08) rotate(660deg)}}
+@keyframes giftfx-shower{0%{opacity:0;transform:translateY(-8vh) scale(.7) rotate(-6deg)}
+  12%{opacity:1}85%{opacity:1}
+  100%{opacity:0;transform:translateY(58vh) scale(1.05) rotate(8deg)}}
+@keyframes giftfx-zoomin{0%{opacity:0;transform:scale(.18)}
+  30%{opacity:1;transform:scale(1.22)}
+  55%{transform:scale(.96)}78%{opacity:1;transform:scale(1.06)}
+  100%{opacity:0;transform:scale(1.3)}}
+@keyframes giftfx-bounce{0%{opacity:0;transform:translateX(-14vw) translateY(0) scale(.8)}
+  8%{opacity:1}25%{transform:translateX(14vw) translateY(-64px) scale(1)}
+  45%{transform:translateX(38vw) translateY(0) scale(.96)}
+  65%{transform:translateX(62vw) translateY(-48px) scale(1.02)}
+  85%{opacity:1}100%{opacity:0;transform:translateX(112vw) translateY(-18px) scale(.95)}}
+@keyframes giftfx-pulse{0%{opacity:0;transform:scale(.6)}
+  18%{opacity:1;transform:scale(1.18)}36%{transform:scale(.94)}
+  54%{transform:scale(1.22)}72%{opacity:1;transform:scale(1)}
+  100%{opacity:0;transform:scale(1.28) translateY(-12vh)}}
+@keyframes giftfx-particle{0%{opacity:1;transform:translate(0,0) scale(1)}
+  100%{opacity:0;transform:translate(var(--px,0px),var(--py,0px)) scale(.3)}}
+@keyframes giftfx-rain{0%{opacity:0;transform:translateY(-6vh) rotate(-8deg)}
+  15%{opacity:.95}100%{opacity:0;transform:translateY(56vh) rotate(10deg)}}
+@keyframes giftfx-fade{0%{opacity:0}20%{opacity:1}80%{opacity:1}100%{opacity:0}}
+@media (prefers-reduced-motion: reduce){
+  .gift-fx .gift-art-wrap,.gift-anim{animation:giftfx-fade 1.2s ease-out forwards !important}
+  .gift-particle,.gift-rain-piece{display:none}
+}
+</style>
+<script>
+(function(){
+  var TG = {{ post_gift|tojson }};
+  var $ = function(id){ return document.getElementById(id); };
+  var sheet = $('trgift-sheet'), backdrop = $('trgift-backdrop');
+  var actionsEl = $('trgift-actions'), errEl = $('trgift-error'),
+      sentEl = $('trgift-sent'), fxLayer = $('trgift-fx-layer');
+  if (!sheet || !PG) return;
+  var myTickets = TG.balance || 0;
+  var curTrack = null, curName = 'them';
+  var giftCat = 'money';
+  var armedKey = null, armedAt = 0;
+  var toBusy = false, toLastAt = 0;
+  var sentTimer = null, bannerTimer = null;
+
+  /* ---- giftfx engine (the Build RICH pieces, page edition) --- */
+  var GIFT_ANIMS = ['rise', 'burst', 'flyby', 'spin', 'shower',
+                    'zoomin', 'bounce', 'pulse'];
+  var GIFT_ANIM_MS = {rise: 3600, burst: 2600, flyby: 3200,
+                      spin: 3000, shower: 3800, zoomin: 3000,
+                      bounce: 3400, pulse: 2800};
+  var GIFT_FX_CAP = 12;
+  var REDUCED_MOTION = !!(window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  var GIFT_BY_KEY = {};
+  (TG.gifts || []).forEach(function(cg){
+    if (cg && cg.key) GIFT_BY_KEY[cg.key] = cg;
+  });
+  function giftTierOf(t){
+    t = t || 0;
+    return t >= 5000 ? 4 : t >= 500 ? 3 : t >= 50 ? 2 : 1;
+  }
+  function giftAnimDefault(t){
+    t = t || 0;
+    if (t >= 5000) return 'shower';
+    if (t >= 500) return 'burst';
+    if (t >= 100) return 'zoomin';
+    if (t >= 50) return 'spin';
+    return 'rise';
+  }
+  function giftAnimName(g){
+    if (!g) return 'rise';
+    var cat = GIFT_BY_KEY[g.key];
+    if (cat && GIFT_ANIMS.indexOf(cat.anim) !== -1) return cat.anim;
+    if (g.anim && GIFT_ANIMS.indexOf(g.anim) !== -1) return g.anim;
+    return giftAnimDefault(g.tickets);
+  }
+  function applyGiftAnim(el, g, ms){
+    var name = giftAnimName(g);
+    el.classList.add('gift-anim', 'gift-anim-' + name);
+    el.setAttribute('data-anim', name);
+    if (!REDUCED_MOTION)
+      el.style.animation = 'giftfx-' + name + ' '
+        + (ms || GIFT_ANIM_MS[name] || 3000) + 'ms ease-out forwards';
+    return name;
+  }
+  function giftArtEl(g, px){
+    if (g && g.img){
+      var im = document.createElement('img');
+      im.src = g.img; im.alt = g.name || '';
+      im.style.width = px + 'px'; im.style.height = px + 'px';
+      im.style.objectFit = 'contain';
+      return im;
+    }
+    var s = document.createElement('span');
+    s.textContent = (g && g.emoji) || '🎁';
+    s.style.fontSize = Math.round(px * 0.8) + 'px';
+    return s;
+  }
+  function giftBurstParticles(parent){
+    if (REDUCED_MOTION) return;
+    for (var i = 0; i < 8; i++){
+      var p = document.createElement('span');
+      p.className = 'gift-particle';
+      var ang = (Math.PI * 2 * i) / 8 + Math.random() * 0.5;
+      var dist = 62 + Math.random() * 46;
+      p.style.setProperty('--px', Math.round(Math.cos(ang) * dist) + 'px');
+      p.style.setProperty('--py', Math.round(Math.sin(ang) * dist) + 'px');
+      parent.appendChild(p);
+    }
+  }
+  function spawnGiftFx(g, px){
+    if (!fxLayer) return false;
+    if (fxLayer.querySelectorAll('.gift-fx').length >= GIFT_FX_CAP)
+      return false;
+    var name = giftAnimName(g);
+    var h = document.createElement('span');
+    h.className = 'gift-fx';
+    if (name === 'flyby' || name === 'bounce'){
+      h.style.left = '-12%'; h.style.bottom = '30%';
+    } else if (name === 'shower'){
+      h.style.left = (38 + Math.random() * 24) + '%'; h.style.top = '-10%';
+    } else if (name === 'burst'){
+      h.style.left = (30 + Math.random() * 34) + '%'; h.style.bottom = '34%';
+    } else if (name === 'zoomin' || name === 'pulse'){
+      h.style.left = (40 + Math.random() * 16) + '%'; h.style.bottom = '36%';
+    } else {
+      h.style.left = (52 + Math.random() * 34) + '%'; h.style.bottom = '14%';
+    }
+    var wrap = document.createElement('span');
+    wrap.className = 'gift-art-wrap';
+    wrap.appendChild(giftArtEl(g, px));
+    applyGiftAnim(wrap, g);
+    h.appendChild(wrap);
+    if (name === 'burst') giftBurstParticles(h);
+    if (name === 'shower' && !REDUCED_MOTION){
+      for (var i = 0; i < 5; i++){
+        var rp = document.createElement('span');
+        rp.className = 'gift-rain-piece';
+        rp.style.left = (-46 + i * 26 + Math.random() * 10) + 'px';
+        rp.style.animationDelay = (i * 190) + 'ms';
+        rp.appendChild(giftArtEl(g, 26));
+        h.appendChild(rp);
+      }
+    }
+    fxLayer.appendChild(h);
+    var kill = function(){
+      if (h.parentNode) h.parentNode.removeChild(h);
+    };
+    wrap.addEventListener('animationend', kill);
+    setTimeout(kill, (GIFT_ANIM_MS[name] || 3000) + 200);
+    return true;
+  }
+  function showToBanner(g, recipientName){
+    var b = $('trgift-banner');
+    var im = $('trgift-banner-img'), em = $('trgift-banner-emoji');
+    if (g.img){ im.src = g.img; im.hidden = false; em.hidden = true; }
+    else {
+      im.hidden = true; em.hidden = false;
+      em.textContent = g.emoji || '🎁';
+    }
+    [im, em].forEach(function(el){
+      el.classList.remove('gift-anim');
+      el.style.animation = '';
+    });
+    b.querySelectorAll('.gift-particle').forEach(function(p){
+      p.parentNode.removeChild(p);
+    });
+    var art = g.img ? im : em;
+    applyGiftAnim(art, g, 3000);
+    if (giftAnimName(g) === 'burst') giftBurstParticles(b);
+    $('trgift-banner-text').textContent =
+      'You sent ' + g.name + ' to ' + recipientName + '!';
+    b.hidden = false;
+    if (bannerTimer) clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(function(){ b.hidden = true; }, 3000);
+  }
+  function playToGift(g, recipientName){
+    var tier = giftTierOf(g.tickets);
+    if (tier >= 3 || (g.tickets || 0) >= 100)
+      showToBanner(g, recipientName);
+    else if (tier === 2) spawnGiftFx(g, 74);
+    else spawnGiftFx(g, 46);
+  }
+
+  /* ---- the sheet ---------------------------------------------- */
+  function showToError(msg){
+    errEl.textContent = msg;
+    errEl.hidden = false;
+    sentEl.hidden = true;
+  }
+  function showToSent(msg){
+    sentEl.textContent = msg;
+    sentEl.hidden = false;
+    errEl.hidden = true;
+    if (sentTimer) clearTimeout(sentTimer);
+    sentTimer = setTimeout(function(){ sentEl.hidden = true; }, 4000);
+  }
+  function openSheet(){
+    backdrop.hidden = false;
+    sheet.hidden = false;
+    errEl.hidden = true;
+    renderSheet();
+  }
+  function closeSheet(){
+    backdrop.hidden = true;
+    sheet.hidden = true;
+    armedKey = null;
+  }
+  function renderSheet(){
+    actionsEl.innerHTML = '';
+    var bal = document.createElement('div');
+    bal.className = 'trgift-bal';
+    bal.innerHTML = '🎟️ Your tickets: <strong id="trgift-balance">'
+      + myTickets + '</strong> · <a href="/tickets" target="_blank" '
+      + 'rel="noopener" style="font-weight:700">Get tickets 🎟️</a>';
+    actionsEl.appendChild(bal);
+    var tline = document.createElement('div');
+    tline.className = 'trgift-target';
+    tline.textContent = '🎯 Gifting: ' + curName
+      + ' — they earn every ticket, same as on a live';
+    actionsEl.appendChild(tline);
+    var tabs = document.createElement('div');
+    tabs.className = 'trgift-tabs';
+    [['money', '💰 Money'], ['love', '❤️ Love'],
+     ['luxury', '👑 Luxury']].forEach(function(pair){
+      var tb = document.createElement('button');
+      tb.type = 'button';
+      tb.className = 'trgift-tab' + (giftCat === pair[0] ? ' on' : '');
+      tb.textContent = pair[1];
+      tb.addEventListener('click', function(){
+        giftCat = pair[0];
+        armedKey = null;
+        renderSheet();
+      });
+      tabs.appendChild(tb);
+    });
+    actionsEl.appendChild(tabs);
+    var grid = document.createElement('div');
+    grid.className = 'trgift-grid';
+    (TG.gifts || []).forEach(function(g){
+      if (g.category !== giftCat) return;
+      var cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'trgift-cell'
+        + (myTickets < g.tickets ? ' cant' : '')
+        + (armedKey === g.key ? ' armed' : '');
+      var im = document.createElement('img');
+      im.className = 'g-art'; im.src = g.img; im.alt = g.name || '';
+      cell.appendChild(im);
+      var nm = document.createElement('div');
+      nm.className = 'g-name'; nm.textContent = g.name;
+      cell.appendChild(nm);
+      var cost = document.createElement('div');
+      cost.className = 'g-cost' + (g.tickets === 0 ? ' free' : '');
+      cost.textContent = armedKey === g.key
+        ? ('Tap again to send ' + g.tickets + '?')
+        : (g.tickets === 0 ? 'FREE' : (g.tickets + ' 🎟️'));
+      cell.appendChild(cost);
+      cell.addEventListener('click', function(){ sendGift(g); });
+      grid.appendChild(cell);
+    });
+    actionsEl.appendChild(grid);
+  }
+  function sendGift(g){
+    var now = Date.now();
+    if (toBusy || now - toLastAt < 150) return;  /* in-flight lock */
+    if (myTickets < g.tickets){
+      showToError('Not enough tickets — grab a pack first 🎟️');
+      return;
+    }
+    if (g.tickets >= 500){
+      if (armedKey !== g.key || now - armedAt > 3000){
+        armedKey = g.key; armedAt = now;
+        renderSheet();
+        return;
+      }
+      armedKey = null;
+    }
+    toBusy = true; toLastAt = now;
+    fetch('/media/' + curTrack + '/gift', {
+      method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({gift_key: g.key})
+    }).then(function(r){ return r.json(); })
+      .then(function(d){
+        toBusy = false;
+        if (d && d.ok){
+          myTickets = d.balance;
+          playToGift(g, d.recipient_name || curName);
+          showToSent('Sent ' + g.name + ' to '
+            + (d.recipient_name || curName) + '!');
+          renderSheet();
+        } else {
+          showToError((d && d.error)
+            || 'Could not send that gift.');
+        }
+      })
+      .catch(function(){
+        toBusy = false;
+        showToError('Could not send that gift.');
+      });
+  }
+  document.addEventListener('click', function(e){
+    var b = e.target.closest('[data-gift-track]');
+    if (b) window.openTrackGift(
+      parseInt(b.getAttribute('data-gift-track'), 10),
+      b.getAttribute('data-gift-name') || 'them');
+  });
+  window.openTrackGift = function(pid, name){
+    curTrack = pid; curName = name || 'them';
+    var who = $('trgift-who');
+    if (who) who.textContent = curName;
+    openSheet();
+  };
+  $('trgift-close').addEventListener('click', closeSheet);
+  $('trgift-done').addEventListener('click', closeSheet);
+  backdrop.addEventListener('click', closeSheet);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape' && !sheet.hidden) closeSheet();
+  });
+})();
+</script>
+{% endif %}

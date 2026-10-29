@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block og_title %}Your HERE Artist Agreement{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:0 auto;padding:20px 14px 44px">
+  <div style="display:flex;align-items:center;gap:12px">
+    {% with ab_size=54 %}{% include "partials/artist_badge.html" %}{% endwith %}
+    <div>
+      <h1 style="margin:0;font-size:24px">The HERE Artist Agreement</h1>
+      <div style="color:var(--muted);font-size:14px">The label deal — in plain words.</div>
+    </div>
+  </div>
+
+  {% if err == 'form' %}<p style="font-weight:700;color:#c0392b;margin-top:14px">To sign: type your full name and check both boxes — that's your signature.</p>
+  {% elif err == 'state' %}<p style="font-weight:700;color:#c0392b;margin-top:14px">There's no open offer on your account right now.</p>{% endif %}
+
+  <div class="card" style="margin-top:16px">
+    {% if state == 'signed' %}
+    <p style="font-weight:900;font-size:17px;margin:0">✅ You're signed to HERE.</p>
+    <p style="color:var(--muted);margin:8px 0 0">Signed by <strong>{{ contract.signed_name|e }}</strong> · {{ contract.signed_at|e }} · Contract #{{ contract.id }}</p>
+    <p style="margin-top:10px"><a class="btn" href="/artist/contract.pdf">⬇ Download my contract (PDF)</a></p>
+    {% elif state == 'offered' %}
+    <p style="font-weight:900;font-size:17px;margin:0">📄 HERE is offering you a record deal.</p>
+    <p style="color:var(--muted);margin:8px 0 0">Read it all — it's short and plain. When you're ready, sign at the bottom. It starts the moment you sign.</p>
+    <p style="margin-top:10px"><a class="btn-ghost" href="/artist/contract.pdf">⬇ Download the agreement (PDF)</a></p>
+    {% elif state == 'ended' %}
+    <p style="font-weight:900;font-size:17px;margin:0">This contract has ended.</p>
+    <p style="color:var(--muted);margin:8px 0 0">Ended {{ contract.ended_at|e }} (by {{ contract.ended_by|e }}). As agreed: everything in your wallet stayed yours.</p>
+    <p style="margin-top:10px"><a class="btn-ghost" href="/artist/contract.pdf">⬇ The ended agreement (PDF)</a></p>
+    {% else %}
+    <p style="font-weight:900;font-size:17px;margin:0">No offer yet — here's your road.</p>
+    <p style="color:var(--muted);margin:8px 0 0">You have <strong>{{ stats.plays }} plays</strong>. At <strong>40,000 plays</strong> you show up contract-ready in the owner's panel — and the owner can offer you this deal. The agreement below is exactly what you'd sign, so you can read it early.</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    {% for head, body in terms %}
+    <h3 style="margin:16px 0 4px">{{ head|e }}</h3>
+    <p style="margin:0;line-height:1.6">{{ body|e }}</p>
+    {% endfor %}
+  </div>
+
+  {% if state == 'offered' %}
+  <form method="post" action="/artist/contract/sign" class="card" style="margin-top:14px">
+    <div style="font-weight:900;font-size:17px">Sign it</div>
+    <p style="color:var(--muted);margin:8px 0 0">Type your full name — with the two boxes checked, that's your digital signature, with the date and time recorded.</p>
+    <input type="text" name="signed_name" required minlength="3" maxlength="80" placeholder="Your full name" style="width:100%;margin-top:12px;border:1px solid var(--border);border-radius:10px;padding:11px 13px;background:transparent;color:inherit;font-family:cursive;font-size:19px">
+    <label style="display:flex;gap:8px;margin-top:12px;align-items:flex-start"><input type="checkbox" name="agree_read" value="1" required style="margin-top:3px"><span>I read the whole agreement above and I understand it.</span></label>
+    <label style="display:flex;gap:8px;margin-top:9px;align-items:flex-start"><input type="checkbox" name="agree_sign" value="1" required style="margin-top:3px"><span>I agree to it, and typing my name here is my signature.</span></label>
+    <button type="submit" class="btn" style="margin-top:14px">✍ Sign the agreement</button>
+  </form>
+  {% endif %}
+
+  {% if state == 'signed' %}
+  <form method="post" action="/artist/contract/terminate" class="card" style="margin-top:14px" onsubmit="return confirm('End your HERE contract? The label perks and the 3% fee stop. Everything in your wallet stays yours.');">
+    <div style="font-weight:900">End this contract</div>
+    <p style="color:var(--muted);margin:8px 0 0">Your call, any time, no penalty — that's in the deal (section 7). Your earnings stay yours either way.</p>
+    <button type="submit" class="btn-ghost" style="margin-top:12px">Terminate my contract</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

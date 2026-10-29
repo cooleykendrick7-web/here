@@ -1256,6 +1256,12 @@ def init_db():
     if "media_skin" not in _mu_cols:
         c.execute("ALTER TABLE users ADD COLUMN "
                   "media_skin TEXT DEFAULT ''")
+    if "artist_verified" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN "
+                  "artist_verified INTEGER DEFAULT 0")
+    if "artist_contract" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN "
+                  "artist_contract TEXT DEFAULT ''")
     # Growth round: scheduled shows + their reminder subscribers.
     c.execute("""CREATE TABLE IF NOT EXISTS live_schedule (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1275,6 +1281,47 @@ def init_db():
         created_at TEXT NOT NULL DEFAULT '')""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_media_tracks_user "
               "ON media_tracks(user_id, id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS artist_applications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'new',
+        created_at TEXT NOT NULL DEFAULT '',
+        decided_at TEXT NOT NULL DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS artist_contracts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'offered',
+        terms_version TEXT NOT NULL DEFAULT 'v1',
+        offered_at TEXT NOT NULL DEFAULT '',
+        signed_at TEXT NOT NULL DEFAULT '',
+        signed_name TEXT NOT NULL DEFAULT '',
+        ended_at TEXT NOT NULL DEFAULT '',
+        ended_by TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS media_track_likes (
+        track_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (track_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS track_gifts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER NOT NULL, recipient_id INTEGER NOT NULL,
+        track_id INTEGER NOT NULL,
+        gift_key TEXT NOT NULL DEFAULT '',
+        tickets INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS label_fees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        payout_request_id INTEGER NOT NULL DEFAULT 0,
+        tickets INTEGER NOT NULL DEFAULT 0,
+        cents INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS artist_fund_grants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        cents INTEGER NOT NULL DEFAULT 0,
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '')""")
     c.execute("""CREATE TABLE IF NOT EXISTS gift_nudges (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sender_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
@@ -1540,6 +1587,9 @@ def init_db():
     if "share_token" not in _pr_cols:
         c.execute("ALTER TABLE payout_requests ADD COLUMN "
                   "share_token TEXT")
+    if "fee_tickets" not in _pr_cols:
+        c.execute("ALTER TABLE payout_requests ADD COLUMN "
+                  "fee_tickets INTEGER DEFAULT 0")
     # Build O: password recovery. token_hash is the ONLY credential
     # copy (sha256 of the raw token); token_plain holds the raw token
     # ONLY while delivery='queued' so the owner panel can show the
@@ -1745,7 +1795,11 @@ def render(request: Request, name, ctx=None):
                        # server re-checks on every write regardless).
                        "creator_mode": 1 if u.get("creator_mode") else 0,
                        "media_skin": avatar_url(
-                           u.get("media_skin", ""))}
+                           u.get("media_skin", "")),
+                       "artist_verified":
+                           1 if u.get("artist_verified") else 0,
+                       "artist_contract":
+                           u.get("artist_contract") or ""}
         conn = db()
         ctx.setdefault("post_gift", _post_gift_ctx(u))
         ctx["pending_count"] = conn.execute(
@@ -3414,7 +3468,6 @@ async def signup(request: Request):
     return set_session_cookie(resp, token, SESSION_COOKIE)
 
 
-@app.get("/login", response_class=HTMLResponse)
 def _safe_next(raw):
     """A post-auth landing path we trust: same-site, never the
     owner panel, never protocol-relative."""
@@ -3426,6 +3479,7 @@ def _safe_next(raw):
     return ""
 
 
+@app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     if current_user(request):
         return redir("/home")
@@ -8663,6 +8717,8 @@ async def profile(request: Request, uid: int):
         # Build PAGE GIFTS / Creator Mode: the owner's own profile
         # shows the switch state as a small line (no badge).
         "creator_mode": 1 if prof.get("creator_mode") else 0,
+        "artist_verified": 1 if prof.get("artist_verified") else 0,
+        "artist_contract": prof.get("artist_contract") or "",
         "req_status": status,
         "tap_count": tcount,
         "is_verified": bool(prof.get("is_verified")),
@@ -8777,8 +8833,8 @@ async def profile(request: Request, uid: int):
                          else _recent_page_gifts(uid, None))
     media_mode = (prof.get("media_mode") or "") if not locked \
         else ""
-    media_tracks = (_media_tracks_for(uid) if media_mode
-                    else None)
+    media_tracks = (_media_tracks_for(uid, user["id"])
+                    if media_mode else None)
     media_cap = _media_cap(prof)
     tip_goal = None
     if prof["creator_mode"] and (prof["tip_goal_tickets"] or 0) > 0:
@@ -8938,11 +8994,17 @@ async def profile_edit_page(request: Request):
                     "SELECT text, status, created_at FROM "
                     "app_suggestions WHERE user_id=? ORDER BY id "
                     "DESC LIMIT 10", (user["id"],)).fetchall()]
+    _artist_pending = bool(conn.execute(
+        "SELECT 1 FROM artist_applications WHERE user_id=? "
+        "AND status='new'", (user["id"],)).fetchone())
     conn.close()
     return render(request, "profile_edit.html", {
+        "artist_app_pending": _artist_pending,
         "my_suggestions": _my_sugg,
         "idea_flash": request.query_params.get("idea") or "",
         "media_flash": request.query_params.get("media") or "",
+        "artist_flash": request.query_params.get("artist")
+        or "",
         "icon_style": icon_style_of(user),
         "icon_styles": [(s, ICON_STYLE_LABELS[s]) for s in ICON_STYLES],
         "icon_previews": {s: {k: icon_html(k, s) for k in
@@ -14703,16 +14765,31 @@ def _media_cap(user):
             else MEDIA_FREE_TRACKS)
 
 
-def _media_tracks_for(uid):
+def _media_tracks_for(uid, viewer_id=None):
     conn = db()
     rows = conn.execute(
         "SELECT * FROM media_tracks WHERE user_id=? ORDER BY id",
         (uid,)).fetchall()
+    owner = get_user(uid) or {}
+    giftable_all = bool(owner.get("artist_verified")
+                        and owner.get("creator_mode"))
+    out = []
+    for r in rows:
+        likes = conn.execute(
+            "SELECT COUNT(*) c FROM media_track_likes "
+            "WHERE track_id=?", (r["id"],)).fetchone()["c"]
+        liked = bool(viewer_id and conn.execute(
+            "SELECT 1 FROM media_track_likes WHERE track_id=? "
+            "AND user_id=?", (r["id"], viewer_id)).fetchone())
+        out.append({"id": r["id"], "title": r["title"],
+                    "src": avatar_url(r["file"]),
+                    "rights": r["rights"],
+                    "plays": r["plays"] or 0,
+                    "likes": likes, "liked": liked,
+                    "giftable": bool(giftable_all
+                                     and r["rights"] == "own")})
     conn.close()
-    return [{"id": r["id"], "title": r["title"],
-             "src": avatar_url(r["file"]),
-             "rights": r["rights"], "plays": r["plays"] or 0}
-            for r in rows]
+    return out
 
 
 @app.post("/settings/media-mode")
@@ -14830,6 +14907,706 @@ async def media_play(request: Request, tid: int):
     conn.commit()
     conn.close()
     return JSONResponse({"ok": True})
+
+
+# ---------------- THE LABEL: Verified Artists ----------------
+ARTIST_PLAYS_TARGET = 40000
+LABEL_FEE_PCT = 3
+
+CONTRACT_TERMS_V1 = [
+    ("1. Who this deal is between",
+     "You (the Artist) and HERE (the platform, run by its "
+     "owner). This agreement starts the day you sign it below "
+     "and runs until either side ends it (section 7)."),
+    ("2. What HERE gives you",
+     "The Verified Artist badge on your profile; eligibility "
+     "for sponsorship, promotion and marketing on HERE, at "
+     "HERE's discretion; eligibility for support from the "
+     "Artist Fund (section 6); and the platform's tools to "
+     "release music, gather fans and get paid."),
+    ("3. What you give HERE",
+     "Your work. Bring your people: your fans joining HERE is "
+     "how the money pool fills — for you and for every artist "
+     "here. Keep releasing, keep showing up, and represent "
+     "the label well while you are on the platform."),
+    ("4. Your music stays YOUR music",
+     "You keep 100% of the rights to your music. HERE claims "
+     "no ownership of your songs, your name or your image "
+     "beyond showing them on the platform to promote you. "
+     "Only claim 'I own the rights' on music that is truly "
+     "yours — claiming rights you do not hold is a breach."),
+    ("5. The money",
+     "Fans pay you through HERE's ticket gifts at the "
+     "platform's standard rate: every ticket a fan gifts you "
+     "earns you half a cent, cashed out from $10 up through "
+     "Stripe, exactly like every creator on HERE. While this "
+     "contract is signed, a label fee of 3% comes out of your "
+     "cash-outs — it funds your marketing and the Artist "
+     "Fund. Everything you earn is yours; see section 7 for "
+     "what happens if the deal ends."),
+    ("6. The Artist Fund",
+     "HERE keeps a fund, fed by label fees, that it may use "
+     "to sponsor artists — promotion, features, support — at "
+     "HERE's sole discretion. Being signed makes you "
+     "eligible; it does not promise any artist a payment "
+     "from the fund."),
+    ("7. Ending the deal — either side, any time",
+     "You may end this contract whenever you like, from your "
+     "contract page, no penalty and no questions. HERE may "
+     "end it for a breach (section 8), or for any reason with "
+     "14 days' notice in the app. WHEN IT ENDS, FROM EITHER "
+     "SIDE: the badge's label perks and the 3% fee stop, and "
+     "everything in your wallet stays yours — your earned "
+     "tickets remain yours to cash out under the normal "
+     "rules. Nobody can take your earnings back."),
+    ("8. Breaches — what ends it fast",
+     "Fake plays, fake likes, fake gifts or any other rigged "
+     "numbers; claiming rights to music that is not yours; "
+     "breaking HERE's rules; or using the badge to scam "
+     "people. A breach lets HERE end the contract and the "
+     "Verified Artist badge on the spot."),
+    ("9. Plain words",
+     "This is the whole deal, written plain on purpose. If "
+     "HERE ever offers you new terms, they apply only if you "
+     "sign the new version. Your signed version governs you "
+     "until then."),
+]
+CONTRACT_VERSIONS = {"v1": CONTRACT_TERMS_V1}
+
+
+def _artist_stats(uid):
+    conn = db()
+    plays = conn.execute(
+        "SELECT COALESCE(SUM(plays),0) s FROM media_tracks "
+        "WHERE user_id=?", (uid,)).fetchone()["s"]
+    likes = conn.execute(
+        "SELECT COUNT(*) c FROM media_track_likes l JOIN "
+        "media_tracks t ON t.id = l.track_id WHERE t.user_id=?",
+        (uid,)).fetchone()["c"]
+    gifts = conn.execute(
+        "SELECT COALESCE(SUM(tickets),0) s FROM track_gifts "
+        "WHERE recipient_id=?", (uid,)).fetchone()["s"]
+    tracks = conn.execute(
+        "SELECT COUNT(*) c FROM media_tracks WHERE user_id=?",
+        (uid,)).fetchone()["c"]
+    conn.close()
+    return {"plays": plays or 0, "likes": likes or 0,
+            "gift_tickets": gifts or 0, "tracks": tracks or 0}
+
+
+def _fund_cents(conn):
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE "
+        "key='artist_fund_cents'").fetchone()
+    try:
+        return int(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fund_set(conn, cents):
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings(key, value) "
+        "VALUES('artist_fund_cents', ?)",
+        (str(max(0, int(cents))),))
+
+
+def _open_contract(conn, uid):
+    return conn.execute(
+        "SELECT * FROM artist_contracts WHERE user_id=? AND "
+        "status IN ('offered','signed') ORDER BY id DESC",
+        (uid,)).fetchone()
+
+
+def _pdf_escape(s):
+    return (str(s).replace("\\", "\\\\")
+            .replace("(", "\\(").replace(")", "\\)"))
+
+
+def _contract_pdf_bytes(title, lines):
+    """A tiny dependency-free text PDF: (text, size, bold)
+    lines wrapped at 86 chars, paginated. Deterministic."""
+    import textwrap as _tw
+    flat = []
+    for text, size, bold in lines:
+        wrapped = _tw.wrap(text, width=86) or [""]
+        for i, w in enumerate(wrapped):
+            flat.append((w, size, bold))
+        flat.append(("", 6, False))
+    pages, cur = [], []
+    for ln in flat:
+        cur.append(ln)
+        if len(cur) >= 44:
+            pages.append(cur)
+            cur = []
+    if cur:
+        pages.append(cur)
+    objs = []
+    objs.append("<< /Type /Catalog /Pages 2 0 R >>")
+    kids = " ".join(f"{3 + i * 2} 0 R" for i in range(len(pages)))
+    objs.append(f"<< /Type /Pages /Kids [{kids}] /Count "
+                f"{len(pages)} >>")
+    for pi, page in enumerate(pages):
+        content = ["BT", "50 780 Td"]
+        for text, size, bold in page:
+            font = "F2" if bold else "F1"
+            content.append(f"/{font} {size} Tf")
+            content.append(f"0 -{size + 5} Td")
+            if text:
+                content.append(f"({_pdf_escape(text)}) Tj")
+        content.append("ET")
+        stream = "\n".join(content)
+        objs.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox "
+            f"[0 0 612 792] /Resources << /Font << /F1 "
+            f"{3 + len(pages) * 2} 0 R /F2 "
+            f"{4 + len(pages) * 2} 0 R >> >> /Contents "
+            f"{4 + pi * 2} 0 R >>")
+        objs.append(f"<< /Length {len(stream)} >>\nstream\n"
+                    f"{stream}\nendstream")
+    objs.append("<< /Type /Font /Subtype /Type1 "
+                "/BaseFont /Helvetica >>")
+    objs.append("<< /Type /Font /Subtype /Type1 "
+                "/BaseFont /Helvetica-Bold >>")
+    out = ["%PDF-1.4"]
+    offsets = []
+    pos = len("%PDF-1.4\n")
+    for i, body in enumerate(objs):
+        offsets.append(pos)
+        chunk = f"{i + 1} 0 obj\n{body}\nendobj\n"
+        out.append(chunk)
+        pos += len(chunk)
+    xref = pos
+    tail = ["xref", f"0 {len(objs) + 1}",
+            "0000000000 65535 f "]
+    for off in offsets:
+        tail.append(f"{off:010d} 00000 n ")
+    tail += ["trailer",
+             f"<< /Size {len(objs) + 1} /Root 1 0 R >>",
+             "startxref", str(xref), "%%EOF"]
+    out.append("\n".join(tail))
+    return "\n".join(out).encode("latin-1", "replace")
+
+
+
+# ---------------- Label routes ----------------
+
+@app.post("/settings/artist-apply")
+async def artist_apply(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    back = "/settings/profile?artist={}#artist-card"
+    if (user.get("media_mode") or "") != "artist":
+        return redir(back.format("err-mode"))
+    if user.get("artist_verified"):
+        return redir(back.format("err-already"))
+    form = await request.form()
+    note = str(form.get("note") or "").strip()[:400]
+    conn = db()
+    pending = conn.execute(
+        "SELECT id FROM artist_applications WHERE user_id=? "
+        "AND status='new'", (user["id"],)).fetchone()
+    if pending:
+        conn.close()
+        return redir(back.format("err-pending"))
+    conn.execute(
+        "INSERT INTO artist_applications(user_id, note, "
+        "created_at) VALUES(?,?,?)",
+        (user["id"], note, now_iso()))
+    conn.commit()
+    conn.close()
+    return redir(back.format("applied"))
+
+
+@app.get("/artists", response_class=HTMLResponse)
+async def artists_page(request: Request):
+    user = current_user(request)
+    conn = db()
+    rows = conn.execute(
+        "SELECT id, name, avatar, founding_no FROM users "
+        "WHERE artist_verified=1 ORDER BY id").fetchall()
+    conn.close()
+    artists = []
+    for r in rows:
+        st = _artist_stats(r["id"])
+        artists.append({
+            "id": r["id"], "name": r["name"],
+            "avatar": avatar_url(r["avatar"]),
+            "founding_no": r["founding_no"], **st})
+    artists.sort(key=lambda a: -a["plays"])
+    return render(request, "artists.html",
+                  {"artists": artists,
+                   "plays_target": ARTIST_PLAYS_TARGET})
+
+
+@app.get("/artist/contract", response_class=HTMLResponse)
+async def artist_contract_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _open_contract(conn, user["id"])
+    last = row or conn.execute(
+        "SELECT * FROM artist_contracts WHERE user_id=? "
+        "ORDER BY id DESC", (user["id"],)).fetchone()
+    conn.close()
+    state = (user.get("artist_contract") or "")
+    terms = CONTRACT_VERSIONS[
+        (last["terms_version"] if last else "v1")]
+    return render(request, "artist_contract.html", {
+        "state": state, "contract": dict(last) if last else None,
+        "terms": terms,
+        "err": request.query_params.get("err") or "",
+        "stats": _artist_stats(user["id"])})
+
+
+@app.get("/artist/contract.pdf")
+async def artist_contract_pdf(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM artist_contracts WHERE user_id=? "
+        "ORDER BY id DESC", (user["id"],)).fetchone()
+    conn.close()
+    if not row:
+        return redir("/artist/contract")
+    terms = CONTRACT_VERSIONS[row["terms_version"]]
+    lines = [("HERE — VERIFIED ARTIST AGREEMENT", 17, True),
+             (f"Contract #{row['id']} · Terms "
+              f"{row['terms_version']} · Artist: "
+              f"{user['name']} ({user['email']})", 10.5, False),
+             ("", 8, False)]
+    for head, body in terms:
+        lines.append((head, 12.5, True))
+        lines.append((body, 11, False))
+    lines.append(("", 8, False))
+    if row["signed_at"]:
+        lines.append(
+            (f"SIGNED by the Artist: {row['signed_name']}", 12,
+             True))
+        lines.append(
+            (f"Signed at: {row['signed_at']} · Status: "
+             f"{row['status']}", 11, False))
+    else:
+        lines.append((f"Status: {row['status']} — not yet "
+                      "signed.", 11, False))
+    if row["ended_at"]:
+        lines.append(
+            (f"Ended at: {row['ended_at']} (by "
+             f"{row['ended_by']})", 11, False))
+    data = _contract_pdf_bytes("HERE Verified Artist Agreement",
+                               lines)
+    return Response(
+        data, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 'attachment; filename="here-artist-'
+                 'agreement.pdf"'})
+
+
+@app.post("/artist/contract/sign")
+async def artist_contract_sign(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    back = "/artist/contract"
+    if (user.get("artist_contract") or "") != "offered":
+        return redir(back + "?err=state")
+    form = await request.form()
+    name = str(form.get("signed_name") or "").strip()
+    if len(name) < 3 or not form.get("agree_read") \
+            or not form.get("agree_sign"):
+        return redir(back + "?err=form")
+    conn = db()
+    row = _open_contract(conn, user["id"])
+    if not row:
+        conn.close()
+        return redir(back + "?err=state")
+    stamp = now_iso()
+    conn.execute(
+        "UPDATE artist_contracts SET status='signed', "
+        "signed_at=?, signed_name=? WHERE id=?",
+        (stamp, name[:80], row["id"]))
+    conn.execute(
+        "UPDATE users SET artist_contract='signed' WHERE id=?",
+        (user["id"],))
+    conn.commit()
+    conn.close()
+    notify(user["id"], "artist_contract",
+           "🎉 You're signed to HERE. Your agreement is live — "
+           "the 3% label fee rides your cash-outs from here, "
+           "and everything you earn stays yours.",
+           "/artist/contract")
+    return redir(back)
+
+
+@app.post("/artist/contract/terminate")
+async def artist_contract_terminate(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = _open_contract(conn, user["id"])
+    if row:
+        stamp = now_iso()
+        conn.execute(
+            "UPDATE artist_contracts SET status='ended', "
+            "ended_at=?, ended_by='artist' WHERE id=?",
+            (stamp, row["id"]))
+        conn.execute(
+            "UPDATE users SET artist_contract='ended' "
+            "WHERE id=?", (user["id"],))
+        conn.commit()
+    conn.close()
+    return redir("/artist/contract")
+
+
+# ---------------- owner: the Label desk ----------------
+
+@app.get("/owner/artists", response_class=HTMLResponse)
+async def owner_artists(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    apps = []
+    for r in conn.execute(
+            "SELECT a.*, u.name, u.email FROM "
+            "artist_applications a JOIN users u ON "
+            "u.id = a.user_id WHERE a.status='new' "
+            "ORDER BY a.id").fetchall():
+        apps.append({**dict(r), "stats": _artist_stats(
+            r["user_id"])})
+    verified, hopefuls = [], []
+    for r in conn.execute(
+            "SELECT id, name, email, artist_verified, "
+            "artist_contract, media_mode FROM users WHERE "
+            "artist_verified=1 OR media_mode='artist' "
+            "ORDER BY artist_verified DESC, id").fetchall():
+        entry = {**dict(r), "stats": _artist_stats(r["id"])}
+        entry["contract_ready"] = bool(
+            entry["stats"]["plays"] >= ARTIST_PLAYS_TARGET)
+        (verified if r["artist_verified"] else hopefuls).append(
+            entry)
+    grants = [dict(g) for g in conn.execute(
+        "SELECT g.*, u.name FROM artist_fund_grants g JOIN "
+        "users u ON u.id = g.user_id ORDER BY g.id DESC "
+        "LIMIT 20").fetchall()]
+    fund = _fund_cents(conn)
+    fees = conn.execute(
+        "SELECT COALESCE(SUM(cents),0) s FROM label_fees"
+        ).fetchone()["s"]
+    conn.close()
+    return render(request, "owner/artists.html", {
+        "apps": apps, "verified": verified,
+        "hopefuls": hopefuls, "grants": grants,
+        "fund_cents": fund, "fund": _money(fund),
+        "fees_total": _money(fees or 0),
+        "plays_target": ARTIST_PLAYS_TARGET,
+        "msg": request.query_params.get("msg") or ""})
+
+
+@app.post("/owner/artists/app/{aid}/{decision}")
+async def owner_artist_app(request: Request, aid: int,
+                           decision: str):
+    err = require_owner(request)
+    if err:
+        return err
+    if decision not in ("approve", "pass"):
+        return redir("/owner/artists")
+    conn = db()
+    app_row = conn.execute(
+        "SELECT * FROM artist_applications WHERE id=? AND "
+        "status='new'", (aid,)).fetchone()
+    if app_row:
+        stamp = now_iso()
+        conn.execute(
+            "UPDATE artist_applications SET status=?, "
+            "decided_at=? WHERE id=?",
+            ("approved" if decision == "approve" else "passed",
+             stamp, aid))
+        if decision == "approve":
+            conn.execute(
+                "UPDATE users SET artist_verified=1 WHERE id=?",
+                (app_row["user_id"],))
+        conn.commit()
+        if decision == "approve":
+            notify(app_row["user_id"], "artist_verified",
+                   "🎤👑 You're a HERE Verified Artist! The "
+                   "golden note is on your profile — fans can "
+                   "now gift your tracks.",
+                   f"/user/{app_row['user_id']}")
+    conn.close()
+    return redir("/owner/artists?msg=done")
+
+
+@app.post("/owner/artists/{uid}/verify")
+async def owner_artist_verify(request: Request, uid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("UPDATE users SET artist_verified=1 "
+                 "WHERE id=?", (uid,))
+    conn.commit()
+    conn.close()
+    notify(uid, "artist_verified",
+           "🎤👑 You're a HERE Verified Artist! The golden "
+           "note is on your profile — fans can now gift your "
+           "tracks.", f"/user/{uid}")
+    return redir("/owner/artists?msg=done")
+
+
+@app.post("/owner/artists/{uid}/revoke")
+async def owner_artist_revoke(request: Request, uid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("UPDATE users SET artist_verified=0 "
+                 "WHERE id=?", (uid,))
+    conn.commit()
+    conn.close()
+    return redir("/owner/artists?msg=done")
+
+
+@app.post("/owner/artists/{uid}/offer")
+async def owner_artist_offer(request: Request, uid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    u = conn.execute("SELECT artist_verified, artist_contract "
+                     "FROM users WHERE id=?", (uid,)).fetchone()
+    if u and u["artist_verified"] and not _open_contract(
+            conn, uid):
+        stamp = now_iso()
+        conn.execute(
+            "INSERT INTO artist_contracts(user_id, status, "
+            "terms_version, offered_at, created_at) VALUES"
+            "(?, 'offered', 'v1', ?, ?)", (uid, stamp, stamp))
+        conn.execute(
+            "UPDATE users SET artist_contract='offered' "
+            "WHERE id=?", (uid,))
+        conn.commit()
+        notify(uid, "artist_contract",
+               "📄 HERE is offering you a record deal. Read "
+               "the agreement and sign it on your contract "
+               "page.", "/artist/contract")
+    conn.close()
+    return redir("/owner/artists?msg=done")
+
+
+@app.post("/owner/artists/{uid}/contract-end")
+async def owner_artist_contract_end(request: Request, uid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    row = _open_contract(conn, uid)
+    if row:
+        stamp = now_iso()
+        conn.execute(
+            "UPDATE artist_contracts SET status='ended', "
+            "ended_at=?, ended_by='owner' WHERE id=?",
+            (stamp, row["id"]))
+        conn.execute(
+            "UPDATE users SET artist_contract='ended' "
+            "WHERE id=?", (uid,))
+        conn.commit()
+        notify(uid, "artist_contract",
+               "Your HERE artist contract has ended. "
+               "Everything in your wallet stays yours to cash "
+               "out, as agreed.", "/artist/contract")
+    conn.close()
+    return redir("/owner/artists?msg=done")
+
+
+@app.post("/owner/artists/fund-grant")
+async def owner_artist_fund_grant(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    form = await request.form()
+    try:
+        uid = int(form.get("user_id") or 0)
+        cents = int(float(form.get("dollars") or 0) * 100)
+    except (TypeError, ValueError):
+        uid, cents = 0, 0
+    note = str(form.get("note") or "").strip()[:200]
+    conn = db()
+    fund = _fund_cents(conn)
+    if uid and cents > 0 and cents <= fund and get_user(uid):
+        _fund_set(conn, fund - cents)
+        conn.execute(
+            "INSERT INTO artist_fund_grants(user_id, cents, "
+            "note, created_at) VALUES(?,?,?,?)",
+            (uid, cents, note, now_iso()))
+        conn.commit()
+        notify(uid, "artist_fund",
+               f"🎤💰 The Artist Fund is backing you: "
+               f"{_money(cents)} sponsorship from HERE. "
+               + (note or ""), "/artists")
+    conn.close()
+    return redir("/owner/artists?msg=done")
+
+
+# ---------------- track likes + track gifts ----------------
+
+@app.post("/media/{tid}/like")
+async def media_like(request: Request, tid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    t = conn.execute("SELECT user_id FROM media_tracks "
+                     "WHERE id=?", (tid,)).fetchone()
+    if not t:
+        conn.close()
+        return JSONResponse({"ok": False}, status_code=404)
+    if t["user_id"] == user["id"]:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "Can't like your own track."},
+            status_code=400)
+    has = conn.execute(
+        "SELECT 1 FROM media_track_likes WHERE track_id=? "
+        "AND user_id=?", (tid, user["id"])).fetchone()
+    if has:
+        conn.execute("DELETE FROM media_track_likes WHERE "
+                     "track_id=? AND user_id=?",
+                     (tid, user["id"]))
+        liked = False
+    else:
+        conn.execute("INSERT INTO media_track_likes(track_id, "
+                     "user_id, created_at) VALUES(?,?,?)",
+                     (tid, user["id"], now_iso()))
+        liked = True
+    n = conn.execute("SELECT COUNT(*) c FROM media_track_likes "
+                     "WHERE track_id=?", (tid,)).fetchone()["c"]
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "liked": liked,
+                         "likes": n})
+
+
+def _track_gift_core(user, track, owner, gift):
+    """The money move for a track gift — the post-gift
+    transaction aimed at a song: guarded debit, the ARTIST
+    earns, a track_gifts row, twin ledger lines note='track',
+    and the inviter bonus riding along."""
+    cost = gift["tickets"]
+    recipient_id = owner["id"]
+    conn = db()
+    if cost == 0:
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(seconds=2)).isoformat()
+        recent = conn.execute(
+            "SELECT COUNT(*) c FROM track_gifts WHERE "
+            "sender_id=? AND track_id=? AND tickets=0 AND "
+            "created_at>?", (user["id"], track["id"], cutoff)
+            ).fetchone()["c"]
+        if recent:
+            conn.close()
+            return 429, {"ok": False,
+                         "error": "Easy — one free gift every "
+                                  "couple of seconds 💜"}
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
+        "COALESCE(tickets_balance,0) >= ?",
+        (cost, user["id"], cost))
+    if cur.rowcount != 1:
+        conn.rollback()
+        conn.close()
+        return 400, {"ok": False,
+                     "error": "Not enough tickets — grab a pack "
+                              "first 🎟️"}
+    conn.execute(
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) "
+        "+ ?, gift_lifetime = COALESCE(gift_lifetime,0) + ? "
+        "WHERE id=?", (cost, cost, recipient_id))
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO track_gifts(sender_id, recipient_id, "
+        "track_id, gift_key, tickets, created_at) "
+        "VALUES(?,?,?,?,?,?)",
+        (user["id"], recipient_id, track["id"], gift["key"],
+         cost, stamp))
+    gift_id = cur.lastrowid
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, "
+        "live_id, gift_key, note, created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (user["id"], "gift_send", -cost, None, gift["key"],
+         "track", stamp))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, "
+        "live_id, gift_key, note, created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (recipient_id, "gift_receive", cost, None, gift["key"],
+         "track", stamp))
+    if cost > 0:
+        _invite_bonus(conn, recipient_id, cost, stamp)
+    conn.commit()
+    conn.close()
+    bal = (get_user(user["id"]) or {}).get("tickets_balance", 0)
+    if cost > 0:
+        notify(recipient_id, "track_gift",
+               f"{user['name']} gifted your track "
+               f"“{track['title']}” (+{cost} 🎟️)",
+               f"/user/{recipient_id}", user["id"])
+    return 200, {"ok": True, "balance": bal,
+                 "gift_id": gift_id,
+                 "recipient_id": recipient_id,
+                 "recipient_name": track["title"]}
+
+
+@app.post("/media/{tid}/gift")
+async def media_gift(request: Request, tid: int):
+    user, gift, err = await _page_gift_parse(request)
+    if err:
+        return err
+    conn = db()
+    track = conn.execute("SELECT * FROM media_tracks "
+                         "WHERE id=?", (tid,)).fetchone()
+    conn.close()
+    if not track:
+        return JSONResponse({"ok": False,
+                             "error": "That track is gone."},
+                            status_code=400)
+    owner = get_user(track["user_id"]) or {}
+    if track["user_id"] == user["id"]:
+        return JSONResponse(
+            {"ok": False, "error": "You can't gift yourself."},
+            status_code=400)
+    if track["rights"] != "own":
+        return JSONResponse(
+            {"ok": False,
+             "error": "That track is shared for listening only "
+                      "— it can't take gifts."},
+            status_code=403)
+    if not owner.get("artist_verified"):
+        return JSONResponse(
+            {"ok": False,
+             "error": "Track gifts are for Verified Artists."},
+            status_code=403)
+    if not owner.get("creator_mode"):
+        return JSONResponse(
+            {"ok": False,
+             "error": "That artist can't take gifts yet — "
+                      "Creator Mode is off."},
+            status_code=403)
+    if not is_owner(request) and blocked_either_way(
+            user["id"], track["user_id"]):
+        return JSONResponse({"ok": False,
+                             "error": "Not available."},
+                            status_code=400)
+    code, payload = _track_gift_core(
+        user, dict(track), owner, gift)
+    return JSONResponse(payload, status_code=code)
 
 
 @app.post("/gift-nudge")
@@ -17850,6 +18627,10 @@ def _txn_line(t):
             face = (g["emoji"] + " ") if g["emoji"] else ""
             return (f"Received {face}{g['name']} on your page "
                     f"(+{t['tickets']} 🎟️)")
+        if note == "track":
+            face = (g["emoji"] + " ") if g["emoji"] else ""
+            return (f"Received {face}{g['name']} on your track "
+                    f"(+{t['tickets']} 🎟️)")
         face = (g["emoji"] + " ") if g["emoji"] else ""
         return f"Received {face}{g['name']} (+{t['tickets']} 🎟️)"
     if k == "invite_bonus":
@@ -18119,6 +18900,11 @@ async def tickets_cashout(request: Request):
                      "You already have a cash-out waiting for "
                      "approval.")
     n = earned
+    fee_tickets = 0
+    if (get_user(user["id"]) or {}).get(
+            "artist_contract") == "signed":
+        fee_tickets = (n * LABEL_FEE_PCT) // 100
+    pay_tickets = n - fee_tickets
     cur = conn.execute(
         "UPDATE users SET gift_earned = gift_earned - ? WHERE id=? "
         "AND gift_earned=?", (n, user["id"], n))
@@ -18128,10 +18914,20 @@ async def tickets_cashout(request: Request):
         return redir("/tickets",
                      "Your earnings changed — try again.")
     stamp = now_iso()
-    conn.execute(
+    cur2 = conn.execute(
         "INSERT INTO payout_requests(user_id, tickets, "
-        "dollars_cents, payout_note, created_at) VALUES(?,?,?,?,?)",
-        (user["id"], n, _earned_dollars(n), note, stamp))
+        "dollars_cents, payout_note, fee_tickets, created_at) "
+        "VALUES(?,?,?,?,?,?)",
+        (user["id"], pay_tickets, _earned_dollars(pay_tickets),
+         note, fee_tickets, stamp))
+    if fee_tickets:
+        fee_cents = _earned_dollars(fee_tickets)
+        conn.execute(
+            "INSERT INTO label_fees(user_id, payout_request_id, "
+            "tickets, cents, created_at) VALUES(?,?,?,?,?)",
+            (user["id"], cur2.lastrowid, fee_tickets, fee_cents,
+             stamp))
+        _fund_set(conn, _fund_cents(conn) + fee_cents)
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, created_at) "
         "VALUES(?,?,?,?)", (user["id"], "cashout_hold", -n, stamp))
@@ -18222,6 +19018,13 @@ async def earnings_page(request: Request):
     post_gifts_earn = ({"gifts": post_g["c"] or 0,
                         "tickets": post_g["s"] or 0}
                        if post_g and post_g["c"] else None)
+    track_g = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s FROM "
+        "ticket_txns WHERE user_id=? AND kind='gift_receive' AND "
+        "COALESCE(note,'') = 'track'", (user["id"],)).fetchone()
+    track_gifts_earn = ({"gifts": track_g["c"] or 0,
+                         "tickets": track_g["s"] or 0}
+                        if track_g and track_g["c"] else None)
     door_r = conn.execute(
         "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s FROM "
         "ticket_txns WHERE user_id=? AND "
@@ -18286,6 +19089,7 @@ async def earnings_page(request: Request):
         "streams": streams, "earlier": earlier,
         "page_gifts": page_gifts,
         "post_gifts_earn": post_gifts_earn,
+        "track_gifts_earn": track_gifts_earn,
         "door_earn": door_earn,
         "locked_content": locked_content,
         "pending": ({"tickets": pending["tickets"],
@@ -20458,14 +21262,25 @@ async def owner_payout_declined(request: Request, pid: int):
         conn.execute(
             "UPDATE payout_requests SET status='declined', "
             "decided_at=? WHERE id=?", (stamp, pid))
+        back = pr["tickets"] + (pr["fee_tickets"] or 0)
         conn.execute(
             "UPDATE users SET gift_earned = "
             "COALESCE(gift_earned,0) + ? WHERE id=?",
-            (pr["tickets"], pr["user_id"]))
+            (back, pr["user_id"]))
         conn.execute(
             "INSERT INTO ticket_txns(user_id, kind, tickets, "
             "created_at) VALUES(?,?,?,?)",
-            (pr["user_id"], "cashout_return", pr["tickets"], stamp))
+            (pr["user_id"], "cashout_return", back, stamp))
+        if pr["fee_tickets"]:
+            fee_row = conn.execute(
+                "SELECT cents FROM label_fees WHERE "
+                "payout_request_id=?", (pid,)).fetchone()
+            if fee_row:
+                _fund_set(conn, _fund_cents(conn)
+                          - fee_row["cents"])
+                conn.execute(
+                    "DELETE FROM label_fees WHERE "
+                    "payout_request_id=?", (pid,))
         conn.commit()
     conn.close()
     return redir("/owner")

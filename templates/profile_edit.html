@@ -318,6 +318,34 @@
   </form>
 </div>
 
+<div class="card" id="artist-card">
+  <div class="section-title">🎤 Verified Artist — the HERE label</div>
+  {% if artist_flash == 'applied' %}<p style="font-weight:700;color:#1d9e50;margin-top:8px">✅ Application sent — the owner reviews every one personally.</p>
+  {% elif artist_flash == 'err-pending' %}<p style="font-weight:700;color:#c0392b;margin-top:8px">Your application is already in — sit tight.</p>
+  {% elif artist_flash == 'err-mode' %}<p style="font-weight:700;color:#c0392b;margin-top:8px">Turn on 🎤 Artist in Media HERE first, then apply.</p>
+  {% elif artist_flash == 'err-already' %}<p style="font-weight:700;color:#c0392b;margin-top:8px">You are already a Verified Artist.</p>{% endif %}
+  {% if profile.artist_verified %}
+  <p style="margin-top:8px;display:flex;align-items:center;gap:10px">{% with ab_size=40 %}{% include "partials/artist_badge.html" %}{% endwith %}<span><strong>You are a HERE Verified Artist.</strong><br><span style="color:var(--muted)">Fans can gift your own-rights tracks. Plays and likes build your road to a record deal — 40,000 plays makes you contract-ready.</span></span></p>
+  {% if profile.artist_contract == 'offered' %}
+  <p style="margin-top:10px;font-weight:800">📄 You have a contract offer waiting: <a href="/artist/contract">read it and sign →</a></p>
+  {% elif profile.artist_contract == 'signed' %}
+  <p style="margin-top:10px;font-weight:800">✅ You're signed to HERE. <a href="/artist/contract">Your agreement →</a></p>
+  {% elif profile.artist_contract == 'ended' %}
+  <p style="margin-top:10px;color:var(--muted)">Your last contract has ended. Everything you earned stayed yours.</p>
+  {% endif %}
+  {% elif artist_app_pending %}
+  <p style="margin-top:8px">⏳ <strong>Application in.</strong> The owner listens and decides personally — watch your notifications.</p>
+  {% elif profile.media_mode == 'artist' %}
+  <p style="margin-top:8px;color:var(--muted)">Verified Artists wear the golden note, unlock track gifts, and get on the road to a HERE record deal (offer at 40,000 plays). Tell the owner why it should be you:</p>
+  <form action="/settings/artist-apply" method="post" style="margin-top:10px">
+    <textarea name="note" maxlength="400" rows="3" placeholder="Your pitch — your sound, your following, where your music lives…" style="width:100%;border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:transparent;color:inherit"></textarea>
+    <button type="submit" class="btn" style="margin-top:8px">Apply to be a Verified Artist</button>
+  </form>
+  {% else %}
+  <p style="margin-top:8px;color:var(--muted)">Switch Media HERE to <strong>🎤 Artist</strong> above, put your tracks up, and you can apply for the golden note — Verified Artist status on the HERE label.</p>
+  {% endif %}
+</div>
+
 <div class="card">
   <div class="section-title">🔇 Silenced people</div>
   <p style="margin-top:8px;color:var(--muted)">Silencing is quiet and one-way: they never know. Their taps, comments, messages and calls stop notifying and buzzing you, and their posts stay out of your home feed. You stay friends and they can still message you — it just lands silently.</p>

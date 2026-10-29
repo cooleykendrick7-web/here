@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block og_title %}HERE Records — the label inside HERE{% endblock %}
+{% block og_description %}Verified Artists on HERE get gifted real money by fans, keep 100% of their music rights, and at 40,000 plays become eligible for a HERE record deal.{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:0 auto;padding:26px 14px 44px">
+  <div style="text-align:center">
+    {% with ab_size=110 %}{% include "partials/artist_badge.html" %}{% endwith %}
+    <h1 style="margin:10px 0 4px;font-size:30px">HERE Records</h1>
+    <p style="color:var(--muted);font-size:16.5px;margin:0">The independent label that lives inside HERE.<br>Your fans pay <strong>you</strong> — not fractions of a penny per stream.</p>
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <div style="font-weight:900;font-size:17px">How it works</div>
+    <ol style="line-height:1.75;margin:10px 0 0;padding-left:20px">
+      <li><strong>Turn on 🎤 Artist</strong> in Settings → Media HERE and upload your tracks.</li>
+      <li><strong>Apply to be a Verified Artist</strong> (in Settings) — or get spotted. Verified Artists wear the golden note and fans can <strong>gift their songs</strong> with tickets.</li>
+      <li><strong>Plays and likes are the road.</strong> At <strong>{{ "{:,}".format(plays_target) }} plays</strong> you show up contract-ready.</li>
+      <li><strong>Get offered the deal.</strong> Signed artists get HERE's marketing, sponsorship from the Artist Fund, and a plain-words contract — for a 3% label fee on cash-outs. <a href="/artist/contract">Read the actual agreement →</a></li>
+    </ol>
+    <p style="margin-top:12px;line-height:1.65">Streaming pays artists roughly <strong>$0.003–$0.005 per play</strong>. On HERE, one fan's gift can be worth more than <em>thousands</em> of streams — because it's a fan handing you money, not an algorithm renting your song. And your music stays <strong>100% yours</strong>. Always.</p>
+    {% if not user %}
+    <p style="margin-top:12px"><a class="btn" href="/signup">Join HERE free →</a></p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <div style="font-weight:900;font-size:17px">🎤 The Verified Artists</div>
+    {% if artists %}
+      {% for a in artists %}
+      <a href="/user/{{ a.id }}" style="display:flex;align-items:center;gap:11px;padding:10px 0;border-top:1px solid var(--border);text-decoration:none;color:inherit">
+        {% if a.avatar %}<img src="{{ a.avatar|e }}" alt="" style="width:46px;height:46px;border-radius:50%;object-fit:cover">{% else %}<span style="width:46px;height:46px;border-radius:50%;background:#333;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900">{{ a.name[:1]|upper|e }}</span>{% endif %}
+        <span style="flex:1;min-width:0"><strong>{{ a.name|e }}</strong>{% if a.founding_no %} 🏅 #{{ a.founding_no }}{% endif %}<br><span style="color:var(--muted);font-size:13px">{{ a.plays }} plays · {{ a.likes }} likes · {{ a.tracks }} tracks</span></span>
+        {% with ab_size=34 %}{% include "partials/artist_badge.html" %}{% endwith %}
+      </a>
+      {% endfor %}
+    {% else %}
+    <p style="color:var(--muted);margin:10px 0 0">No Verified Artists yet — the first golden note is waiting for somebody. It could be you.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

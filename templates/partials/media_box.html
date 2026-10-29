@@ -6,7 +6,7 @@
 <div class="card" data-mh-list>
   <div style="display:flex;align-items:center;gap:8px">
     <h3 style="margin:0">{{ '🎤' if media_mode == 'artist' else '🎵' }} Media HERE{% if media_mode == 'artist' %} <span class="pill" style="background:#e01e26;color:#fff;border-color:#e01e26">ARTIST</span>{% endif %}</h3>
-    <span style="margin-left:auto;color:var(--muted);font-size:13px">{{ media_tracks|length }} track{{ 's' if media_tracks|length != 1 }}</span>
+    <span style="margin-left:auto;color:var(--muted);font-size:13px">{{ media_tracks|length }} track{{ 's' if media_tracks|length != 1 }}{% if media_tracks %} · {{ media_tracks|sum(attribute='plays') }} plays · {{ media_tracks|sum(attribute='likes') }} likes{% endif %}</span>
   </div>
   {% if profile.is_self and media_flash %}
   <p style="margin:10px 0 0;font-weight:700;{% if media_flash.startswith('err') %}color:#c0392b{% else %}color:#1d9e50{% endif %}">
@@ -26,6 +26,10 @@
       <div style="font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.title|e }}</div>
       <div style="color:var(--muted);font-size:12.5px">{{ t.plays }} play{{ 's' if t.plays != 1 }}{% if t.rights == 'own' %} · ✅ Owns the rights{% else %} · Shared for listening{% endif %}</div>
     </div>
+    <button type="button" class="btn-ghost btn-sm mh-like-btn" data-tid="{{ t.id }}" title="Like this track">{{ '❤️' if t.liked else '🤍' }} <span class="mh-like-n">{{ t.likes }}</span></button>
+    {% if t.giftable and not profile.is_self %}
+    <button type="button" class="btn btn-sm" data-gift-track="{{ t.id }}" data-gift-name="{{ t.title|e }}" title="Gift this track">🎁</button>
+    {% endif %}
     {% if profile.is_self %}
     <form action="/media/{{ t.id }}/delete" method="post" style="margin:0"><button class="btn-ghost btn-sm" type="submit" title="Remove this track">🗑</button></form>
     {% endif %}
@@ -46,5 +50,20 @@
     <button type="submit" class="btn">Upload track</button>
   </form>
   {% endif %}
+  {% include "partials/track_gift.html" %}
+  <script>
+  if (!window.__mhLike) { window.__mhLike = 1;
+    document.addEventListener('click', function(e){
+      var b = e.target.closest ? e.target.closest('.mh-like-btn') : null;
+      if (!b) return;
+      fetch('/media/' + b.getAttribute('data-tid') + '/like', {method: 'POST'})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (!d || !d.ok) return;
+          b.innerHTML = (d.liked ? '❤️' : '🤍') + ' <span class="mh-like-n">' + d.likes + '</span>';
+        }).catch(function(){});
+    });
+  }
+  </script>
 </div>
 {% endif %}

@@ -126,6 +126,9 @@
       style="flex:1;min-width:220px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:14px">
     <button type="submit" class="btn">Cash out {{ earned_dollars|e }}</button>
   </form>
+  {% if user.artist_contract == 'signed' %}
+  <p style="font-size:13.5px;margin-top:8px;color:var(--muted)">🏷 Signed-artist note: your 3% label fee comes out of this cash-out — it funds your marketing and the Artist Fund, exactly as your agreement says.</p>
+  {% endif %}
   {% else %}
   <p style="font-size:14.5px;margin-top:8px">Cash-outs open at <strong>{{ cashout_min }} earned tickets</strong>.
   {% if earned > 0 %}You have {{ earned }} — {{ cashout_min - earned }} to go. Host lives and earn gifts to get there!{% else %}Host a live and earn gifts to get there!{% endif %}</p>
