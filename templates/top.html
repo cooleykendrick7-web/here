@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}🏆 Top Boards — HERE{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:0 auto;padding:8px 2px 30px">
+  <div style="text-align:center;padding:18px 14px 4px">
+    <div style="font-size:40px">🏆</div>
+    <h1 style="font-size:25px;margin:6px 0 4px">Top Boards</h1>
+    <p style="opacity:.85;margin:0">This week on HERE (Monday–Sunday). New week, clean slate — every spot is up for grabs.</p>
+  </div>
+
+  {% macro board(title, rows, suffix) %}
+  <div class="card" style="margin-top:14px">
+    <div class="section-title">{{ title }}</div>
+    {% if rows %}
+    <div style="display:flex;flex-direction:column;margin-top:6px">
+      {% for r in rows %}
+      <a href="/user/{{ r.id }}" style="display:flex;align-items:center;gap:11px;padding:8px 2px;border-bottom:1px solid var(--border);text-decoration:none;color:inherit">
+        <span style="font-weight:900;font-size:17px;min-width:34px;text-align:center">{{ ['🥇','🥈','🥉'][loop.index0] if loop.index0 < 3 else loop.index }}</span>
+        {% if r.avatar %}<img src="{{ r.avatar|e }}" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover">
+        {% else %}<span style="width:38px;height:38px;border-radius:50%;background:#3a3b3d;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;flex:none">{{ r.name[:1]|upper|e }}</span>{% endif %}
+        <span style="flex:1;min-width:0;font-weight:700">{{ r.name|e }}{% if r.founding_no %} <span style="color:#b8860b;font-size:12px">🏅 #{{ r.founding_no }}</span>{% endif %}{% if r.is_plus %} <span style="color:#b8860b;font-size:12px">⭐ PLUS</span>{% endif %}</span>
+        <span style="font-weight:900;white-space:nowrap">{{ r.tot }} 🎟️</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="opacity:.8;margin:8px 0 2px">Nobody here yet this week — the #1 spot is wide open.</p>
+    {% endif %}
+  </div>
+  {% endmacro %}
+
+  {{ board('💰 Top Earners', earners, '') }}
+  {{ board('🎁 Top Gifters', gifters, '') }}
+  {{ board('🔴 Top Live Earners', streamers, '') }}
+</div>
+{% endblock %}

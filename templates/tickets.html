@@ -136,12 +136,15 @@
     {% for p in payouts_history %}
     <div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
       <span>{{ p.tickets }} 🎟️ ({{ p.dollars|e }}) — {{ p.status_text|e }}{% if p.decided %} · {{ p.decided|e }}{% endif %}</span>
+      {% if p.paid %}<form method="post" action="/tickets/payout/{{ p.id }}/share" style="margin:0"><button type="submit" class="btn-ghost btn-sm">📣 Share it</button></form>{% endif %}
       <span style="color:var(--muted);font-size:12.5px;white-space:nowrap">{{ p.when|e }}</span>
     </div>
     {% endfor %}
   </div>
   {% endif %}
 </div>
+
+{% include "partials/quest.html" %}
 
 <div class="card">
   <div class="section-title">🏦 Bank payouts</div>

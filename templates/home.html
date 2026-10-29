@@ -34,6 +34,45 @@
   <span style="font-weight:900;background:#fff;color:#b30d13;border-radius:999px;padding:7px 14px;flex:none">Walk in →</span>
 </a>
 {% endif %}
+{% if paid_total_cents and paid_total_cents >= 1000 %}
+<a href="/paidwall" style="display:flex;align-items:center;gap:11px;background:#12291a;border:1px solid #1d9e50;color:#e6ffef;border-radius:16px;padding:11px 15px;margin:2px 0 12px;text-decoration:none">
+  <span style="font-size:24px;line-height:1">💸</span>
+  <span style="flex:1;font-weight:800;font-size:14.5px">Creators have been paid ${{ '%0.2f'|format(paid_total_cents / 100) }} on HERE — real money, real people.</span>
+  <span style="font-weight:900;color:#3ddc74;flex:none">Wall of Paid →</span>
+</a>
+{% endif %}
+{% if upcoming_shows %}
+<div style="margin:2px 0 12px">
+  <div style="display:flex;align-items:center;gap:8px;margin:0 2px 7px">
+    <span style="font-weight:900;font-size:15px">⏰ Coming up</span>
+    <a href="/shows" style="margin-left:auto;font-size:13px;font-weight:700">All shows →</a>
+    <a href="/top" style="font-size:13px;font-weight:700">🏆 Top Boards</a>
+  </div>
+  <div style="display:flex;gap:9px;overflow-x:auto;padding:2px">
+    {% for s in upcoming_shows %}
+    <div style="flex:none;width:230px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:10px 12px">
+      <div style="font-weight:800;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.title|e }}{% if s.entry_tickets %} <span style="color:#b8860b">🎟{{ s.entry_tickets }}</span>{% endif %}</div>
+      <div style="font-size:12.5px;opacity:.78;margin:2px 0 8px">{{ s.host_name|e }} · {{ s.starts_label|e }}</div>
+      {% if s.is_live %}<a class="btn btn-sm" href="/live/{{ s.live_id }}">🔴 Watch now</a>
+      {% else %}<button type="button" class="btn-ghost btn-sm remind-btn" data-sid="{{ s.id }}">🔔 <span class="r-label">{{ 'Reminding you' if s.reminded else 'Remind me' }}</span> · <span class="r-count">{{ s.remind_count }}</span></button>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+<script>
+document.querySelectorAll('.remind-btn').forEach(function(b){
+  b.addEventListener('click', function(){
+    fetch('/live/schedule/' + b.dataset.sid + '/remind', {method:'POST'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d.ok) return;
+        b.querySelector('.r-label').textContent = d.reminded ? 'Reminding you' : 'Remind me';
+        b.querySelector('.r-count').textContent = d.count;
+      });
+  });
+});
+</script>
+{% endif %}
 {% if live_now %}
 <div class="live-strip" style="display:flex;gap:10px;overflow-x:auto;padding:4px 2px 12px">
   {% for l in live_now %}

@@ -19,6 +19,7 @@
 <div class="card">
   <div class="section-title">{{ ic('growth') }} Your invites</div>
   <p style="font-size:15px"><strong>{{ count }}</strong> {{ 'person has' if count == 1 else 'people have' }} joined from your invite</p>
+  <p style="font-size:14.5px">💰 <strong>New:</strong> you earn <strong>10% of everything your people earn</strong> — gifts, doors, unlocks — paid by HERE out of HERE's side, never out of their pocket. It lands in your earned tickets and cashes out like any earning.{% if bonus_total %} So far your invites have earned you <strong>{{ bonus_total }} 🎟️</strong>.{% endif %}</p>
   <div style="margin-top:14px">
     <div>🥇 Gold frame at {{ gold_at }} — {{ count }}/{{ gold_at }}{% if is_gold %} ✓ Earned{% endif %}</div>
     <div style="background:#e4e6eb;border-radius:6px;height:10px;margin-top:6px;overflow:hidden"><div style="background:#FFD700;height:100%;width:{{ gold_pct }}%"></div></div>

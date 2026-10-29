@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}⏰ Shows — HERE{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:0 auto;padding:8px 2px 30px">
+  <div style="text-align:center;padding:18px 14px 4px">
+    <div style="font-size:40px">⏰</div>
+    <h1 style="font-size:25px;margin:6px 0 4px">Shows</h1>
+    <p style="opacity:.85;margin:0 auto;max-width:460px">Lives with a start time. Tap 🔔 and HERE rings you the moment the show starts — no more walking into an empty room.</p>
+  </div>
+
+  {% if user %}
+  <div class="card" style="margin-top:14px">
+    <div class="section-title">📅 Schedule your show</div>
+    <form method="post" action="/live/schedule" style="display:flex;flex-direction:column;gap:9px;margin-top:10px">
+      <input type="text" name="title" maxlength="120" required placeholder="Show title — e.g. Friday Night Talk" style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:15px;background:transparent;color:inherit">
+      <input type="datetime-local" name="starts_at" required style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:15px;background:transparent;color:inherit">
+      <label style="font-size:14px">🎟 Ticket door (optional, Creator Mode): <input type="number" name="entry_tickets" min="0" max="100000" value="0" style="width:110px;border:1px solid var(--border);border-radius:8px;padding:7px 9px;background:transparent;color:inherit"> tickets to enter</label>
+      <button type="submit" class="btn" style="align-self:flex-start">Schedule show</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+    {% for s in shows %}
+    <div style="display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:10px 14px">
+      {% if s.host_avatar %}<img src="{{ s.host_avatar|e }}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover">
+      {% else %}<span style="width:44px;height:44px;border-radius:50%;background:#3a3b3d;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;flex:none">{{ s.host_name[:1]|upper|e }}</span>{% endif %}
+      <span style="flex:1;min-width:0">
+        <span style="display:block;font-weight:800">{{ s.title|e }}{% if s.entry_tickets %} <span style="color:#b8860b;font-size:12.5px">🎟 {{ s.entry_tickets }}</span>{% endif %}</span>
+        <span style="display:block;font-size:12.5px;opacity:.78">{{ s.host_name|e }}{% if s.host_founding %} · 🏅 #{{ s.host_founding }}{% endif %} · {{ s.starts_label|e }} CT</span>
+      </span>
+      {% if s.is_live %}
+      <a class="btn" href="/live/{{ s.live_id }}">🔴 Watch now</a>
+      {% elif user %}
+      <button type="button" class="btn-ghost remind-btn" data-sid="{{ s.id }}" data-on="{{ 1 if s.reminded else 0 }}">🔔 <span class="r-label">{{ 'Reminding you' if s.reminded else 'Remind me' }}</span> · <span class="r-count">{{ s.remind_count }}</span></button>
+      {% if s.host_id == user.id %}
+      <form method="post" action="/live/schedule/{{ s.id }}/cancel" style="margin:0"><button type="submit" class="btn-ghost" title="Cancel this show">✕</button></form>
+      {% endif %}
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="card" style="text-align:center"><p style="margin:6px 0">No shows scheduled yet. Be the first — set a time and let your people make an appointment.</p></div>
+    {% endfor %}
+  </div>
+</div>
+<script>
+document.querySelectorAll('.remind-btn').forEach(function(b){
+  b.addEventListener('click', function(){
+    fetch('/live/schedule/' + b.dataset.sid + '/remind', {method:'POST'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d.ok) return;
+        b.dataset.on = d.reminded ? '1' : '0';
+        b.querySelector('.r-label').textContent = d.reminded ? 'Reminding you' : 'Remind me';
+        b.querySelector('.r-count').textContent = d.count;
+      });
+  });
+});
+</script>
+{% endblock %}

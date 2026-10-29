@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}💸 The Wall of Paid — HERE{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:0 auto;padding:8px 2px 30px">
+  <div style="text-align:center;padding:22px 14px 8px">
+    <div style="font-size:44px">💸</div>
+    <h1 style="font-size:26px;margin:6px 0 4px">The Wall of Paid</h1>
+    <p style="opacity:.85;margin:0 auto;max-width:460px">Real people, real money. Every cash-out HERE has ever paid a creator — no follower minimum, no games. Cash out starts at just $10.</p>
+    {% if total_cents %}
+    <p style="font-weight:900;margin:14px 0 0;font-size:19px">Paid to creators so far: <span style="color:#1d9e50">{{ total_dollars|e }}</span>{% if creators %} · {{ creators }} creator{% if creators != 1 %}s{% endif %} paid{% endif %}</p>
+    {% endif %}
+  </div>
+  {% if wall %}
+  <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+    {% for w in wall %}
+    <div style="display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:10px 14px">
+      {% if w.avatar %}<img src="{{ w.avatar|e }}" alt="" style="width:42px;height:42px;border-radius:50%;object-fit:cover">
+      {% else %}<span style="width:42px;height:42px;border-radius:50%;background:#3a3b3d;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;flex:none">{{ w.name[:1]|upper|e }}</span>{% endif %}
+      <span style="flex:1;min-width:0">
+        <span style="display:block;font-weight:800">{{ w.name|e }}{% if w.founding_no %} <span style="color:#b8860b;font-size:12px">🏅 #{{ w.founding_no }}</span>{% endif %}</span>
+        <span style="display:block;font-size:12.5px;opacity:.75">{{ w.tickets }} 🎟️ earned · {{ w.when|e }}</span>
+      </span>
+      <span style="font-weight:900;font-size:19px;color:#1d9e50">{{ w.dollars|e }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;margin-top:16px">
+    <p style="font-size:16px;margin:6px 0">The first names land here very soon.</p>
+    <p style="opacity:.8;margin:0">Turn on Creator Mode, earn gifts, and cash out $10 to be the first on the wall.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

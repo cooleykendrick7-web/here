@@ -168,11 +168,34 @@
   {% endif %}
 </div>
 {% endif %}
+{% if tip_goal %}
+<div class="card">
+  <div style="display:flex;align-items:baseline;gap:8px">
+    <h3 style="margin:0">🎯 {{ tip_goal.label|e }}</h3>
+    {% if tip_goal.done %}<span style="color:#1d9e50;font-weight:900">🎉 GOAL REACHED!</span>{% endif %}
+    <span style="margin-left:auto;font-weight:800">{{ tip_goal.got }} of {{ tip_goal.goal }} 🎟️</span>
+  </div>
+  <div style="height:14px;background:var(--border);border-radius:999px;overflow:hidden;margin-top:10px">
+    <div style="height:100%;width:{{ tip_goal.pct }}%;background:{% if tip_goal.done %}#1d9e50{% else %}linear-gradient(90deg,#8f0f14,#e01e26){% endif %};border-radius:999px"></div>
+  </div>
+  <p style="color:var(--muted);font-size:13px;margin-top:7px">{% if tip_goal.done %}Goal smashed — every gift from here is pure bonus.{% else %}Every gift — live, post, page — fills this bar.{% endif %}</p>
+</div>
+{% endif %}
+{% if profile.is_self and profile.creator_mode %}
+<details class="card">
+  <summary style="font-weight:800;cursor:pointer">🎯 {% if tip_goal %}Change my tip goal{% else %}Set a tip goal{% endif %}</summary>
+  <form method="post" action="/settings/tip-goal" style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+    <input type="text" name="label" maxlength="60" placeholder="What are you saving for? e.g. New microphone" value="{{ tip_goal.label|e if tip_goal else '' }}" style="border:1px solid var(--border);border-radius:9px;padding:9px 11px;background:transparent;color:inherit">
+    <label style="font-size:14px">Goal: <input type="number" name="tickets" min="0" max="1000000" value="{{ tip_goal.goal if tip_goal else 2000 }}" style="width:120px;border:1px solid var(--border);border-radius:8px;padding:7px 9px;background:transparent;color:inherit"> tickets <span style="color:var(--muted)">(0 clears it · the bar counts gifts from today)</span></label>
+    <button type="submit" class="btn" style="align-self:flex-start">Save goal</button>
+  </form>
+</details>
+{% endif %}
 {% if selling %}
 <div class="card">
   <div style="display:flex;align-items:center;gap:8px">
     <h3 style="margin:0">🛒 Selling{% if selling_count %} ({{ selling_count }}){% endif %}</h3>
-    <a href="/market?seller={{ profile.id }}" style="margin-left:auto">See all →</a>
+    <a href="/user/{{ profile.id }}/shop" style="margin-left:auto">See the whole shop →</a>
   </div>
   <div class="mkt-strip">
     {% for l in selling %}

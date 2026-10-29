@@ -56,6 +56,11 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
     🏅 Only {{ seats_left }} of the 100 Original seats are left — join now and yours is forever.
   </a>
   {% endif %}
+  {% if paid_total_cents and paid_total_cents >= 1000 %}
+  <a href="/paidwall" style="display:block;background:#12291a;border:1px solid #1d9e50;color:#d9ffe6;border-radius:14px;padding:11px 14px;margin:0 0 14px;text-decoration:none;text-align:center;font-weight:800">
+    💸 Creators here actually get paid — ${{ '%0.2f'|format(paid_total_cents / 100) }} paid out so far. See the Wall of Paid →
+  </a>
+  {% endif %}
   {% if inviter %}
   <div style="display:flex;align-items:center;gap:10px;background:#1f1f1f;border:1px solid #d41f2e;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:14px">
     {% if inviter.avatar %}<img src="{{ inviter.avatar|e }}" alt="" style="width:36px;height:36px;border-radius:50%;object-fit:cover">{% endif %}

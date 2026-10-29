@@ -1239,6 +1239,28 @@ def init_db():
         c.execute("ALTER TABLE users ADD COLUMN plus_until TEXT")
     if "stripe_sub_id" not in _mu_cols:
         c.execute("ALTER TABLE users ADD COLUMN stripe_sub_id TEXT")
+    # Growth round: tip goals on profiles (base = gift_lifetime when
+    # the goal was set, so the bar only counts NEW gifts).
+    if "tip_goal_label" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN "
+                  "tip_goal_label TEXT DEFAULT ''")
+    if "tip_goal_tickets" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN "
+                  "tip_goal_tickets INTEGER DEFAULT 0")
+    if "tip_goal_base" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN "
+                  "tip_goal_base INTEGER DEFAULT 0")
+    # Growth round: scheduled shows + their reminder subscribers.
+    c.execute("""CREATE TABLE IF NOT EXISTS live_schedule (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        host_id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+        starts_at REAL NOT NULL DEFAULT 0,
+        entry_tickets INTEGER NOT NULL DEFAULT 0,
+        live_id INTEGER, created_at TEXT NOT NULL DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_reminders (
+        sched_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY(sched_id, user_id))""")
     c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
         user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
@@ -1488,6 +1510,11 @@ def init_db():
     if "stripe_transfer_id" not in _pr_cols:
         c.execute("ALTER TABLE payout_requests ADD COLUMN "
                   "stripe_transfer_id TEXT")
+    # Growth round: the public "I got paid" share card token. Minted
+    # lazily by the creator from their own paid request only.
+    if "share_token" not in _pr_cols:
+        c.execute("ALTER TABLE payout_requests ADD COLUMN "
+                  "share_token TEXT")
     # Build O: password recovery. token_hash is the ONLY credential
     # copy (sha256 of the raw token); token_plain holds the raw token
     # ONLY while delivery='queued' so the owner panel can show the
@@ -3287,8 +3314,12 @@ async def signup_page(request: Request):
         inviter = {"name": inv["name"],
                    "avatar": avatar_url(inv.get("avatar", ""))}
     _taken, _left = founding_seat_counts()
+    _pc = db()
+    _paid = _paid_total_cents(_pc)
+    _pc.close()
     return render(request, "auth/signup.html",
                   {"seats_taken": _taken, "seats_left": _left,
+                   "paid_total_cents": _paid,
                    "error": request.query_params.get("error", ""),
                    "inviter": inviter})
 
@@ -3818,6 +3849,12 @@ async def invite_page(request: Request):
     invitees = [{"id": r["id"], "name": r["name"],
                  "avatar": avatar_url(r["avatar"]),
                  "joined": fancy_time(r["created_at"])} for r in rows]
+    _bc = db()
+    bonus_total = _bc.execute(
+        "SELECT COALESCE(SUM(tickets),0) AS s FROM ticket_txns "
+        "WHERE user_id=? AND kind='invite_bonus'",
+        (user["id"],)).fetchone()["s"]
+    _bc.close()
     count = len(invitees)
     link = _abs_url(request, "/join/" + code)
     return render(request, "invite.html", {
@@ -3825,6 +3862,7 @@ async def invite_page(request: Request):
         "qr_src": ("https://api.qrserver.com/v1/create-qr-code/"
                    "?size=180x180&data=" + quote(link, safe="")),
         "invitees": invitees, "count": count,
+        "bonus_total": bonus_total,
         "gold_at": 3, "insider_at": 10,
         "gold_pct": min(100, int(count * 100 / 3)),
         "insider_pct": min(100, int(count * 100 / 10)),
@@ -4561,6 +4599,8 @@ async def home(request: Request):
     _lc = db()
     lobby_card = _lobby_card(_lc)
     seats_left = founding_seat_counts(_lc)[1]
+    paid_total = _paid_total_cents(_lc)
+    upcoming = _upcoming_shows(_lc, user, 5)
     _lc.close()
     return render(request, "home.html",
                   {"posts": posts, "feed_items": feed_items,
@@ -4569,6 +4609,8 @@ async def home(request: Request):
                    "live_now": live_now_for(user["id"], owner_on),
                    "lobby": lobby_card,
                    "seats_left": seats_left,
+                   "paid_total_cents": paid_total,
+                   "upcoming_shows": upcoming,
                    "discover_people": discover_people(user["id"], 3),
                    "trends": trending_topics(5, user["id"]),
                    "daily_prompt": daily_prompt(),
@@ -8666,6 +8708,15 @@ async def profile(request: Request, uid: int):
                                    prof["name"])
     recent_page_gifts = ([] if locked
                          else _recent_page_gifts(uid, None))
+    tip_goal = None
+    if prof["creator_mode"] and (prof["tip_goal_tickets"] or 0) > 0:
+        _tg_goal = prof["tip_goal_tickets"]
+        _tg_got = max(0, (prof["gift_lifetime"] or 0)
+                      - (prof["tip_goal_base"] or 0))
+        tip_goal = {"label": prof["tip_goal_label"] or "Tip goal",
+                    "goal": _tg_goal, "got": _tg_got,
+                    "pct": min(100, _tg_got * 100 // _tg_goal),
+                    "done": _tg_got >= _tg_goal}
     return render(request, "profile.html",
                   {"profile": profile_ctx, "posts": posts,
                    "pending_wall_posts": pending_wall,
@@ -8679,6 +8730,7 @@ async def profile(request: Request, uid: int):
                    "album_photos": album_photos,
                    "album_count": album_count,
                    "selling": selling, "selling_count": selling_count,
+                   "tip_goal": tip_goal,
                    "page_bg": profile_ctx["background"],
                    "profile_glass": profile_showcase_alpha_for(prof),
                    "profile_glass_soft":
@@ -11731,6 +11783,411 @@ async def plus_cancel(request: Request):
                           "charges.")
 
 
+
+def _upcoming_shows(conn, user, limit=8):
+    """Scheduled shows that are still coming (or live right now via
+    their linked live). Reminders ride along for the signed-in
+    viewer. A show drops off 3h after its start if it never went
+    live; a linked show rides while its live runs."""
+    now = time.time()
+    rows = conn.execute(
+        "SELECT s.*, u.name AS host_name, u.avatar AS host_avatar, "
+        "u.founding_no AS host_founding FROM live_schedule s "
+        "JOIN users u ON u.id = s.host_id "
+        "WHERE (s.live_id IS NULL AND s.starts_at > ?) "
+        "OR s.live_id IN (SELECT id FROM live_sessions "
+        "WHERE ended_at IS NULL) "
+        "ORDER BY s.starts_at ASC LIMIT ?",
+        (now - 3 * 3600, limit)).fetchall()
+    out = []
+    mine = set()
+    if user:
+        mine = {r["sched_id"] for r in conn.execute(
+            "SELECT sched_id FROM live_reminders WHERE user_id=?",
+            (user["id"],)).fetchall()}
+    for r in rows:
+        d = dict(r)
+        d["reminded"] = r["id"] in mine
+        d["is_live"] = bool(r["live_id"])
+        d["starts_label"] = datetime.fromtimestamp(
+            r["starts_at"], _chicago_now().tzinfo).strftime(
+                "%a %b %d · %I:%M %p")
+        d["remind_count"] = conn.execute(
+            "SELECT COUNT(*) c FROM live_reminders WHERE sched_id=?",
+            (r["id"],)).fetchone()["c"]
+        out.append(d)
+    return out
+
+
+def _link_schedule_for_live(host, lid):
+    """When a host goes live near a scheduled show's start, link the
+    two and ring every reminder subscriber (bell + push)."""
+    now = time.time()
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM live_schedule WHERE host_id=? "
+        "AND live_id IS NULL AND starts_at BETWEEN ? AND ? "
+        "ORDER BY starts_at ASC LIMIT 1",
+        (host["id"], now - 3 * 3600, now + 45 * 60)).fetchone()
+    subs, title_txt = [], ""
+    if row:
+        conn.execute("UPDATE live_schedule SET live_id=? WHERE id=?",
+                     (lid, row["id"]))
+        subs = [r["user_id"] for r in conn.execute(
+            "SELECT user_id FROM live_reminders WHERE sched_id=?",
+            (row["id"],)).fetchall()]
+        title_txt = row["title"]
+        conn.commit()
+    conn.close()
+    if not row:
+        return
+    text = (f"\U0001f514 {host['name']} is LIVE — the show you "
+            f"asked about: {title_txt}")
+    for uid in subs:
+        if uid == host["id"]:
+            continue
+        notify(uid, "show_start", text, f"/live/{lid}",
+               actor_id=host["id"])
+        if notifications_allowed(uid, host["id"]):
+            send_push(uid, "\U0001f514 The show is starting",
+                      title_txt or "Tap to watch now.",
+                      f"/live/{lid}", tag=f"show-{row['id']}",
+                      ttl=3600)
+
+
+def _creator_quest(conn, user):
+    """The First $10 Quest: the plain path from brand-new account to
+    first cash-out, computed from real state. Shown on Earnings and
+    the Wallet until every step is done."""
+    uid = user["id"]
+
+    def _n(sql):
+        return conn.execute(sql, (uid,)).fetchone()["c"]
+
+    steps = [
+        {"key": "creator", "label": "Turn on Creator Mode",
+         "done": bool(user["creator_mode"]), "href": "/settings"},
+        {"key": "avatar", "label": "Add a profile picture",
+         "done": bool((user["avatar"] or "").strip()),
+         "href": f"/user/{uid}"},
+        {"key": "post", "label": "Make your first post",
+         "done": _n("SELECT COUNT(*) c FROM posts WHERE user_id=?") > 0,
+         "href": "/home"},
+        {"key": "live", "label": "Go live one time",
+         "done": _n("SELECT COUNT(*) c FROM live_sessions "
+                    "WHERE host_id=?") > 0, "href": "/home"},
+        {"key": "gift", "label": "Receive your first gift",
+         "done": (user["gift_lifetime"] or 0) > 0, "href": "/earnings"},
+        {"key": "bank", "label": "Connect your bank for payouts",
+         "done": bool(user["payout_ready"]), "href": "/tickets"},
+        {"key": "cashout", "label": "Cash out your first $10",
+         "done": _n("SELECT COUNT(*) c FROM payout_requests "
+                    "WHERE user_id=?") > 0, "href": "/tickets"},
+    ]
+    done = sum(1 for s in steps if s["done"])
+    return {"steps": steps, "done": done, "total": len(steps),
+            "complete": done == len(steps)}
+
+
+@app.get("/paidwall", response_class=HTMLResponse)
+async def paidwall_page(request: Request):
+    """The Wall of Paid: public proof that HERE pays its creators —
+    every paid cash-out, newest first, plus the all-time total."""
+    user = current_user(request)
+    conn = db()
+    total = _paid_total_cents(conn)
+    creators = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) c FROM payout_requests "
+        "WHERE status='paid'").fetchone()["c"]
+    rows = conn.execute(
+        "SELECT pr.dollars_cents, pr.tickets, pr.decided_at, "
+        "pr.created_at, u.name, u.avatar, u.founding_no "
+        "FROM payout_requests pr JOIN users u ON u.id = pr.user_id "
+        "WHERE pr.status='paid' ORDER BY "
+        "COALESCE(pr.decided_at, pr.created_at) DESC LIMIT 50"
+        ).fetchall()
+    conn.close()
+    wall = [{"name": r["name"], "avatar": r["avatar"],
+             "founding_no": r["founding_no"],
+             "dollars": _money(r["dollars_cents"]),
+             "tickets": r["tickets"],
+             "when": (r["decided_at"] or r["created_at"] or "")[:10]}
+            for r in rows]
+    return render(request, "paidwall.html",
+                  {"wall": wall, "total_cents": total,
+                   "total_dollars": _money(total),
+                   "creators": creators})
+
+
+@app.get("/paid/{token}", response_class=HTMLResponse)
+async def paid_card_page(request: Request, token: str):
+    """One creator's public 'I got paid' card. The token is minted
+    by the creator from their own paid request; nothing sensitive
+    rides here — name, amount and date are the whole point."""
+    user = current_user(request)
+    conn = db()
+    pr = conn.execute(
+        "SELECT pr.dollars_cents, pr.tickets, pr.decided_at, "
+        "pr.created_at, u.name, u.avatar, u.founding_no "
+        "FROM payout_requests pr JOIN users u ON u.id = pr.user_id "
+        "WHERE pr.share_token=? AND pr.status='paid'",
+        (token,)).fetchone()
+    conn.close()
+    card = None
+    if pr:
+        card = {"name": pr["name"], "avatar": pr["avatar"],
+                "founding_no": pr["founding_no"],
+                "dollars": _money(pr["dollars_cents"]),
+                "tickets": pr["tickets"],
+                "when": (pr["decided_at"] or pr["created_at"]
+                         or "")[:10],
+                "url": f"https://joincomehere.com/paid/{token}"}
+    return render(request, "paid_card.html", {"card": card})
+
+
+@app.post("/tickets/payout/{prid}/share")
+async def payout_share(request: Request, prid: int):
+    """Mint (or reuse) the share token for MY OWN paid cash-out and
+    land on the public card."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    pr = conn.execute(
+        "SELECT * FROM payout_requests WHERE id=? AND user_id=?",
+        (prid, user["id"])).fetchone()
+    if not pr or pr["status"] != "paid":
+        conn.close()
+        return redir("/tickets", "That payout can't be shared.")
+    token = pr["share_token"]
+    if not token:
+        token = secrets.token_urlsafe(9)
+        conn.execute("UPDATE payout_requests SET share_token=? "
+                     "WHERE id=?", (token, prid))
+        conn.commit()
+    conn.close()
+    return redir(f"/paid/{token}")
+
+
+@app.post("/settings/tip-goal")
+async def tip_goal_set(request: Request):
+    """Set or clear my profile tip goal. The bar counts gifts from
+    NOW (base = current gift_lifetime), across every gift kind."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    label = str(form.get("label", "")).strip()[:60]
+    try:
+        goal = int(form.get("tickets") or 0)
+    except (TypeError, ValueError):
+        goal = 0
+    goal = max(0, min(goal, 1000000))
+    conn = db()
+    me = conn.execute("SELECT gift_lifetime FROM users WHERE id=?",
+                      (user["id"],)).fetchone()
+    conn.execute(
+        "UPDATE users SET tip_goal_label=?, tip_goal_tickets=?, "
+        "tip_goal_base=? WHERE id=?",
+        (label, goal, (me["gift_lifetime"] or 0) if goal else 0,
+         user["id"]))
+    conn.commit()
+    conn.close()
+    return redir(f"/user/{user['id']}",
+                  "Tip goal saved \U0001f3af" if goal else
+                  "Tip goal cleared.")
+
+
+@app.get("/shows", response_class=HTMLResponse)
+async def shows_page(request: Request):
+    """Scheduled shows: what's coming up, plus the host's form."""
+    user = current_user(request)
+    conn = db()
+    shows = _upcoming_shows(conn, user, limit=30)
+    mine = []
+    if user:
+        mine = [s for s in shows if s["host_id"] == user["id"]]
+    conn.close()
+    return render(request, "shows.html",
+                  {"shows": shows, "mine": mine})
+
+
+@app.post("/live/schedule")
+async def live_schedule_create(request: Request):
+    """Schedule a show. Same money rule as going live: a ticket
+    door needs Creator Mode."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    title = str(form.get("title", "")).strip()[:120]
+    raw = str(form.get("starts_at", "")).strip()
+    try:
+        entry = int(form.get("entry_tickets") or 0)
+    except (TypeError, ValueError):
+        entry = 0
+    entry = max(0, min(entry, 100000))
+    if entry > 0 and not user["creator_mode"]:
+        return redir("/shows", "Turn on Creator Mode to charge a "
+                               "ticket door.")
+    if not title:
+        return redir("/shows", "Give your show a title first.")
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        return redir("/shows", "Pick a day and time for the show.")
+    dt = dt.replace(tzinfo=_chicago_now().tzinfo)
+    ts = dt.timestamp()
+    now = time.time()
+    if ts < now - 600 or ts > now + 30 * 86400:
+        return redir("/shows", "Pick a time in the next 30 days.")
+    conn = db()
+    conn.execute(
+        "INSERT INTO live_schedule(host_id, title, starts_at, "
+        "entry_tickets, created_at) VALUES(?,?,?,?,?)",
+        (user["id"], title, ts, entry, now_iso()))
+    conn.commit()
+    conn.close()
+    return redir("/shows", "Show scheduled \u23f0")
+
+
+@app.post("/live/schedule/{sid}/remind")
+async def live_schedule_remind(request: Request, sid: int):
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False}, status_code=401)
+    conn = db()
+    has = conn.execute(
+        "SELECT 1 FROM live_reminders WHERE sched_id=? AND "
+        "user_id=?", (sid, user["id"])).fetchone()
+    if has:
+        conn.execute("DELETE FROM live_reminders WHERE sched_id=? "
+                     "AND user_id=?", (sid, user["id"]))
+        reminded = False
+    else:
+        conn.execute("INSERT OR IGNORE INTO live_reminders"
+                     "(sched_id, user_id, created_at) VALUES(?,?,?)",
+                     (sid, user["id"], now_iso()))
+        reminded = True
+    count = conn.execute(
+        "SELECT COUNT(*) c FROM live_reminders WHERE sched_id=?",
+        (sid,)).fetchone()["c"]
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "reminded": reminded,
+                         "count": count})
+
+
+@app.post("/live/schedule/{sid}/cancel")
+async def live_schedule_cancel(request: Request, sid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute("SELECT * FROM live_schedule WHERE id=?",
+                       (sid,)).fetchone()
+    if row and row["host_id"] == user["id"] and not row["live_id"]:
+        conn.execute("DELETE FROM live_reminders WHERE sched_id=?",
+                     (sid,))
+        conn.execute("DELETE FROM live_schedule WHERE id=?", (sid,))
+        conn.commit()
+    conn.close()
+    return redir("/shows", "Show cancelled.")
+
+
+@app.get("/top", response_class=HTMLResponse)
+async def top_page(request: Request):
+    """The Top Boards: this week's (Chicago Mon-Sun) top earners,
+    top gifters and top live earners, from the ticket ledger."""
+    user, err = require_login(request)
+    if err:
+        return err
+    start, end = _week_window_utc()
+    s0, s1 = start.isoformat(), end.isoformat()
+    conn = db()
+
+    def board(where, expr):
+        rows = conn.execute(
+            "SELECT t.user_id, SUM(" + expr + ") AS tot, u.name, "
+            "u.avatar, u.founding_no, u.plus_until FROM ticket_txns t "
+            "JOIN users u ON u.id = t.user_id WHERE " + where +
+            " AND t.created_at>=? AND t.created_at<=? "
+            "GROUP BY t.user_id ORDER BY tot DESC LIMIT 10",
+            (s0, s1)).fetchall()
+        return [{"id": r["user_id"], "name": r["name"],
+                 "avatar": r["avatar"],
+                 "founding_no": r["founding_no"],
+                 "is_plus": _is_plus(r), "tot": int(r["tot"] or 0)}
+                for r in rows]
+
+    earners = board("t.kind IN ('gift_receive','entry_receive',"
+                    "'unlock_receive')", "t.tickets")
+    gifters = board("t.kind='gift_send'", "-t.tickets")
+    streamers = board("t.kind='gift_receive' AND t.live_id IS NOT "
+                      "NULL", "t.tickets")
+    conn.close()
+    return render(request, "top.html",
+                  {"earners": earners, "gifters": gifters,
+                   "streamers": streamers})
+
+
+@app.get("/user/{uid}/shop", response_class=HTMLResponse)
+async def user_shop_page(request: Request, uid: int):
+    """A member's full Market shop: every active listing, boosted
+    first — the profile's Selling section, opened all the way up."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    seller = conn.execute("SELECT * FROM users WHERE id=?",
+                          (uid,)).fetchone()
+    if not seller or blocked_either_way(user["id"], uid):
+        conn.close()
+        return redir("/market", "That shop isn't available.")
+    rows = conn.execute(
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "FROM market_listings l JOIN users u ON u.id=l.seller_id "
+        "WHERE l.seller_id=? AND l.status='active' ORDER BY "
+        "CASE WHEN l.boost_until > strftime('%s','now') THEN 0 "
+        "ELSE 1 END, l.created_at DESC", (uid,)).fetchall()
+    listings = [_listing_card(r) for r in rows]
+    conn.close()
+    return render(request, "shop.html",
+                  {"shop_name": f"{seller['name']}'s Shop",
+                   "shop_avatar": seller["avatar"],
+                   "listings": listings})
+
+
+@app.get("/page/{pid}/shop", response_class=HTMLResponse)
+async def page_shop_page(request: Request, pid: int):
+    """A Page's shop: the listings of the member who runs the Page,
+    presented under the Page's name."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    pg = conn.execute("SELECT * FROM pages WHERE id=?",
+                      (pid,)).fetchone()
+    if not pg:
+        conn.close()
+        return redir("/pages", "Page not found.")
+    rows = conn.execute(
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "FROM market_listings l JOIN users u ON u.id=l.seller_id "
+        "WHERE l.seller_id=? AND l.status='active' ORDER BY "
+        "CASE WHEN l.boost_until > strftime('%s','now') THEN 0 "
+        "ELSE 1 END, l.created_at DESC",
+        (pg["owner_id"],)).fetchall()
+    listings = [_listing_card(r) for r in rows]
+    conn.close()
+    return render(request, "shop.html",
+                  {"shop_name": f"{pg['name']} — Shop",
+                   "shop_avatar": pg["avatar"]
+                   if "avatar" in pg.keys() else "",
+                   "listings": listings,
+                   "back_url": f"/page/{pid}"})
+
+
 @app.get("/founders", response_class=HTMLResponse)
 async def founders_page(request: Request):
     """The Original 100 wall: the first hundred real accounts,
@@ -11883,6 +12340,7 @@ async def live_pay_entry(request: Request, lid: int):
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
         (host_id, "entry_receive", price, lid, "", "entry", stamp))
+    _invite_bonus(conn, host_id, price, stamp)
     conn.commit()
     bal = conn.execute(
         "SELECT tickets_balance FROM users WHERE id=?",
@@ -11926,6 +12384,7 @@ async def live_start(request: Request):
     _sweep_lives(conn)
     lid = _create_live(conn, user, title, entry_tickets=entry)
     conn.close()
+    _link_schedule_for_live(user, lid)
     if title:
         flag_item("live_title", lid, user["id"], user["name"], title)
     # Tell the host's friends (bell + phone push). notify() and the
@@ -13407,6 +13866,44 @@ def _recent_page_gifts(recipient_id, page_id, limit=6):
     return out
 
 
+def _invite_bonus(conn, earner_id, tickets, stamp):
+    """Invite bonus: when a member EARNS tickets, whoever invited
+    them earns 10% on top — minted by HERE out of HERE's side, never
+    deducted from the earner. Rides the caller's transaction (the
+    caller commits). Floor division: gifts under 10 tickets pay no
+    bonus. Pays into gift_earned so it cashes out like any earning;
+    deliberately NOT into gift_lifetime (streamer levels measure fan
+    love, not recruiting)."""
+    if not tickets or tickets < 10:
+        return
+    row = conn.execute("SELECT invited_by FROM users WHERE id=?",
+                       (earner_id,)).fetchone()
+    if not row or not row["invited_by"]:
+        return
+    inviter_id = row["invited_by"]
+    if inviter_id == earner_id:
+        return
+    bonus = tickets // 10
+    if bonus <= 0:
+        return
+    conn.execute(
+        "UPDATE users SET gift_earned = gift_earned + ? WHERE id=?",
+        (bonus, inviter_id))
+    conn.execute(
+        "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
+        "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
+        (inviter_id, "invite_bonus", bonus, None, "",
+         f"from user {earner_id}", stamp))
+
+
+def _paid_total_cents(conn):
+    """Every dollar HERE has actually paid a creator, ever."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(dollars_cents),0) AS s FROM "
+        "payout_requests WHERE status='paid'").fetchone()
+    return int(row["s"] or 0)
+
+
 def _page_gift_core(user, recipient_id, recipient_name, page_id,
                     gift):
     """The one money-moving transaction for a page gift, entered
@@ -13461,6 +13958,7 @@ def _page_gift_core(user, recipient_id, recipient_name, page_id,
         "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
         (recipient_id, "gift_receive", cost, None, gift["key"],
          "page", stamp))
+    _invite_bonus(conn, recipient_id, cost, stamp)
     conn.commit()
     bal = conn.execute(
         "SELECT tickets_balance FROM users WHERE id=?",
@@ -13608,6 +14106,7 @@ def _post_gift_core(user, post, gift):
         "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
         (recipient_id, "gift_receive", cost, None, gift["key"],
          "post", stamp))
+    _invite_bonus(conn, recipient_id, cost, stamp)
     conn.commit()
     bal = conn.execute(
         "SELECT tickets_balance FROM users WHERE id=?",
@@ -13865,6 +14364,7 @@ async def live_gift(request: Request, lid: int):
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, created_at) VALUES(?,?,?,?,?,?)",
         (recipient_id, "gift_receive", cost, lid, gift_key, stamp))
+    _invite_bonus(conn, recipient_id, cost, stamp)
     # Build W2: Showdown scoring — inside THIS gift's transaction,
     # so a gift scores exactly once, by exactly its ticket cost
     # (the free gift costs 0 = cheers only, scores nothing). The
@@ -13969,6 +14469,7 @@ async def live_shout(request: Request, lid: int):
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "note, created_at) VALUES(?,?,?,?,?,?)",
         (host_id, "gift_receive", cost, lid, "shout", stamp))
+    _invite_bonus(conn, host_id, cost, stamp)
     conn.commit()
     bal = conn.execute(
         "SELECT tickets_balance FROM users WHERE id=?",
@@ -15678,8 +16179,14 @@ async def page_view(request: Request, pid: int):
         page_gift = _page_gift_ctx(user, f"/page/{pid}/gift",
                                    pg["name"])
     recent_page_gifts = _recent_page_gifts(pg["owner_id"], pid)
+    _sc = db()
+    owner_selling = _sc.execute(
+        "SELECT COUNT(*) c FROM market_listings WHERE seller_id=? "
+        "AND status='active'", (pg["owner_id"],)).fetchone()["c"]
+    _sc.close()
     return render(request, "page.html",
                   {"page": pg_ctx, "posts": posts,
+                   "owner_selling": owner_selling,
                    "page_gift": page_gift,
                    "recent_page_gifts": recent_page_gifts,
                    "composer_friends": cfriends, "composer_pages": cpages})
@@ -16450,6 +16957,7 @@ def _unlock_core(user, ctype, cid, confirm_adult):
         "gift_key, stripe_session, note, created_at) "
         "VALUES(?, 'unlock_receive', ?, NULL, ?, NULL, 'unlock', ?)",
         (seller_id, price, gkey, stamp))
+    _invite_bonus(conn, seller_id, price, stamp)
     conn.commit()
     conn.close()
     notify(seller_id, "content_unlock",
@@ -16593,6 +17101,9 @@ def _txn_line(t):
                     f"(+{t['tickets']} 🎟️)")
         face = (g["emoji"] + " ") if g["emoji"] else ""
         return f"Received {face}{g['name']} (+{t['tickets']} 🎟️)"
+    if k == "invite_bonus":
+        return (f"Invite bonus (+{t['tickets']} 🎟️) — "
+                f"someone you invited is earning")
     if k in ("unlock_spend", "unlock_receive"):
         # Build LOCKED CONTENT lines. gift_key is 'post:{id}' /
         # 'dm:{id}'; the spend side names the seller (the content's
@@ -16704,6 +17215,7 @@ async def tickets_page(request: Request):
         "LIMIT 30", (user["id"],)).fetchall()
     conn.close()
     payouts_history = [{
+        "id": p["id"], "paid": p["status"] == "paid",
         "tickets": p["tickets"],
         "dollars": _money(p["dollars_cents"]),
         "when": fancy_time(p["created_at"]),
@@ -16716,6 +17228,9 @@ async def tickets_page(request: Request):
                   else "none")
     history = [{"text": _txn_line(dict(t)),
                 "when": fancy_time(t["created_at"])} for t in txns]
+    _tc = db()
+    quest = _creator_quest(_tc, user)
+    _tc.close()
     return render(request, "tickets.html", {
         "balance": balance, "earned": earned,
         "earned_dollars": _money(_earned_dollars(earned)),
@@ -16739,7 +17254,8 @@ async def tickets_page(request: Request):
         "bought_msg": bought_msg,
         "bank_state": bank_state,
         "setup_q": setup_q,
-        "payouts_history": payouts_history})
+        "payouts_history": payouts_history,
+        "quest": quest})
 
 
 @app.post("/tickets/buy")
@@ -16987,6 +17503,7 @@ async def earnings_page(request: Request):
         (user["id"],)).fetchone()["s"]
     conn.close()
     payouts_history = [{
+        "id": p["id"], "paid": p["status"] == "paid",
         "tickets": p["tickets"],
         "dollars": _money2(p["dollars_cents"]),
         "when": fancy_time(p["created_at"]),
@@ -16998,6 +17515,13 @@ async def earnings_page(request: Request):
                   else "started" if me.get("stripe_acct_id")
                   else "none")
     cashout_remaining = max(0, CASHOUT_MIN_TICKETS - earned)
+    _ec = db()
+    quest = _creator_quest(_ec, user)
+    invite_bonus_total = _ec.execute(
+        "SELECT COALESCE(SUM(tickets),0) AS s FROM ticket_txns "
+        "WHERE user_id=? AND kind='invite_bonus'",
+        (user["id"],)).fetchone()["s"]
+    _ec.close()
     return render(request, "earnings.html", {
         "lifetime": lifetime, "earned": earned,
         "lifetime_worth": _money2(_earned_dollars(lifetime)),
@@ -17022,6 +17546,8 @@ async def earnings_page(request: Request):
         "cashout_dollars": _money2(_earned_dollars(earned)),
         "paid_total": _money2(paid_total),
         "payouts_history": payouts_history,
+        "quest": quest,
+        "invite_bonus_total": invite_bonus_total,
         "bank_state": bank_state})
 
 

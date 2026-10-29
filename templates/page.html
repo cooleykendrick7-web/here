@@ -8,6 +8,7 @@
   </div>
   <div style="padding:15px">
     <h2 style="font-size:24px">{{ page.name|e }}{% if page.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">★</span>{% endif %}</h2>
+    {% if owner_selling %}<a href="/page/{{ page.id }}/shop" class="btn-ghost btn-sm" style="display:inline-block;margin-top:6px;text-decoration:none">🛍 Shop ({{ owner_selling }})</a>{% endif %}
     <span class="ptype-badge">{{ page.ptype|replace('_',' ')|e }}</span>
     {% if page.description %}<p style="margin:8px 0;white-space:pre-wrap">{{ page.description|e }}</p>{% endif %}
     <div class="pmeta" style="margin:8px 0">{{ page.members }} members · by {{ page.owner_name|e }}</div>

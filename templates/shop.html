@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}🛍 {{ shop_name|e }} — HERE{% endblock %}
+{% block content %}
+<div style="max-width:760px;margin:0 auto;padding:8px 2px 30px">
+  <div style="display:flex;align-items:center;gap:13px;padding:14px 4px 6px">
+    {% if shop_avatar %}<img src="{{ shop_avatar|e }}" alt="" style="width:52px;height:52px;border-radius:50%;object-fit:cover">
+    {% else %}<span style="width:52px;height:52px;border-radius:50%;background:#3a3b3d;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:21px;flex:none">{{ shop_name[:1]|upper|e }}</span>{% endif %}
+    <div>
+      <h1 style="font-size:23px;margin:0">🛍 {{ shop_name|e }}</h1>
+      <div style="opacity:.8;font-size:13.5px">Everything for sale, in one place. {% if back_url %}<a href="{{ back_url|e }}">← Back to the Page</a>{% endif %}</div>
+    </div>
+  </div>
+  {% if listings %}
+  <div class="mkt-grid" style="margin-top:10px">
+    {% for l in listings %}
+    {% include "partials/listing_card.html" %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;margin-top:12px"><p style="margin:6px 0">Nothing for sale right now — check back soon.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

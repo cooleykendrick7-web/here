@@ -1,0 +1,20 @@
+{% if quest %}
+<div class="card">
+  {% if quest.complete %}
+  <div class="section-title">🗺 First $10 Quest — complete! 🎉</div>
+  <p style="font-size:14.5px;margin-top:8px">You walked the whole road: Creator Mode, first post, first live, first gift, bank connected, first cash-out. From here it's just <strong>more of the same</strong> — every gift brings the next cash-out closer.</p>
+  {% else %}
+  <div class="section-title">🗺 Your road to your first $10</div>
+  <p style="font-size:14.5px;margin-top:8px"><strong>{{ quest.done }} of {{ quest.total }} steps done.</strong> This is the exact path — finish it and your first cash-out is real money in your bank.</p>
+  <div style="display:flex;flex-direction:column;gap:2px;margin-top:8px">
+    {% for s in quest.steps %}
+    <div style="display:flex;align-items:center;gap:9px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:16px">{{ '✅' if s.done else '⬜' }}</span>
+      {% if s.done %}<span style="flex:1;opacity:.75">{{ s.label|e }}</span>
+      {% else %}<a href="{{ s.href|e }}" style="flex:1;font-weight:700;text-decoration:none">{{ s.label|e }}</a><a href="{{ s.href|e }}" class="btn-ghost btn-sm">Do it →</a>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
