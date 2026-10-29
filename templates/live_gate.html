@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block og_title %}🔴 LIVE: {{ live.title|e }} — {{ host.name|e }} on HERE{% endblock %}
+{% block og_description %}{{ host.name|e }} is live on HERE right now. Create a free profile and you're inside — watch, talk, gift, even hop on the panel.{% endblock %}
+{% block og_image_block %}<meta property="og:image" content="{{ og_img }}">
+<meta property="og:image:type" content="image/gif">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image" content="{{ og_png }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="🔴 LIVE: {{ live.title|e }} — {{ host.name|e }} on HERE">
+<meta name="twitter:description" content="Watch free on HERE — create a profile and you're in.">
+<meta name="twitter:image" content="{{ og_png }}">{% endblock %}
+{% block head_extra %}
+<style>
+.lg-wrap{max-width:640px;margin:0 auto;padding:26px 14px 40px}
+.lg-card{background:linear-gradient(160deg,#1a0508,#101014 55%);color:#fff;border:1px solid rgba(224,30,38,.45);border-radius:22px;padding:26px 22px;text-align:center;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.lg-pill{display:inline-flex;align-items:center;gap:8px;background:#e01e26;color:#fff;font-weight:900;letter-spacing:.06em;border-radius:999px;padding:7px 16px;font-size:14px}
+.lg-pill .dot{width:10px;height:10px;border-radius:50%;background:#fff;animation:lgpulse 1.2s ease-in-out infinite}
+@keyframes lgpulse{0%,100%{opacity:1}50%{opacity:.25}}
+.lg-pill.ended{background:#5a5a62}
+.lg-ava{width:110px;height:110px;border-radius:50%;object-fit:cover;border:4px solid #e01e26;margin:16px auto 6px;display:block}
+.lg-ava-ph{width:110px;height:110px;border-radius:50%;background:#40161b;border:4px solid #e01e26;margin:16px auto 6px;display:flex;align-items:center;justify-content:center;font-size:44px;font-weight:900;color:#fff}
+.lg-title{font-size:27px;font-weight:900;line-height:1.2;margin:8px 0 2px}
+.lg-host{opacity:.85;font-size:15.5px}
+.lg-faces{display:flex;justify-content:center;gap:8px;margin:16px 0 4px;flex-wrap:wrap}
+.lg-faces img,.lg-faces .ph{width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.5)}
+.lg-faces .ph{display:flex;align-items:center;justify-content:center;background:#33333b;font-weight:900}
+.lg-watch{opacity:.85;font-size:14px}
+.lg-cta{display:block;background:#e01e26;color:#fff !important;font-weight:900;font-size:17.5px;border-radius:14px;padding:15px 18px;margin:20px 0 10px;text-decoration:none}
+.lg-cta2{display:block;background:transparent;color:#fff !important;font-weight:800;font-size:15.5px;border:1.5px solid rgba(255,255,255,.55);border-radius:14px;padding:12px 18px;text-decoration:none}
+.lg-perks{margin:18px 0 0;padding:0;list-style:none;font-size:14.5px;opacity:.92}
+.lg-perks li{margin:5px 0}
+</style>
+{% endblock %}
+{% block content %}
+<div class="lg-wrap">
+  <div class="lg-card">
+    {% if live.status == 'live' %}
+    <span class="lg-pill"><span class="dot"></span>LIVE NOW</span>
+    {% else %}
+    <span class="lg-pill ended">THIS LIVE ENDED</span>
+    {% endif %}
+    {% if host.avatar %}<img class="lg-ava" src="{{ host.avatar|e }}" alt="">{% else %}<div class="lg-ava-ph">{{ host.name[:1]|upper|e }}</div>{% endif %}
+    <div class="lg-title">{{ live.title|e }}</div>
+    <div class="lg-host">hosted by <strong>{{ host.name|e }}</strong>{% if host.founding_no %} · 🏅 Original #{{ host.founding_no }}{% endif %}</div>
+    {% if panel|length > 1 %}
+    <div class="lg-faces">
+      {% for p in panel %}
+        {% if p.avatar %}<img src="{{ p.avatar|e }}" alt="" title="{{ p.name|e }}">{% else %}<span class="ph" title="{{ p.name|e }}">{{ p.name[:1]|upper|e }}</span>{% endif %}
+      {% endfor %}
+    </div>
+    <div class="lg-watch">On the panel right now: {{ panel|map(attribute='name')|join(', ')|e }}</div>
+    {% endif %}
+    {% if live.status == 'live' %}
+    <div class="lg-watch" style="margin-top:8px">👀 {{ watching }} watching right now</div>
+    {% if live.entry_tickets %}
+    <div class="lg-watch" style="margin-top:6px">🎟 This is a ticket-door live — entry is {{ live.entry_tickets }} tickets once you're in.</div>
+    {% endif %}
+    {% endif %}
+    <a class="lg-cta" href="/signup?next=/live/{{ live.id }}">Create your free profile to watch →</a>
+    <a class="lg-cta2" href="/login?next=/live/{{ live.id }}">I already have an account</a>
+    <ul class="lg-perks">
+      <li>✅ Free to join — 30 seconds, no card</li>
+      <li>🎁 Gift the host, 💬 talk in the room, ✋ even hop on the panel</li>
+      <li>🏅 Early members still claim numbered Original seats</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

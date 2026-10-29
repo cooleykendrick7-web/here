@@ -73,6 +73,7 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
   {% if flash %}<div class="ok">{{ flash|e }}</div>{% endif %}
   {% if error %}<div class="err">{{ error|e }}</div>{% endif %}
   <form action="/login" method="post">
+    {% if next %}<input type="hidden" name="next" value="{{ next|e }}">{% endif %}
     <div class="field">
       <label for="li-email">Email</label>
       <input type="email" id="li-email" name="email" required autocomplete="email">
@@ -84,7 +85,7 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
     <button type="submit" class="btn">Log In</button>
   </form>
   <div class="switch"><a href="/forgot">Forgot password?</a></div>
-  <div class="switch">New to HERE? <a href="/signup">Create an account</a></div>
+  <div class="switch">New to HERE? <a href="/signup{% if next %}?next={{ next|urlencode }}{% endif %}">Create an account</a></div>
 </div>
 <div class="app-card" id="app-card">
   <h3 id="app-card-title">📱 Get the HERE app</h3>

@@ -35,7 +35,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 import bcrypt
 from email.message import EmailMessage
 from fastapi import FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -3348,6 +3348,8 @@ async def signup_page(request: Request):
                   {"seats_taken": _taken, "seats_left": _left,
                    "paid_total_cents": _paid,
                    "error": request.query_params.get("error", ""),
+                   "next": _safe_next(
+                       request.query_params.get("next")),
                    "inviter": inviter})
 
 
@@ -3405,18 +3407,32 @@ async def signup(request: Request):
     conn.close()
     onboarded = _ob["onboarded"] if _ob and "onboarded" in _ob.keys() \
         else 0
-    resp = redir("/home" if onboarded else "/welcome")
+    nxt = _safe_next(form.get("next"))
+    resp = redir(nxt or ("/home" if onboarded else "/welcome"))
     if credited or request.cookies.get("here_invite"):
         resp.delete_cookie("here_invite", path="/")
     return set_session_cookie(resp, token, SESSION_COOKIE)
 
 
 @app.get("/login", response_class=HTMLResponse)
+def _safe_next(raw):
+    """A post-auth landing path we trust: same-site, never the
+    owner panel, never protocol-relative."""
+    raw = str(raw or "").strip()
+    if (raw.startswith("/") and not raw.startswith("//")
+            and "://" not in raw
+            and not raw.startswith("/owner")):
+        return raw
+    return ""
+
+
 async def login_page(request: Request):
     if current_user(request):
         return redir("/home")
     return render(request, "auth/login.html",
-                  {"error": request.query_params.get("error", "")})
+                  {"error": request.query_params.get("error", ""),
+                   "next": _safe_next(
+                       request.query_params.get("next"))})
 
 
 @app.post("/login")
@@ -3430,7 +3446,7 @@ async def login(request: Request):
     if not u or not bcrypt.checkpw(password.encode(), u["pw_hash"].encode()):
         return redir("/login?error=" + "Invalid email or password.")
     token = new_session(u["id"])
-    resp = redir("/home")
+    resp = redir(_safe_next(form.get("next")) or "/home")
     return set_session_cookie(resp, token, SESSION_COOKIE)
 
 
@@ -12709,11 +12725,195 @@ async def live_start(request: Request):
                          "entry_tickets": entry})
 
 
+_LIVE_CARD_CACHE = {}
+
+
+def _live_card_bytes(lid, animated):
+    """The share card for a live: host avatar, pulsing LIVE
+    badge, title, who's watching — drawn fresh with Pillow and
+    cached a minute. GIF frames pulse the badge dot (feeds
+    that animate og:images get motion; the rest get a strong
+    first frame). None when the live is gone or Pillow is."""
+    import io as _io
+    import time as _time
+    key = (lid, bool(animated))
+    hit = _LIVE_CARD_CACHE.get(key)
+    if hit and _time.time() - hit[0] < 60:
+        return hit[1]
+    conn = db()
+    live = _live_get(conn, lid)
+    if not live:
+        conn.close()
+        return None
+    watching = conn.execute(
+        "SELECT COUNT(*) c FROM live_viewers WHERE live_id=? "
+        "AND left_at IS NULL", (lid,)).fetchone()["c"]
+    members = conn.execute(
+        "SELECT COUNT(*) c FROM live_members WHERE live_id=? "
+        "AND left_at IS NULL", (lid,)).fetchone()["c"]
+    conn.close()
+    host_row = get_user(live["host_id"]) or {}
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+
+    def font(sz, bold=True):
+        cands = ["/usr/share/fonts/truetype/dejavu/"
+                 + ("DejaVuSans-Bold.ttf" if bold
+                    else "DejaVuSans.ttf"),
+                 "/usr/share/fonts/truetype/liberation/"
+                 + ("LiberationSans-Bold.ttf" if bold
+                    else "LiberationSans-Regular.ttf")]
+        for p in cands:
+            try:
+                return ImageFont.truetype(p, sz)
+            except Exception:
+                pass
+        return ImageFont.load_default()
+
+    W, H = 1200, 630
+    live_now = (live.get("status") == "live")
+    title = ((live.get("title") or "").strip()
+             or "Untitled live")
+
+    def frame(pulse):
+        img = Image.new("RGB", (W, H), (16, 16, 20))
+        d = ImageDraw.Draw(img)
+        d.rectangle([0, 0, W, 10], fill=(224, 30, 38))
+        cx, cy, r = 215, 265, 128
+        av = None
+        rel = host_row.get("avatar") or ""
+        if rel:
+            try:
+                raw = Image.open(
+                    os.path.join(UPLOAD_DIR, rel)).convert("RGB")
+                side = min(raw.size)
+                raw = raw.crop((0, 0, side, side)).resize(
+                    (r * 2, r * 2))
+                av = raw
+            except Exception:
+                av = None
+        if av is not None:
+            mask = Image.new("L", (r * 2, r * 2), 0)
+            ImageDraw.Draw(mask).ellipse(
+                [0, 0, r * 2, r * 2], fill=255)
+            img.paste(av, (cx - r, cy - r), mask)
+        else:
+            d.ellipse([cx - r, cy - r, cx + r, cy + r],
+                      fill=(64, 22, 27))
+            d.text((cx, cy),
+                   (host_row.get("name") or "?")[:1].upper(),
+                   font=font(110), fill=(255, 255, 255),
+                   anchor="mm")
+        d.ellipse([cx - r, cy - r, cx + r, cy + r],
+                  outline=(224, 30, 38), width=6)
+        label = "LIVE" if live_now else "ENDED"
+        d.rounded_rectangle(
+            [415, 118, 625, 190], radius=35,
+            fill=(224, 30, 38) if live_now else (92, 92, 100))
+        dot_r = 12 + (pulse if live_now else 0)
+        d.ellipse([448 - dot_r, 154 - dot_r, 448 + dot_r,
+                   154 + dot_r], fill=(255, 255, 255))
+        d.text((478, 154), label, font=font(42),
+               fill=(255, 255, 255), anchor="lm")
+        words, lines, cur_l = title.split(), [], ""
+        for w_ in words:
+            t = (cur_l + " " + w_).strip()
+            if d.textlength(t, font=font(56)) > 720 and cur_l:
+                lines.append(cur_l)
+                cur_l = w_
+            else:
+                cur_l = t
+        if cur_l:
+            lines.append(cur_l)
+        y = 232
+        for ln in lines[:2]:
+            d.text((415, y), ln, font=font(56),
+                   fill=(255, 255, 255), anchor="lm")
+            y += 72
+        d.text((415, y + 14),
+               (host_row.get("name") or "Someone") + " on HERE",
+               font=font(36, bold=False), fill=(198, 198, 206),
+               anchor="lm")
+        if live_now:
+            d.text((415, y + 68),
+                   f"{watching} watching · {members + 1} "
+                   "on the panel",
+                   font=font(32, bold=False),
+                   fill=(255, 168, 173), anchor="lm")
+        d.rectangle([0, H - 84, W, H], fill=(224, 30, 38))
+        d.text((40, H - 42), "joincomehere.com", font=font(38),
+               fill=(255, 255, 255), anchor="lm")
+        d.text((W - 40, H - 42), "Watch free — join in seconds",
+               font=font(32, bold=False), fill=(255, 255, 255),
+               anchor="rm")
+        return img
+
+    buf = _io.BytesIO()
+    if animated:
+        frames = [frame(p) for p in (0, 6, 12)]
+        frames[0].save(buf, format="GIF", save_all=True,
+                       append_images=frames[1:], duration=520,
+                       loop=0)
+    else:
+        frame(6).save(buf, format="PNG")
+    data = buf.getvalue()
+    _LIVE_CARD_CACHE[key] = (_time.time(), data)
+    return data
+
+
+@app.get("/live/{lid}/og.png")
+async def live_og_png(lid: int):
+    data = _live_card_bytes(lid, False)
+    if not data:
+        return redir("/static/og-logo.jpg")
+    return Response(data, media_type="image/png",
+                    headers={"Cache-Control":
+                             "public, max-age=60"})
+
+
+@app.get("/live/{lid}/og.gif")
+async def live_og_gif(lid: int):
+    data = _live_card_bytes(lid, True)
+    if not data:
+        return redir("/static/og-logo.jpg")
+    return Response(data, media_type="image/gif",
+                    headers={"Cache-Control":
+                             "public, max-age=60"})
+
+
 @app.get("/live/{lid}", response_class=HTMLResponse)
 async def live_page(request: Request, lid: int):
-    user, err = require_login(request)
-    if err:
-        return err
+    user = current_user(request)
+    if not user:
+        # Guests (and every social scraper) get the watch-gate:
+        # the host, the panel faces, and one job — join and
+        # you're inside this live. Scrapers read its og blocks.
+        conn = db()
+        _sweep_lives(conn)
+        glive = _live_get(conn, lid)
+        if not glive:
+            conn.close()
+            return redir("/login")
+        ghost = _live_person(glive["host_id"])
+        gpanel = [ghost]
+        for m in conn.execute(
+                "SELECT user_id FROM live_members WHERE "
+                "live_id=? AND left_at IS NULL",
+                (lid,)).fetchall():
+            if m["user_id"] != glive["host_id"]:
+                gpanel.append(_live_person(m["user_id"]))
+        gwatch = conn.execute(
+            "SELECT COUNT(*) c FROM live_viewers WHERE "
+            "live_id=? AND left_at IS NULL",
+            (lid,)).fetchone()["c"]
+        conn.close()
+        return render(request, "live_gate.html", {
+            "live": glive, "host": ghost,
+            "panel": gpanel[:8], "watching": gwatch,
+            "og_img": _abs_url(request, f"/live/{lid}/og.gif"),
+            "og_png": _abs_url(request, f"/live/{lid}/og.png")})
     conn = db()
     _sweep_lives(conn)
     live = _live_get(conn, lid)
