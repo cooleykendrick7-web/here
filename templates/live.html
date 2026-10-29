@@ -610,6 +610,32 @@
 }
 #live-fs.chrome-dim .live-chrome:hover{opacity:1}
 #live-fs.chrome-dim .live-chrome:focus-within{opacity:1}
+/* ===== Build RAIL (Ken, Oct 28): controls become a slim
+   VERTICAL rail on the LEFT edge \u2014 icon over a micro-label
+   \u2014 that collapses into one small see-through circle. */
+.live-controls{left:10px;right:auto;top:50%;bottom:auto;
+  transform:translateY(-50%);flex-direction:column;flex-wrap:nowrap;
+  align-items:stretch;gap:6px;width:60px;max-height:82%;
+  overflow-y:auto;overflow-x:hidden;padding:8px 5px;
+  border:var(--lg-border);border-radius:20px;scrollbar-width:none}
+.live-controls::-webkit-scrollbar{display:none}
+.live-controls .live-ctl{flex-direction:column;gap:1px;
+  height:auto;min-height:44px;
+  padding:7px 2px 6px;font-size:9.5px;line-height:1.15;
+  border-radius:14px;text-align:center;white-space:normal;
+  align-items:center;justify-content:center}
+.live-controls .live-ctl .hic{width:20px;height:20px}
+#ctl-rail-toggle{font-size:18px;padding:4px 2px}
+.live-controls.collapsed{width:46px;height:46px;max-height:46px;
+  padding:0;border-radius:50%;opacity:.55;overflow:hidden}
+.live-controls.collapsed .live-ctl{display:none}
+.live-controls.collapsed #ctl-rail-toggle{display:flex;
+  width:44px;height:44px;border-radius:50%;font-size:21px;
+  padding:0;align-items:center;justify-content:center}
+#live-chips{position:absolute;left:12px;
+  bottom:calc(10px + env(safe-area-inset-bottom, 0px));z-index:9;
+  display:flex;gap:8px;align-items:center}
+#live-chips:empty{display:none}
 /* ===== Build STUDIO sheet bits: segmented pickers + slider ===== */
 .studio-seg{display:flex;gap:6px;flex-wrap:wrap;padding:4px 8px 8px}
 .studio-seg button{background:rgba(255,255,255,.12);color:#fff;
@@ -766,6 +792,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
 <div id="live-auction"></div>
 <div class="live-shop" id="live-shop"></div>
 <div class="live-controls" id="live-controls">
+  <button type="button" class="live-ctl" id="ctl-rail-toggle" title="Hide controls">‹</button>
   <!-- panel members -->
   <button type="button" class="live-ctl" id="ctl-mute" hidden>{{ ic('mic') }} Mute</button>
   <button type="button" class="live-ctl" id="ctl-cam" hidden>{{ ic('camera') }} Camera on</button>
@@ -774,17 +801,20 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="live-ctl" id="ctl-connect" hidden>🎮 Live Connect</button>
   <button type="button" class="live-ctl" id="ctl-studio" hidden>{{ ic('studio') }} Studio</button>
   <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>{{ ic('logout') }} Leave panel</button>
+  <button type="button" class="live-ctl" id="ctl-panel-exit" hidden>🚪 Exit panel</button>
   <!-- host -->
   <button type="button" class="live-ctl danger" id="ctl-end" hidden>{{ ic('stop') }} End Live</button>
   <!-- watcher -->
   <button type="button" class="live-ctl" id="ctl-gift" hidden>{{ ic('gift') }} Gift</button>
-  <span class="gift-target" id="gift-target" hidden>{{ ic('gift') }} Gifting: host</span>
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
   {% if role == 'watcher' %}<button type="button" class="live-ctl" id="ctl-minimize" hidden>➖ Minimize</button>{% endif %}
   <button type="button" class="live-ctl" id="ctl-join" hidden>{{ ic('ask') }} Ask to join panel</button>
-  <label id="join-voice-wrap" hidden style="align-items:center;gap:6px;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:999px;padding:7px 13px;font-size:13.5px;font-weight:700;cursor:pointer"><input type="checkbox" id="join-voice" style="accent-color:#e01e26"> 🎙 Join voice only</label>
   <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
   <button type="button" class="live-ctl" id="ctl-leave" hidden>{{ ic('logout') }} Leave</button>
+</div>
+<div id="live-chips">
+  <span class="gift-target" id="gift-target" hidden>{{ ic('gift') }} Gifting: host</span>
+  <label id="join-voice-wrap" hidden style="align-items:center;gap:6px;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:999px;padding:7px 13px;font-size:13.5px;font-weight:700;cursor:pointer"><input type="checkbox" id="join-voice" style="accent-color:#e01e26"> 🎙 Join voice only</label>
 </div>
  </div>
 {% if can_share_live %}
@@ -2396,6 +2426,9 @@ function liveRoomDiff(prev, next){
     if (canCastDisplay())
       lcRow((lcVideoKind === 'screen' ? '● ' : '○ ')
           + '🖥 Share my screen', function(){ startScreenShare(); });
+    if (canCastDisplay())
+      lcRow('🪟 Game + my face (picture-in-picture)',
+            function(){ quickGameFace(); });
     lcSection('🎤 Sound source');
     if (lcScreenAudio){
       var st = document.createElement('div');
@@ -2427,6 +2460,39 @@ function liveRoomDiff(prev, next){
     window.hereIconText(mtxt, 'mirror', '🪞', ' Mirror preview');
     mrow.appendChild(mtxt);
     sheetActions.appendChild(mrow);
+  }
+  function quickGameFace(){
+    /* One tap to the talk-show picture: the game / capture card
+       (or shared screen) fills the frame and MY camera rides in
+       the corner. Needs a main source that is not my own face
+       camera \u2014 the Connect sheet is where you pick it. */
+    if (!canCastDisplay()){
+      toast('\u{1F5A5} Only the host or an admin can cast on a panel.');
+      return;
+    }
+    if (lcVideoKind === 'camera'){
+      toast('First pick your capture card above, or Share my '
+        + 'screen \u2014 then tap \u{1FA9F} again and your face '
+        + 'rides over the game.');
+      return;
+    }
+    if (!studio.faceOn){
+      studio.faceOn = true;
+      if (!studio.faceId){
+        var alt = (lcDevices.video || []).filter(function(d){
+          return d.deviceId !== lcVideoId; })[0];
+        studio.faceId = alt ? alt.deviceId : null;
+      }
+      studioSaveSettings();
+    }
+    var started = studio.on ? Promise.resolve() : studioStart();
+    Promise.resolve(started).then(function(){
+      return studioFaceAcquire();
+    }).then(function(){
+      closeSheet();
+      toast('\u{1FA9F} Game + Face is ON \u2014 viewers see the '
+        + 'game with you in the corner.');
+    }).catch(function(){});
   }
   function openConnectSheet(){
     lcSheetOpen = true;
@@ -7116,6 +7182,8 @@ function renderTopGifters(list){
     $('ctl-connect').hidden = !member;
     $('ctl-studio').hidden = !member;
     $('ctl-panel-leave').hidden = !(member && !iAmHost());
+    $('ctl-panel-exit').hidden = !(iAmHost()
+      && (panelOpen || panel.length > 1));
     $('ctl-end').hidden = !iAmHost();
     /* The 🔊 prompt is state-driven now (Build N): visible
        exactly while some remote video with audio is muted or
@@ -7202,6 +7270,16 @@ function renderTopGifters(list){
         pollState();
       } else {
         toast((d && d.error) || 'Could not leave the panel.');
+      }
+    });
+  });
+  $('ctl-panel-exit').addEventListener('click', function(){
+    post('/panel-exit', {}).then(function(d){
+      if (d && d.ok){
+        toast('🚪 Panel closed \u2014 it\'s just you now, full screen.');
+        pollState();
+      } else {
+        toast((d && d.error) || 'Could not exit the panel.');
       }
     });
   });
@@ -7843,6 +7921,26 @@ function renderTopGifters(list){
   (B.gifts || []).forEach(function(g){
     if (g && g.img){ var im = new Image(); im.src = g.img; }
   });
+  /* Control rail collapse \u2014 remembered per device. */
+  (function railInit(){
+    var bar = $('live-controls'), tgl = $('ctl-rail-toggle');
+    if (!bar || !tgl) return;
+    function apply(closed){
+      bar.classList.toggle('collapsed', closed);
+      tgl.textContent = closed ? '\u203a' : '\u2039';
+      tgl.title = closed ? 'Show controls' : 'Hide controls';
+    }
+    var closed = false;
+    try { closed = localStorage.getItem('here_rail') === 'closed'; }
+    catch (e) {}
+    apply(closed);
+    tgl.addEventListener('click', function(){
+      closed = !bar.classList.contains('collapsed');
+      apply(closed);
+      try { localStorage.setItem('here_rail',
+             closed ? 'closed' : 'open'); } catch (e) {}
+    });
+  })();
   pollState();
   pollSignals();
 })();

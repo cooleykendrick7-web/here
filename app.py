@@ -15069,6 +15069,34 @@ async def live_panel_open(request: Request, lid: int):
     return JSONResponse({"ok": True, "panel_open": want_open})
 
 
+@app.post("/live/{lid}/panel-exit")
+async def live_panel_exit(request: Request, lid: int):
+    """Host only: EXIT PANEL — every guest steps down to watcher
+    (nobody leaves the room), the panel closes, and the host is
+    full screen alone with whatever they are streaming. Ken's
+    ask (Oct 28): one tap when the panel is done, instead of
+    removing guests one by one. Reversible: reopen the panel
+    and invite again."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host can exit the panel."},
+            status_code=403)
+    conn = db()
+    members = _live_active_members(conn, lid)
+    for m in members:
+        _drop_guest(conn, live, m["user_id"])
+    conn.execute(
+        "UPDATE live_sessions SET panel_open=0, spotlight_id=NULL "
+        "WHERE id=?", (lid,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "dropped": len(members)})
+
+
 @app.post("/live/{lid}/panel-boxes")
 async def live_panel_boxes(request: Request, lid: int):
     """Build X, host only: set how many GUEST squares the panel

@@ -539,9 +539,14 @@ try:
                          "||{}).srcObject")))
     check("boot: ctl-connect NOT hidden for a panel member",
           host_b.ev("document.getElementById('ctl-connect').hidden") is False)
-    check("boot: ctl-connect computed height is 38px (glass bar)",
-          host_b.ev("getComputedStyle(document.getElementById"
-                    "('ctl-connect')).height") == "38px",
+    check("boot: controls live in the slim left rail (Ken's "
+          "redesign): ctl-connect is a stacked rail button and "
+          "the bar itself is ~60px wide",
+          host_b.ev("parseFloat(getComputedStyle(document."
+                    "getElementById('ctl-connect')).height)") >= 40
+          and host_b.ev("parseFloat(getComputedStyle(document."
+                        "getElementById('live-controls')).width)")
+          <= 64,
           str(host_b.ev("getComputedStyle(document.getElementById"
                         "('ctl-connect')).height")))
 
