@@ -337,10 +337,7 @@
   <p style="margin-top:8px">⏳ <strong>Application in.</strong> The owner listens and decides personally — watch your notifications.</p>
   {% elif profile.media_mode == 'artist' %}
   <p style="margin-top:8px;color:var(--muted)">Verified Artists wear the golden note, unlock track gifts, and get on the road to a HERE record deal (offer at 40,000 plays). Tell the owner why it should be you:</p>
-  <form action="/settings/artist-apply" method="post" style="margin-top:10px">
-    <textarea name="note" maxlength="400" rows="3" placeholder="Your pitch — your sound, your following, where your music lives…" style="width:100%;border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:transparent;color:inherit"></textarea>
-    <button type="submit" class="btn" style="margin-top:8px">Apply to be a Verified Artist</button>
-  </form>
+  <p style="margin-top:10px"><a class="btn" href="/artist/start">▶ Become a Verified Artist — watch the play, read the Playbook, sign off</a></p>
   {% else %}
   <p style="margin-top:8px;color:var(--muted)">Switch Media HERE to <strong>🎤 Artist</strong> above, put your tracks up, and you can apply for the golden note — Verified Artist status on the HERE label.</p>
   {% endif %}

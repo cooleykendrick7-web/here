@@ -296,6 +296,43 @@ check("owner can revoke the badge",
       dbq("SELECT artist_verified FROM users WHERE id=?",
           (UNV,))[0]["artist_verified"] == 0)
 
+# ---------- the official door: video -> playbook -> sign ----------
+Dc, DEV = signup("Dev Door", "dev@label.test")
+make_artist(Dc, DEV)
+r = Dc.get("/artist/start")
+check("start page shows CEO video one",
+      r.status_code == 200 and "ceo-welcome" in r.text
+      and "here-playbook.pdf" in r.text)
+r = Dc.post("/artist/start",
+            data={"signed_name": "Dev Door"},
+            follow_redirects=False)
+check("sign-off without both boxes refused",
+      "err=form" in r.headers.get("location", ""))
+r = Dc.post("/artist/start",
+            data={"signed_name": "Dev Door",
+                  "note": "door pitch",
+                  "agree_read": "1", "agree_money": "1"},
+            follow_redirects=False)
+check("sign-off lands the artist on the closer",
+      "done=1" in r.headers.get("location", ""))
+app_row = dbq("SELECT * FROM artist_applications WHERE "
+              "user_id=?", (DEV,))[0]
+check("application carries the Playbook sign-off",
+      app_row["signed_name"] == "Dev Door"
+      and app_row["read_playbook"] == 1
+      and app_row["note"] == "door pitch")
+r = Dc.get("/artist/start?done=1")
+check("done page plays the sign-yourself closer",
+      "ceo-sign" in r.text)
+Ec, EARLY = signup("Eve Early", "eve@label.test")
+make_artist(Ec, EARLY)
+r = Ec.get("/settings/profile")
+check("settings card routes through the official door",
+      "/artist/start" in r.text)
+r = OWN.get("/owner/artists")
+check("owner desk shows the Playbook sign-off",
+      "Playbook read" in r.text and "Dev Door" in r.text)
+
 failed = [n for n, ok in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} passed")
 if failed:

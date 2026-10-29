@@ -38,7 +38,7 @@
   <tr>
     <td><strong>{{ a.name|e }}</strong><br><span style="color:#9a9a9a">{{ a.email|e }}</span></td>
     <td>{{ a.stats.plays }} plays · {{ a.stats.likes }} likes · {{ a.stats.tracks }} tracks{% for t in a.tracks %}<div style="margin-top:6px"><span style="font-size:12.5px">🎵 {{ t.title|e }} · {{ t.plays }} plays · {{ t.likes }} likes{% if t.rights != 'own' %} · <em>listening only</em>{% endif %}</span><br><audio controls preload="none" src="{{ t.src|e }}" style="height:32px;max-width:260px;width:100%"></audio></div>{% endfor %}</td>
-    <td style="max-width:300px">{{ a.note|e }}</td>
+    <td style="max-width:300px">{{ a.note|e }}{% if a.signed_name %}<div style="margin-top:5px">📖 Playbook read &amp; signed: <strong>{{ a.signed_name|e }}</strong></div>{% endif %}</td>
     <td style="white-space:nowrap">
       <form method="post" action="/owner/artists/app/{{ a.id }}/approve" style="display:inline"><button class="btn" type="submit">🎤 Verify</button></form>
       <form method="post" action="/owner/artists/app/{{ a.id }}/pass" style="display:inline"><button class="btn-ghost" type="submit">Pass</button></form>

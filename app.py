@@ -1287,6 +1287,14 @@ def init_db():
         status TEXT NOT NULL DEFAULT 'new',
         created_at TEXT NOT NULL DEFAULT '',
         decided_at TEXT NOT NULL DEFAULT '')""")
+    _aa_cols = [r["name"] for r in c.execute(
+        "PRAGMA table_info(artist_applications)")]
+    if "signed_name" not in _aa_cols:
+        c.execute("ALTER TABLE artist_applications ADD COLUMN "
+                  "signed_name TEXT DEFAULT ''")
+    if "read_playbook" not in _aa_cols:
+        c.execute("ALTER TABLE artist_applications ADD COLUMN "
+                  "read_playbook INTEGER DEFAULT 0")
     c.execute("""CREATE TABLE IF NOT EXISTS artist_contracts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -9032,6 +9040,12 @@ async def profile_edit_page(request: Request):
                     # switch (default off).
                     "creator_mode": 1 if user.get("creator_mode")
                     else 0,
+                    "media_mode": user.get("media_mode") or "",
+                    "media_skin": user.get("media_skin") or "",
+                    "artist_verified": 1 if user.get(
+                        "artist_verified") else 0,
+                    "artist_contract": user.get(
+                        "artist_contract") or "",
                     "inbox_status": 1 if user.get("inbox_status") is None
                     else (1 if user.get("inbox_status") else 0),
                     "status_label": status_label,
@@ -15117,6 +15131,61 @@ async def artist_apply(request: Request):
     conn.commit()
     conn.close()
     return redir(back.format("applied"))
+
+
+
+@app.get("/artist/start", response_class=HTMLResponse)
+async def artist_start_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    pending = conn.execute(
+        "SELECT id FROM artist_applications WHERE user_id=? "
+        "AND status='new'", (user["id"],)).fetchone()
+    conn.close()
+    return render(request, "artist_start.html", {
+        "done": request.query_params.get("done") or "",
+        "err": request.query_params.get("err") or "",
+        "is_artist_mode":
+            (user.get("media_mode") or "") == "artist",
+        "pending": bool(pending)})
+
+
+@app.post("/artist/start")
+async def artist_start_submit(request: Request):
+    """The sign-off IS the application: pitch + typed name +
+    both attestations (read the Playbook; understands the
+    money) land on one artist_applications row, stamped
+    read_playbook=1, and the artist lands on the CEO's
+    'sign yourself' closer."""
+    user, err = require_login(request)
+    if err:
+        return err
+    if (user.get("media_mode") or "") != "artist":
+        return redir("/artist/start?err=mode")
+    if user.get("artist_verified"):
+        return redir("/artist/start?err=already")
+    form = await request.form()
+    name = str(form.get("signed_name") or "").strip()
+    note = str(form.get("note") or "").strip()[:400]
+    if len(name) < 3 or not form.get("agree_read") \
+            or not form.get("agree_money"):
+        return redir("/artist/start?err=form")
+    conn = db()
+    if conn.execute(
+            "SELECT 1 FROM artist_applications WHERE user_id=? "
+            "AND status='new'", (user["id"],)).fetchone():
+        conn.close()
+        return redir("/artist/start?err=pending")
+    conn.execute(
+        "INSERT INTO artist_applications(user_id, note, "
+        "signed_name, read_playbook, created_at) "
+        "VALUES(?,?,?,?,?)",
+        (user["id"], note, name[:80], 1, now_iso()))
+    conn.commit()
+    conn.close()
+    return redir("/artist/start?done=1")
 
 
 @app.get("/artists", response_class=HTMLResponse)

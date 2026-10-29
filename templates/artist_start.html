@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block og_title %}Become a HERE Verified Artist{% endblock %}
+{% block og_description %}Watch the play, read the Playbook, sign off — and apply to join HERE Records.{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:0 auto;padding:20px 14px 44px">
+  <div style="display:flex;align-items:center;gap:12px">
+    {% with ab_size=50 %}{% include "partials/artist_badge.html" %}{% endwith %}
+    <div>
+      <h1 style="margin:0;font-size:24px">Become a Verified Artist</h1>
+      <div style="color:var(--muted);font-size:14px">This is the official door. Watch, read, sign, apply.</div>
+    </div>
+  </div>
+
+  {% if err == 'form' %}<p style="font-weight:700;color:#c0392b;margin-top:14px">To finish: type your full name and check both boxes — that's your sign-off.</p>
+  {% elif err == 'mode' %}<p style="font-weight:700;color:#c0392b;margin-top:14px">Turn on Artist mode first (Settings, Media HERE), then come back.</p>
+  {% elif err == 'already' %}<p style="font-weight:700;color:#c0392b;margin-top:14px">You are already a Verified Artist.</p>
+  {% elif err == 'pending' %}<p style="font-weight:700;color:#c0392b;margin-top:14px">Your application is already in — sit tight.</p>{% endif %}
+
+  {% if done %}
+  <div class="card" style="margin-top:16px">
+    <p style="font-weight:900;font-size:18px;margin:0 0 10px">You're in the books. Now hear it from the top:</p>
+    <video controls playsinline preload="metadata" src="/static/ceo-sign.mp4" style="width:100%;border-radius:12px;background:#000"></video>
+    <p style="color:var(--muted);margin:12px 0 0">Your application and your Playbook sign-off are with the owner, who reviews every artist personally. Watch your notifications — when the golden note lands on your profile, you're official. Until then: post, stream, and bring your people. That's the job.</p>
+    <p style="margin-top:10px"><a class="btn" href="/settings/profile">Back to Settings</a></p>
+  </div>
+  {% elif user.artist_verified %}
+  <div class="card" style="margin-top:16px">
+    <p style="font-weight:900;font-size:17px;margin:0">🎤 You're already a Verified Artist.</p>
+    <p style="color:var(--muted);margin:8px 0 0">The golden note is on your profile. Your road now: plays and likes toward 40,000 — that's contract territory.</p>
+    <p style="margin-top:10px"><a class="btn" href="/artist/contract">See the agreement →</a></p>
+  </div>
+  {% elif pending %}
+  <div class="card" style="margin-top:16px">
+    <p style="font-weight:900;font-size:17px;margin:0">⏳ Your application is in.</p>
+    <p style="color:var(--muted);margin:8px 0 0">Playbook sign-off received. The owner listens and decides personally — keep posting and streaming while you wait. That's literally the audition.</p>
+  </div>
+  {% else %}
+  <div class="card" style="margin-top:16px">
+    <div style="font-weight:900;font-size:17px">Step 1 — Hear the play</div>
+    <p style="color:var(--muted);margin:6px 0 10px">Ten seconds, from the top floor. This is how the money works here — and why it's official.</p>
+    <video controls playsinline preload="metadata" src="/static/ceo-welcome.mp4" style="width:100%;border-radius:12px;background:#000"></video>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <div style="font-weight:900;font-size:17px">Step 2 — Read the Playbook</div>
+    <p style="color:var(--muted);margin:6px 0 0">Seven pages: every switch in order, every money pipe, the what-if numbers, the Label deal, and the work it takes. No fine-print games — the whole system, in the open.</p>
+    <p style="margin-top:10px"><a class="btn" href="/static/here-playbook.pdf" target="_blank" rel="noopener">📖 Open the HERE Playbook (PDF)</a></p>
+  </div>
+
+  {% if not is_artist_mode %}
+  <div class="card" style="margin-top:14px">
+    <div style="font-weight:900;font-size:17px">First, flip your switch</div>
+    <p style="color:var(--muted);margin:6px 0 0">Applications open for artists. Turn on <strong>🎤 Artist</strong> in Settings → Media HERE, upload your tracks, then come back and sign.</p>
+    <p style="margin-top:10px"><a class="btn-ghost" href="/settings/profile#media-here">Go to Media HERE settings →</a></p>
+  </div>
+  {% else %}
+  <form method="post" action="/artist/start" class="card" style="margin-top:14px">
+    <div style="font-weight:900;font-size:17px">Step 3 — Sign off &amp; apply</div>
+    <p style="color:var(--muted);margin:6px 0 0">Signing says: I read the Playbook, and I understand the money here is made by my fans and my work — nobody's handing me anything. Then your pitch goes to the owner with your sign-off attached.</p>
+    <textarea name="note" maxlength="400" rows="3" placeholder="Your pitch — your sound, your following, where your music lives…" style="width:100%;margin-top:12px;border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:transparent;color:inherit"></textarea>
+    <input type="text" name="signed_name" required minlength="3" maxlength="80" placeholder="Type your full name — your signature" style="width:100%;margin-top:12px;border:1px solid var(--border);border-radius:10px;padding:11px 13px;background:transparent;color:inherit;font-family:cursive;font-size:19px">
+    <label style="display:flex;gap:8px;margin-top:12px;align-items:flex-start"><input type="checkbox" name="agree_read" value="1" required style="margin-top:3px"><span>I read the HERE Playbook.</span></label>
+    <label style="display:flex;gap:8px;margin-top:9px;align-items:flex-start"><input type="checkbox" name="agree_money" value="1" required style="margin-top:3px"><span>I understand how the money works on HERE — my fans pay me, and I have to put in the work.</span></label>
+    <button type="submit" class="btn" style="margin-top:14px">✍ Sign off &amp; apply</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
