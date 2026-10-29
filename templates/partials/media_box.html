@@ -1,0 +1,50 @@
+{# Media HERE: a profile's track box. Renders when the owner
+   turned Media HERE on (mode music or artist) and there are
+   tracks — or always for the owner, so the first upload has a
+   home. Play buttons feed the floating player in base.html. #}
+{% if media_mode and (media_tracks or profile.is_self) %}
+<div class="card" data-mh-list>
+  <div style="display:flex;align-items:center;gap:8px">
+    <h3 style="margin:0">{{ '🎤' if media_mode == 'artist' else '🎵' }} Media HERE{% if media_mode == 'artist' %} <span class="pill" style="background:#e01e26;color:#fff;border-color:#e01e26">ARTIST</span>{% endif %}</h3>
+    <span style="margin-left:auto;color:var(--muted);font-size:13px">{{ media_tracks|length }} track{{ 's' if media_tracks|length != 1 }}</span>
+  </div>
+  {% if profile.is_self and media_flash %}
+  <p style="margin:10px 0 0;font-weight:700;{% if media_flash.startswith('err') %}color:#c0392b{% else %}color:#1d9e50{% endif %}">
+    {% if media_flash == 'ok' %}✅ Track uploaded — it's live on your profile.
+    {% elif media_flash == 'deleted' %}Track removed.
+    {% elif media_flash == 'err-rights' %}Pick the rights box first — do you own this music or not? The upload needs that answer.
+    {% elif media_flash == 'err-cap' %}You're at your track limit ({{ media_cap }}). Delete one, or HERE Plus raises it to 50.
+    {% elif media_flash == 'err-type' %}That file wouldn't go up — audio files only (MP3, M4A, OGG, WAV), 20 MB max.
+    {% elif media_flash == 'err-mode' %}Turn Media HERE on in Settings first, then upload.
+    {% endif %}
+  </p>
+  {% endif %}
+  {% for t in media_tracks %}
+  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--border)">
+    <button type="button" class="btn btn-sm mh-play-btn" data-id="{{ t.id }}" data-src="{{ t.src|e }}" data-title="{{ t.title|e }}" data-artist="{{ profile.name|e }}" title="Play {{ t.title|e }}">▶</button>
+    <div style="flex:1;min-width:0">
+      <div style="font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.title|e }}</div>
+      <div style="color:var(--muted);font-size:12.5px">{{ t.plays }} play{{ 's' if t.plays != 1 }}{% if t.rights == 'own' %} · ✅ Owns the rights{% else %} · Shared for listening{% endif %}</div>
+    </div>
+    {% if profile.is_self %}
+    <form action="/media/{{ t.id }}/delete" method="post" style="margin:0"><button class="btn-ghost btn-sm" type="submit" title="Remove this track">🗑</button></form>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if not media_tracks %}
+  <p style="color:var(--muted);margin:10px 0 0">No tracks yet — upload your first one below and it rides the floating player all over HERE.</p>
+  {% endif %}
+  {% if profile.is_self %}
+  <form action="/media/upload" method="post" enctype="multipart/form-data" style="margin-top:12px;border-top:1px dashed var(--border);padding-top:12px">
+    <div style="font-weight:800;margin-bottom:8px">➕ Add a track <span style="color:var(--muted);font-weight:400;font-size:13px">({{ media_tracks|length }} of {{ media_cap }} used · MP3/M4A/OGG/WAV · 20 MB max)</span></div>
+    <input type="text" name="title" maxlength="120" placeholder="Track title" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;background:transparent;color:inherit;margin-bottom:8px">
+    <input type="file" name="file" accept=".mp3,.m4a,.ogg,.wav,audio/*" required style="margin-bottom:10px">
+    <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:11px">
+      <label style="display:flex;gap:8px;align-items:flex-start;border:1px solid var(--border);border-radius:10px;padding:9px 11px;cursor:pointer"><input type="radio" name="rights" value="own" required style="margin-top:3px"><span><strong>✅ I own the rights to this music</strong><br><span style="color:var(--muted);font-size:13px">It's mine — I made it or I hold the rights.</span></span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start;border:1px solid var(--border);border-radius:10px;padding:9px 11px;cursor:pointer"><input type="radio" name="rights" value="notown" style="margin-top:3px"><span><strong>I do not own the rights to this music</strong><br><span style="color:var(--muted);font-size:13px">Sharing for listening only — no downloads, no selling.</span></span></label>
+    </div>
+    <button type="submit" class="btn">Upload track</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}

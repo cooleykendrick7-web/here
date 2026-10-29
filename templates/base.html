@@ -3409,5 +3409,174 @@ document.addEventListener('click', function (e) {
     .catch(function () { b.disabled = false; });
 });
 </script>
+{% if user %}
+<style>
+#mh-player{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;width:min(520px,94vw);z-index:55;border-radius:16px;overflow:hidden;box-shadow:0 14px 44px rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.22);background:#17181c;color:#fff;font-family:inherit}
+#mh-player .mh-face{position:relative;background-size:cover;background-position:center}
+#mh-player .mh-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,10,12,.45),rgba(10,10,12,.82))}
+#mh-player .mh-in{position:relative;display:flex;align-items:center;gap:11px;padding:10px 12px}
+#mh-disc{width:44px;height:44px;flex:none;border-radius:50%;background:radial-gradient(circle at 50% 50%,#e01e26 0 26%,#26272c 27% 62%,#101114 63%);display:flex;align-items:center;justify-content:center;font-size:17px;border:2px solid rgba(255,255,255,.35)}
+#mh-disc.spin{animation:mhspin 2.6s linear infinite}
+@keyframes mhspin{to{transform:rotate(360deg)}}
+#mh-player .mh-meta{flex:1;min-width:0}
+#mh-title{font-weight:900;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mh-artist{font-size:12px;opacity:.82;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mh-progwrap{height:7px;background:rgba(255,255,255,.25);border-radius:99px;margin-top:6px;cursor:pointer}
+#mh-prog{height:100%;width:0%;background:#e01e26;border-radius:99px}
+#mh-player .mh-time{display:flex;justify-content:space-between;font-size:10.5px;opacity:.75;margin-top:2px}
+#mh-player .mh-btns{display:flex;gap:5px;align-items:center}
+#mh-player .mh-btns button{width:36px;height:36px;border-radius:50%;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;font-size:14px;cursor:pointer;flex:none}
+#mh-player .mh-btns button:active{transform:scale(.93)}
+#mh-pill{position:fixed;right:14px;bottom:14px;width:52px;height:52px;border-radius:50%;z-index:55;background:radial-gradient(circle at 50% 50%,#e01e26 0 30%,#26272c 31% 66%,#101114 67%);border:2px solid rgba(255,255,255,.4);color:#fff;font-size:19px;cursor:pointer;box-shadow:0 10px 28px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center}
+#mh-pill.spin{animation:mhspin 2.6s linear infinite}
+#mh-pill.pulse{animation:mhpulse 1.1s ease-in-out infinite}
+@keyframes mhpulse{0%,100%{box-shadow:0 0 0 0 rgba(224,30,38,.55)}50%{box-shadow:0 0 0 12px rgba(224,30,38,0)}}
+@media (max-width:760px){ #mh-player{bottom:76px} #mh-pill{bottom:76px} }
+</style>
+<div id="mh-pill" hidden title="Media HERE — your music">🎵</div>
+<div id="mh-player" hidden>
+  <div class="mh-face"{% if user.media_skin %} style="background-image:url('{{ user.media_skin|e }}')"{% endif %}>
+    <div class="mh-shade"></div>
+    <div class="mh-in">
+      <div id="mh-disc">🎵</div>
+      <div class="mh-meta">
+        <div id="mh-title">Media HERE</div>
+        <div id="mh-artist"></div>
+        <div id="mh-progwrap"><div id="mh-prog"></div></div>
+        <div class="mh-time"><span id="mh-cur">0:00</span><span id="mh-dur">0:00</span></div>
+      </div>
+      <div class="mh-btns">
+        <button type="button" id="mh-prev" title="Previous">⏮</button>
+        <button type="button" id="mh-play" title="Play / pause">▶</button>
+        <button type="button" id="mh-next" title="Next">⏭</button>
+        <button type="button" id="mh-collapse" title="Collapse — music keeps playing">▾</button>
+        <button type="button" id="mh-stop" title="Stop and close">✕</button>
+      </div>
+    </div>
+  </div>
+</div>
+<audio id="mh-audio" preload="metadata"></audio>
+<script>
+(function(){
+  var KEY = 'mediahere_v1';
+  var audio = document.getElementById('mh-audio');
+  if (!audio) return;
+  var wrap = document.getElementById('mh-player'),
+      pill = document.getElementById('mh-pill'),
+      disc = document.getElementById('mh-disc'),
+      titleEl = document.getElementById('mh-title'),
+      artistEl = document.getElementById('mh-artist'),
+      prog = document.getElementById('mh-prog'),
+      progWrap = document.getElementById('mh-progwrap'),
+      curEl = document.getElementById('mh-cur'),
+      durEl = document.getElementById('mh-dur'),
+      playBtn = document.getElementById('mh-play');
+  var S = null, pendingSeek = 0, lastSave = 0;
+  function cur(){ return (S && S.q && S.q[S.i]) || null; }
+  function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} }
+  function wipe(){ try { localStorage.removeItem(KEY); } catch(e){} }
+  function fmt(s){ s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60) + ':' + ('0' + (s % 60)).slice(-2); }
+  function paint(){
+    var c = cur();
+    if (!c){ wrap.hidden = true; pill.hidden = true; return; }
+    titleEl.textContent = c.t || 'Untitled';
+    artistEl.textContent = c.a || '';
+    playBtn.textContent = audio.paused ? '▶' : '⏸';
+    disc.classList.toggle('spin', !audio.paused);
+    pill.classList.toggle('spin', !audio.paused && !S.open);
+    if (S.open){ wrap.hidden = false; pill.hidden = true; }
+    else { wrap.hidden = true; pill.hidden = false; }
+  }
+  function countPlay(id){
+    try { fetch('/media/' + id + '/play', {method: 'POST', keepalive: true}); } catch(e){}
+  }
+  function start(countIt){
+    var c = cur(); if (!c) return;
+    audio.src = c.src;
+    if (countIt) countPlay(c.id);
+    paint();
+  }
+  function tryPlay(){
+    var p = audio.play();
+    if (p && p.catch) p.catch(function(){ pill.classList.add('pulse'); paint(); });
+  }
+  window.mhPlayQueue = function(q, i){
+    if (!q || !q.length) return;
+    S = {q: q, i: i || 0, pos: 0, playing: true, open: true};
+    save(); start(true); tryPlay(); paint();
+  };
+  document.addEventListener('click', function(e){
+    var b = e.target.closest ? e.target.closest('.mh-play-btn') : null;
+    if (!b) return;
+    var list = b.closest('[data-mh-list]');
+    var btns = list ? Array.prototype.slice.call(list.querySelectorAll('.mh-play-btn')) : [b];
+    var q = [], idx = 0;
+    btns.forEach(function(x, j){
+      q.push({id: +x.getAttribute('data-id'), src: x.getAttribute('data-src'),
+              t: x.getAttribute('data-title'), a: x.getAttribute('data-artist')});
+      if (x === b) idx = j;
+    });
+    window.mhPlayQueue(q, idx);
+  });
+  playBtn.addEventListener('click', function(){
+    if (audio.paused){ S.playing = true; tryPlay(); } else { S.playing = false; audio.pause(); }
+    save();
+  });
+  document.getElementById('mh-next').addEventListener('click', function(){
+    if (S && S.i < S.q.length - 1){ S.i++; S.pos = 0; save(); start(true); tryPlay(); }
+  });
+  document.getElementById('mh-prev').addEventListener('click', function(){
+    if (!S) return;
+    if (audio.currentTime > 3){ audio.currentTime = 0; return; }
+    if (S.i > 0){ S.i--; S.pos = 0; save(); start(true); tryPlay(); }
+  });
+  document.getElementById('mh-collapse').addEventListener('click', function(){
+    S.open = false; save(); paint();
+  });
+  document.getElementById('mh-stop').addEventListener('click', function(){
+    audio.pause(); audio.removeAttribute('src'); S = null; wipe(); paint();
+  });
+  pill.addEventListener('click', function(){
+    pill.classList.remove('pulse');
+    if (!S) return;
+    S.open = true;
+    if (audio.paused && S.playing) tryPlay();
+    save(); paint();
+  });
+  progWrap.addEventListener('click', function(e){
+    if (!audio.duration) return;
+    var r = progWrap.getBoundingClientRect();
+    audio.currentTime = audio.duration * ((e.clientX - r.left) / r.width);
+  });
+  audio.addEventListener('loadedmetadata', function(){
+    durEl.textContent = fmt(audio.duration);
+    if (pendingSeek){ try { audio.currentTime = pendingSeek; } catch(e){} pendingSeek = 0; }
+  });
+  audio.addEventListener('durationchange', function(){ durEl.textContent = fmt(audio.duration); });
+  audio.addEventListener('timeupdate', function(){
+    if (audio.duration) prog.style.width = (100 * audio.currentTime / audio.duration) + '%';
+    curEl.textContent = fmt(audio.currentTime);
+    var now = Date.now();
+    if (S && now - lastSave > 4000){ lastSave = now; S.pos = audio.currentTime; save(); }
+  });
+  audio.addEventListener('play', function(){ if (S){ S.playing = true; save(); } pill.classList.remove('pulse'); paint(); });
+  audio.addEventListener('pause', function(){ if (S){ S.pos = audio.currentTime; save(); } paint(); });
+  audio.addEventListener('ended', function(){
+    if (S && S.i < S.q.length - 1){ S.i++; S.pos = 0; save(); start(true); tryPlay(); }
+    else if (S){ S.playing = false; S.pos = 0; save(); paint(); }
+  });
+  window.addEventListener('beforeunload', function(){ if (S){ S.pos = audio.currentTime; save(); } });
+  // Restore: the song rides along to this page.
+  try { S = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch(e){ S = null; }
+  if (S && cur()){
+    if (S.open === undefined) S.open = true;
+    pendingSeek = S.pos || 0;
+    start(false);
+    if (S.playing) tryPlay();
+    paint();
+  }
+})();
+</script>
+{% endif %}
 </body>
 </html>

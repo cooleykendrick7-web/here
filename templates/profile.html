@@ -168,6 +168,7 @@
   {% endif %}
 </div>
 {% endif %}
+{% if media_mode == 'artist' %}{% include "partials/media_box.html" %}{% endif %}
 {% if tip_goal %}
 <div class="card">
   <div style="display:flex;align-items:baseline;gap:8px">
@@ -191,6 +192,7 @@
   </form>
 </details>
 {% endif %}
+{% if media_mode == 'music' %}{% include "partials/media_box.html" %}{% endif %}
 {% if selling %}
 <div class="card">
   <div style="display:flex;align-items:center;gap:8px">

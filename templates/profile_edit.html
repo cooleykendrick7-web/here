@@ -296,6 +296,28 @@
   </form>
 </div>
 
+<div class="card" id="media-here">
+  <div class="section-title">🎵 Media HERE — your profile music</div>
+  <p style="margin-top:8px;color:var(--muted)">Turn it on and you can upload tracks (MP3 and other audio files) to your profile. Anyone visiting can press play, and the song rides a little floating player while they surf HERE. Every upload asks who owns the rights — the answer stays on record.</p>
+  {% if media_flash == 'mode' %}<p style="font-weight:700;color:#1d9e50;margin-top:8px">✅ Saved.{% if profile.media_mode %} Add tracks from the Media HERE box on your profile.{% endif %}</p>
+  {% elif media_flash == 'skin' %}<p style="font-weight:700;color:#1d9e50;margin-top:8px">✅ New player skin saved.</p>
+  {% elif media_flash == 'err-skin' %}<p style="font-weight:700;color:#c0392b;margin-top:8px">That picture wouldn't go up — images only, 8 MB max.</p>{% endif %}
+  <form action="/settings/media-mode" method="post" style="margin-top:12px">
+    <div style="display:flex;flex-direction:column;gap:7px">
+      <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="media_mode" value="" {% if not profile.media_mode %}checked{% endif %}> Off — no music on my profile</label>
+      <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="media_mode" value="music" {% if profile.media_mode == 'music' %}checked{% endif %}> 🎵 Profile Music — my tracks on my profile</label>
+      <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="media_mode" value="artist" {% if profile.media_mode == 'artist' %}checked{% endif %}> 🎤 Artist — I'm presenting my music (ARTIST badge, box up top)</label>
+    </div>
+    <button type="submit" class="btn" style="margin-top:11px">Save Media HERE</button>
+  </form>
+  <form action="/settings/media-skin" method="post" enctype="multipart/form-data" style="margin-top:16px;border-top:1px dashed var(--border,#ccc);padding-top:12px">
+    <div style="font-weight:800">🎨 Your player skin</div>
+    <p style="margin-top:6px;color:var(--muted)">Upload a picture and it becomes the face of YOUR floating player — the one you listen with, everywhere on HERE.</p>
+    {% if user.media_skin %}<img src="{{ user.media_skin|e }}" alt="" style="width:120px;height:70px;object-fit:cover;border-radius:10px;margin:8px 0">{% endif %}
+    <div><input type="file" name="skin" accept="image/*" required> <button type="submit" class="btn-ghost btn-sm">Save skin</button></div>
+  </form>
+</div>
+
 <div class="card">
   <div class="section-title">🔇 Silenced people</div>
   <p style="margin-top:8px;color:var(--muted)">Silencing is quiet and one-way: they never know. Their taps, comments, messages and calls stop notifying and buzzing you, and their posts stay out of your home feed. You stay friends and they can still message you — it just lands silently.</p>

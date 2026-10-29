@@ -1250,6 +1250,12 @@ def init_db():
     if "tip_goal_base" not in _mu_cols:
         c.execute("ALTER TABLE users ADD COLUMN "
                   "tip_goal_base INTEGER DEFAULT 0")
+    if "media_mode" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN "
+                  "media_mode TEXT DEFAULT ''")
+    if "media_skin" not in _mu_cols:
+        c.execute("ALTER TABLE users ADD COLUMN "
+                  "media_skin TEXT DEFAULT ''")
     # Growth round: scheduled shows + their reminder subscribers.
     c.execute("""CREATE TABLE IF NOT EXISTS live_schedule (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1261,6 +1267,14 @@ def init_db():
         sched_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
         created_at TEXT NOT NULL DEFAULT '',
         PRIMARY KEY(sched_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS media_tracks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+        file TEXT NOT NULL DEFAULT '', rights TEXT NOT NULL DEFAULT '',
+        plays INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT '')""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_media_tracks_user "
+              "ON media_tracks(user_id, id)")
     c.execute("""CREATE TABLE IF NOT EXISTS gift_nudges (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sender_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
@@ -1729,7 +1743,9 @@ def render(request: Request, name, ctx=None):
                        # Build LOCKED CONTENT: templates gate the
                        # creator-only lock fields on this flag (the
                        # server re-checks on every write regardless).
-                       "creator_mode": 1 if u.get("creator_mode") else 0}
+                       "creator_mode": 1 if u.get("creator_mode") else 0,
+                       "media_skin": avatar_url(
+                           u.get("media_skin", ""))}
         conn = db()
         ctx.setdefault("post_gift", _post_gift_ctx(u))
         ctx["pending_count"] = conn.execute(
@@ -8743,6 +8759,11 @@ async def profile(request: Request, uid: int):
                        "id": uid}
     recent_page_gifts = ([] if locked
                          else _recent_page_gifts(uid, None))
+    media_mode = (prof.get("media_mode") or "") if not locked \
+        else ""
+    media_tracks = (_media_tracks_for(uid) if media_mode
+                    else None)
+    media_cap = _media_cap(prof)
     tip_goal = None
     if prof["creator_mode"] and (prof["tip_goal_tickets"] or 0) > 0:
         _tg_goal = prof["tip_goal_tickets"]
@@ -8761,6 +8782,11 @@ async def profile(request: Request, uid: int):
                    "wall_approve_first": wall_approve_first,
                    "page_gift": page_gift,
                    "gift_locked": gift_locked,
+                   "media_mode": media_mode,
+                   "media_tracks": media_tracks,
+                   "media_cap": media_cap,
+                   "media_flash":
+                       request.query_params.get("media") or "",
                    "recent_page_gifts": recent_page_gifts,
                    "composer_friends": composer_friends,
                    "album_photos": album_photos,
@@ -8900,6 +8926,7 @@ async def profile_edit_page(request: Request):
     return render(request, "profile_edit.html", {
         "my_suggestions": _my_sugg,
         "idea_flash": request.query_params.get("idea") or "",
+        "media_flash": request.query_params.get("media") or "",
         "icon_style": icon_style_of(user),
         "icon_styles": [(s, ICON_STYLE_LABELS[s]) for s in ICON_STYLES],
         "icon_previews": {s: {k: icon_html(k, s) for k in
@@ -14461,6 +14488,148 @@ async def post_gift(request: Request, pid: int):
             status_code=400)
     code, payload = _post_gift_core(user, post, gift)
     return JSONResponse(payload, status_code=code)
+
+
+# ---------------- Media HERE: profile music ----------------
+MEDIA_FREE_TRACKS = 10
+MEDIA_PLUS_TRACKS = 50
+MEDIA_MAX_MB = 20
+MEDIA_EXTS = {"mp3", "m4a", "ogg", "wav"}
+MEDIA_MODES = ("", "music", "artist")
+
+
+def _media_cap(user):
+    return (MEDIA_PLUS_TRACKS if _is_plus(user)
+            else MEDIA_FREE_TRACKS)
+
+
+def _media_tracks_for(uid):
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM media_tracks WHERE user_id=? ORDER BY id",
+        (uid,)).fetchall()
+    conn.close()
+    return [{"id": r["id"], "title": r["title"],
+             "src": avatar_url(r["file"]),
+             "rights": r["rights"], "plays": r["plays"] or 0}
+            for r in rows]
+
+
+@app.post("/settings/media-mode")
+async def settings_media_mode(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    mode = str(form.get("media_mode") or "")
+    if mode not in MEDIA_MODES:
+        mode = ""
+    conn = db()
+    conn.execute("UPDATE users SET media_mode=? WHERE id=?",
+                 (mode, user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile?media=mode#media-here")
+
+
+@app.post("/settings/media-skin")
+async def settings_media_skin(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    up = form.get("skin")
+    try:
+        rel = save_upload(up, "media-skins",
+                          {"jpg", "jpeg", "png", "webp", "gif"},
+                          max_mb=8)
+    except ValueError:
+        return redir("/settings/profile?media=err-skin"
+                     "#media-here")
+    if not rel:
+        return redir("/settings/profile?media=err-skin"
+                     "#media-here")
+    conn = db()
+    conn.execute("UPDATE users SET media_skin=? WHERE id=?",
+                 (rel, user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile?media=skin#media-here")
+
+
+@app.post("/media/upload")
+async def media_upload(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    back = f"/user/{user['id']}"
+    if not (user.get("media_mode") or ""):
+        return redir(back + "?media=err-mode")
+    form = await request.form()
+    title = str(form.get("title") or "").strip()[:120]
+    rights = str(form.get("rights") or "")
+    if rights not in ("own", "notown"):
+        return redir(back + "?media=err-rights")
+    conn = db()
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM media_tracks WHERE user_id=?",
+        (user["id"],)).fetchone()["c"]
+    conn.close()
+    if n >= _media_cap(user):
+        return redir(back + "?media=err-cap")
+    up = form.get("file")
+    try:
+        rel = save_upload(up, "media", MEDIA_EXTS,
+                          max_mb=MEDIA_MAX_MB)
+    except ValueError:
+        return redir(back + "?media=err-type")
+    if not rel:
+        return redir(back + "?media=err-type")
+    if not title:
+        title = (getattr(up, "filename", "") or "Untitled")
+        title = title.rsplit(".", 1)[0][:120] or "Untitled"
+    conn = db()
+    conn.execute(
+        "INSERT INTO media_tracks(user_id, title, file, rights, "
+        "created_at) VALUES(?,?,?,?,?)",
+        (user["id"], title, rel, rights, now_iso()))
+    conn.commit()
+    conn.close()
+    return redir(back + "?media=ok")
+
+
+@app.post("/media/{tid}/delete")
+async def media_delete(request: Request, tid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute("SELECT * FROM media_tracks WHERE id=?",
+                       (tid,)).fetchone()
+    if row and (row["user_id"] == user["id"]
+                or is_owner(request)):
+        conn.execute("DELETE FROM media_tracks WHERE id=?",
+                     (tid,))
+        conn.commit()
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, row["file"]))
+        except OSError:
+            pass
+    conn.close()
+    return redir(f"/user/{user['id']}?media=deleted")
+
+
+@app.post("/media/{tid}/play")
+async def media_play(request: Request, tid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute("UPDATE media_tracks SET plays=plays+1 "
+                 "WHERE id=?", (tid,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
 
 
 @app.post("/gift-nudge")
