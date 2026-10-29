@@ -1034,6 +1034,8 @@ function liveRoomDiff(prev, next){
   }
   getIceConfig();
   var $ = function(id){ return document.getElementById(id); };
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   var stageEl = $('live-stage'), gridEl = $('live-grid'),
       heartsEl = $('live-hearts'), statusEl = $('live-status'),
       errBox = $('live-error'), errText = $('live-error-text'),
@@ -2906,7 +2908,12 @@ function liveRoomDiff(prev, next){
         var f0 = studio.frame;
         setTimeout(function(){
           if (!studio.on) return;
-          var flowing = studio.frame > f0 + 5
+          /* 4s and only a couple of frames: phone webviews
+             throttle the draw loop hard, and a hair-trigger
+             check here flip-flopped Studio on and off in
+             Ken's hands (2026-10-29). A truly dead loop still
+             advances ZERO frames and falls back honestly. */
+          var flowing = studio.frame > f0 + 2
             && studio.mainVid
             && (studio.mainVid.videoWidth > 0
                 || studio.mainVid.readyState >= 2);
@@ -2917,7 +2924,7 @@ function liveRoomDiff(prev, next){
                   + 'On iPhone, open HERE in Safari; on PC, '
                   + 'Chrome or Edge.');
           }
-        }, 1500);
+        }, 4000);
       }
     }).catch(function(){
       studio.on = false;
@@ -3212,6 +3219,12 @@ function liveRoomDiff(prev, next){
   }
   function studioDraw(){
     if (!studio.on) return;
+    /* The reschedule sits AFTER the catch below: a single
+       throwing draw (the keying passes read pixels every frame)
+       must never freeze the Studio picture for good — a frozen
+       frame counter is what made Studio flip-flop on phones
+       (Ken's 2026-10-29 report). */
+    try {
     studio.frame++;
     var ctx = studio.ctx, W = 1280, H = 720;
     var isScreen = lcVideoKind === 'screen';
@@ -3320,7 +3333,8 @@ function liveRoomDiff(prev, next){
       ctx.restore();
     }
     studioDrawFun(ctx, W, H);
-    studio.raf = requestAnimationFrame(studioDraw);
+    } catch(_e) {}
+    if (studio.on) studio.raf = requestAnimationFrame(studioDraw);
   }
   /* 🎉 Animated fun overlays — a small particle system drawn
      INTO the finished picture, so the streamer sees them on
@@ -5020,6 +5034,8 @@ function liveRoomDiff(prev, next){
   function enterPanelMode(){
     teardownPeers();
     showMemberBanner();
+    var jm = $('live-join-msg');
+    if (jm){ jm.hidden = true; delete jm.dataset.sticky; }
     post('/heartbeat').catch(function(){});
     setupLocalMedia();
     updateControls();
@@ -5046,8 +5062,16 @@ function liveRoomDiff(prev, next){
     if (!myPanel) return;
     /* The host is ALWAYS a panelist (panelist #1 by role), whatever
        a payload says — a false am_member here once demoted the host
-       to watcher, tearing down every peer (the two-way blackout). */
-    var member = !!(myPanel.am_member || myPanel.is_host);
+       to watcher, tearing down every peer (the two-way blackout).
+       Same rule for the roster: panel[] is built server-side from
+       the same live_members rows as am_member, so if the server
+       has me IN the grid I am a member — trusting a contradictory
+       am_member strands a guest as a "watcher" sitting in the
+       panel: no camera, no offers, a black self tile, and the
+       panel offer rule deadlocks them against every other guest
+       (Ken's 2026-10-29 tournament-eve report). */
+    var member = !!(myPanel.am_member || myPanel.is_host
+                    || panelIndexOf(B.me) !== -1);
     forcedMuted = !!(member && myPanel.muted);
     if (member === amMember){
       membershipKnown = true;
@@ -7275,7 +7299,12 @@ function renderTopGifters(list){
   }
   function updateJoinButton(d){
     var btn = $('ctl-join'), msg = $('live-join-msg');
-    if (amMember){ btn.hidden = true; return; }
+    if (amMember){
+      btn.hidden = true;
+      msg.hidden = true;
+      delete msg.dataset.sticky;
+      return;
+    }
     btn.hidden = false;
     if (panel.length >= 9){
       btn.disabled = true;
@@ -7603,7 +7632,7 @@ function renderTopGifters(list){
         panel = (d.panel && d.panel.length) ? d.panel : fallbackPanel(d);
         panelById = {};
         panel.forEach(function(m){ panelById[m.user_id] = m; });
-        noteRoomArrivals(d);
+        try{ noteRoomArrivals(d); }catch(_e){}
         if (d.my_panel){
           myPanel = d.my_panel;
         } else {
@@ -7619,30 +7648,34 @@ function renderTopGifters(list){
         pendingInvites = d.pending_invites_for_me || [];
         activePoll = d.active_poll || null;
         closedPoll = d.last_closed_poll || null;
-        renderLivePoll();
+        try{ renderLivePoll(); }catch(_e){}
         activeGame = d.active_game || null;
         lastGame = d.last_game || null;
-        renderLiveGame();
+        try{ renderLiveGame(); }catch(_e){}
         battleState = d.battle || null;
         battleCandidates = d.battle_candidates || [];
-        renderBattle();
+        try{ renderBattle(); }catch(_e){}
         /* Live Tickets: balance, gift animations, top gifters,
            pinned shout — all ride the same poll. */
         if (typeof d.my_tickets === 'number'){
           myTickets = d.my_tickets;
-          paintTickets();
+          try{ paintTickets(); }catch(_e){}
         }
-        (d.recent_gifts || []).forEach(handleGiftEvent);
+        (d.recent_gifts || []).forEach(function(g){
+          try{ handleGiftEvent(g); }catch(_e){}
+        });
         window.__capUid = d.captain_id || null;
         try{renderPrompt(d);}catch(_e){}
         try{renderShop(d.shop || [], d.shop_stats || {});}catch(_e){}
         try{renderAuction(d.auction || null, d);}catch(_e){}
         try{applyPendingVoice();}catch(_e){}
-        renderTopGifters(d.top_gifters || []);
+        try{ renderTopGifters(d.top_gifters || []); }catch(_e){}
         var shoutChanged = JSON.stringify(d.active_shout || null)
           !== JSON.stringify(activeShout);
-        if (shoutChanged) renderShout(d.active_shout || null);
-        else tickShout();
+        try{
+          if (shoutChanged) renderShout(d.active_shout || null);
+          else tickShout();
+        }catch(_e){}
         /* Build X: the panel grid's shared state rides the same
            poll — open/closed, the host's boxes, my own standing
            ask (it paints the empty squares' faces). */
@@ -7694,9 +7727,9 @@ function renderTopGifters(list){
           }
         });
         reqPrimed = true;
-        renderRequests(d.pending_requests || []);
-        renderWatchers(watchersList);
-        renderInviteBanner();
+        try{ renderRequests(d.pending_requests || []); }catch(_e){}
+        try{ renderWatchers(watchersList); }catch(_e){}
+        try{ renderInviteBanner(); }catch(_e){}
         updateControls();
         updateJoinButton(d);
       })
