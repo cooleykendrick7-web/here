@@ -15278,14 +15278,16 @@ async def owner_artists(request: Request):
             "u.id = a.user_id WHERE a.status='new' "
             "ORDER BY a.id").fetchall():
         apps.append({**dict(r), "stats": _artist_stats(
-            r["user_id"])})
+            r["user_id"]),
+            "tracks": _media_tracks_for(r["user_id"])})
     verified, hopefuls = [], []
     for r in conn.execute(
             "SELECT id, name, email, artist_verified, "
             "artist_contract, media_mode FROM users WHERE "
             "artist_verified=1 OR media_mode='artist' "
             "ORDER BY artist_verified DESC, id").fetchall():
-        entry = {**dict(r), "stats": _artist_stats(r["id"])}
+        entry = {**dict(r), "stats": _artist_stats(r["id"]),
+                 "tracks": _media_tracks_for(r["id"])}
         entry["contract_ready"] = bool(
             entry["stats"]["plays"] >= ARTIST_PLAYS_TARGET)
         (verified if r["artist_verified"] else hopefuls).append(

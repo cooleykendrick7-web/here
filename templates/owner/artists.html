@@ -37,7 +37,7 @@
   {% for a in apps %}
   <tr>
     <td><strong>{{ a.name|e }}</strong><br><span style="color:#9a9a9a">{{ a.email|e }}</span></td>
-    <td>{{ a.stats.plays }} plays · {{ a.stats.likes }} likes · {{ a.stats.tracks }} tracks</td>
+    <td>{{ a.stats.plays }} plays · {{ a.stats.likes }} likes · {{ a.stats.tracks }} tracks{% for t in a.tracks %}<div style="margin-top:6px"><span style="font-size:12.5px">🎵 {{ t.title|e }} · {{ t.plays }} plays · {{ t.likes }} likes{% if t.rights != 'own' %} · <em>listening only</em>{% endif %}</span><br><audio controls preload="none" src="{{ t.src|e }}" style="height:32px;max-width:260px;width:100%"></audio></div>{% endfor %}</td>
     <td style="max-width:300px">{{ a.note|e }}</td>
     <td style="white-space:nowrap">
       <form method="post" action="/owner/artists/app/{{ a.id }}/approve" style="display:inline"><button class="btn" type="submit">🎤 Verify</button></form>
@@ -55,7 +55,7 @@
   {% for v in verified %}
   <tr>
     <td><strong>{{ v.name|e }}</strong></td>
-    <td>{{ v.stats.plays }} plays · {{ v.stats.likes }} likes · {{ v.stats.gift_tickets }} 🎟️ gifted{% if v.contract_ready %} · <span class="pill" style="background:#e6ffef;border-color:#1d9e50;color:#0c6b32">📄 CONTRACT-READY ({{ plays_target }}+ plays)</span>{% endif %}</td>
+    <td>{{ v.stats.plays }} plays · {{ v.stats.likes }} likes · {{ v.stats.gift_tickets }} 🎟️ gifted{% for t in v.tracks %}<div style="margin-top:6px"><span style="font-size:12.5px">🎵 {{ t.title|e }} · {{ t.plays }} plays · {{ t.likes }} likes{% if t.rights != 'own' %} · <em>listening only</em>{% endif %}</span><br><audio controls preload="none" src="{{ t.src|e }}" style="height:32px;max-width:260px;width:100%"></audio></div>{% endfor %}{% if v.contract_ready %} · <span class="pill" style="background:#e6ffef;border-color:#1d9e50;color:#0c6b32">📄 CONTRACT-READY ({{ plays_target }}+ plays)</span>{% endif %}</td>
     <td>{{ v.artist_contract or '—' }}</td>
     <td style="white-space:nowrap">
       {% if not v.artist_contract or v.artist_contract == 'ended' %}
@@ -80,7 +80,7 @@
   {% for h in hopefuls %}
   <tr>
     <td><strong>{{ h.name|e }}</strong></td>
-    <td>{{ h.stats.plays }} plays · {{ h.stats.likes }} likes · {{ h.stats.tracks }} tracks</td>
+    <td>{{ h.stats.plays }} plays · {{ h.stats.likes }} likes · {{ h.stats.tracks }} tracks{% for t in h.tracks %}<div style="margin-top:6px"><span style="font-size:12.5px">🎵 {{ t.title|e }} · {{ t.plays }} plays · {{ t.likes }} likes{% if t.rights != 'own' %} · <em>listening only</em>{% endif %}</span><br><audio controls preload="none" src="{{ t.src|e }}" style="height:32px;max-width:260px;width:100%"></audio></div>{% endfor %}</td>
     <td><form method="post" action="/owner/artists/{{ h.id }}/verify"><button class="btn" type="submit">🎤 Verify them</button></form></td>
   </tr>
   {% endfor %}

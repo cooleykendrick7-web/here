@@ -109,6 +109,9 @@ r = OWN.get("/owner/artists")
 check("owner artists page lists the application",
       r.status_code == 200 and "Ari Artist" in r.text
       and "southern soul" in r.text)
+check("owner can LISTEN to the applicant's tracks in-panel",
+      "<audio" in r.text and "/uploads/" in r.text
+      and "First Song" in r.text)
 APP_ID = dbq("SELECT id FROM artist_applications WHERE user_id=?",
              (ART,))[0]["id"]
 r = OWN.post(f"/owner/artists/app/{APP_ID}/approve",
