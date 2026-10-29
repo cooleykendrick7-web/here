@@ -15,6 +15,17 @@
 #mv-feed{flex:1;overflow-y:auto;scroll-snap-type:y mandatory;
   -webkit-overflow-scrolling:touch;scrollbar-width:none}
 #mv-feed::-webkit-scrollbar{display:none}
+.mv-ad{background:linear-gradient(160deg,#2b1055,#e01e26 130%);color:#fff}
+.mv-ad-media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.mv-ad-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.25),rgba(0,0,0,0) 34%,rgba(0,0,0,.72) 88%)}
+.mv-ad-chip{position:absolute;top:14px;left:12px;z-index:4;background:rgba(0,0,0,.55);color:#ffd97a;font-weight:800;font-size:12px;padding:4px 10px;border-radius:999px;letter-spacing:.4px}
+.mv-ad-hide{position:absolute;top:10px;right:10px;z-index:4;background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:32px;height:32px;font-size:15px;cursor:pointer}
+.mv-ad-info{position:absolute;left:12px;right:76px;bottom:0;z-index:3;padding:14px 0 18px}
+.mv-ad-sponsor{display:flex;align-items:center;gap:8px;font-weight:800;font-size:15px}
+.mv-ad-sponsor img{width:30px;height:30px;border-radius:50%;object-fit:cover}
+.mv-ad-title{font-size:19px;font-weight:800;margin-top:10px;line-height:1.25}
+.mv-ad-body{font-size:14.5px;color:#eee;margin-top:5px;line-height:1.4}
+.mv-ad-cta{display:inline-block;margin-top:12px;background:#fff;color:#111;font-weight:800;padding:10px 18px;border-radius:999px;text-decoration:none}
 .mv-cell{position:relative;height:100%;min-height:100%;scroll-snap-align:start;
   scroll-snap-stop:always;background:#000;overflow:hidden}
 .mv-cell video{position:absolute;inset:0;width:100%;height:100%;
@@ -428,6 +439,9 @@
         loadedIds[item.post_id] = true;
         appendCell(item);
       });
+      ((d && d.ads) || []).forEach(function (card) {
+        appendAdCell(card);
+      });
       if (!entries.length) renderEmptyState();
     }).catch(function () {
       loading = false;
@@ -789,6 +803,97 @@
     } else {
       feedEl.appendChild(card);
     }
+  }
+
+  /* ---------------- sponsored slides ----------------
+     A Sponsored slide is a plain feed child (like the interest
+     cards): it scroll-snaps like a peep but never joins the
+     player entries, so playback logic never sees it. A video ad
+     runs its own little observer — plays only while it is the
+     slide on screen, pauses the moment it leaves. */
+  var adObserver = new IntersectionObserver(function (list) {
+    list.forEach(function (rec) {
+      var v = rec.target;
+      if (rec.intersectionRatio >= 0.5) {
+        var pr = v.play();
+        if (pr) pr.catch(function () {});
+      } else {
+        try { v.pause(); } catch (e) {}
+      }
+    });
+  }, {root: feedEl, threshold: [0, 0.5, 1]});
+
+  function appendAdCell(card) {
+    if (!card) return;
+    var cell = document.createElement('div');
+    cell.className = 'mv-cell mv-ad';
+    cell.setAttribute('data-ad-id', card.id);
+    if (card.layout === 'media' && card.media_path) {
+      var im = document.createElement('img');
+      im.className = 'mv-ad-media';
+      im.src = '/uploads/' + card.media_path;
+      im.alt = '';
+      cell.appendChild(im);
+    } else if (card.layout === 'video' && card.media_path) {
+      var vd = document.createElement('video');
+      vd.className = 'mv-ad-media';
+      vd.src = '/uploads/' + card.media_path;
+      vd.loop = true; vd.muted = true;
+      vd.setAttribute('playsinline', '');
+      vd.preload = 'metadata';
+      cell.appendChild(vd);
+      adObserver.observe(vd);
+    }
+    var shade = document.createElement('div');
+    shade.className = 'mv-ad-shade';
+    cell.appendChild(shade);
+    var chip = document.createElement('div');
+    chip.className = 'mv-ad-chip';
+    chip.textContent = '📣 Sponsored';
+    cell.appendChild(chip);
+    var hide = document.createElement('button');
+    hide.type = 'button';
+    hide.className = 'mv-ad-hide';
+    hide.textContent = '✕';
+    hide.setAttribute('aria-label', 'Hide this ad');
+    hide.addEventListener('click', function () {
+      if (card.hide_url) {
+        fetch(card.hide_url, {method: 'POST',
+          credentials: 'same-origin'}).catch(function () {});
+      }
+      if (cell.parentNode) cell.parentNode.removeChild(cell);
+    });
+    cell.appendChild(hide);
+    var info = document.createElement('div');
+    info.className = 'mv-ad-info';
+    var sponsor = document.createElement('div');
+    sponsor.className = 'mv-ad-sponsor';
+    if (card.sponsor_avatar) {
+      var av = document.createElement('img');
+      av.src = card.sponsor_avatar; av.alt = '';
+      sponsor.appendChild(av);
+    }
+    var sname = document.createElement('span');
+    sname.textContent = card.sponsor_name || 'HERE';
+    sponsor.appendChild(sname);
+    info.appendChild(sponsor);
+    var title = document.createElement('div');
+    title.className = 'mv-ad-title';
+    title.textContent = card.title || '';
+    info.appendChild(title);
+    if (card.body) {
+      var body = document.createElement('div');
+      body.className = 'mv-ad-body';
+      body.textContent = card.body;
+      info.appendChild(body);
+    }
+    var cta = document.createElement('a');
+    cta.className = 'mv-ad-cta';
+    cta.href = card.click_url || '#';
+    cta.textContent = card.cta_label || 'Learn more';
+    info.appendChild(cta);
+    cell.appendChild(info);
+    feedEl.appendChild(cell);
   }
 
   /* ---------------- react / follow ---------------- */

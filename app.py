@@ -5549,8 +5549,39 @@ async def views_feed_json(request: Request):
     except (TypeError, ValueError):
         limit = 10
     limit = max(1, min(20, limit))
-    return JSONResponse({"ok": True, "tag": tag,
-                         "views": _views_feed(user, tag, offset, limit)})
+    views = _views_feed(user, tag, offset, limit)
+    resp = {"ok": True, "tag": tag, "views": views}
+    # Sponsors in Peeps (Ken's order): every 8 peeps crossed by
+    # this page earns one Sponsored slide, chosen by the same ads
+    # engine as the home feed (schedule, rotation, per-user daily
+    # caps) with the impression recorded at serve. Ads ride
+    # BESIDE the peeps list — never inside it — so the client's
+    # offset math (peeps only) can never skip or repeat a peep.
+    crossed = (offset + len(views)) // 8 - offset // 8
+    if crossed > 0:
+        conn = db()
+        chosen = ads.pick_feed_ads(
+            conn, user["id"], crossed,
+            now=_chicago_now().replace(tzinfo=None))
+        cards = []
+        for ad in chosen:
+            sponsor_name, sponsor_avatar = "HERE", ""
+            if ad.get("kind") == "page" and ad.get("page_id"):
+                pg = conn.execute(
+                    "SELECT name, cover FROM pages WHERE id=?",
+                    (ad["page_id"],)).fetchone()
+                if pg:
+                    sponsor_name = pg["name"]
+                    sponsor_avatar = avatar_url(pg["cover"] or "")
+            cards.append(ads.compose_card(ad, sponsor_name,
+                                          sponsor_avatar))
+            ads.record_impression(conn, ad["id"], user["id"])
+        if chosen:
+            conn.commit()
+        conn.close()
+        if cards:
+            resp["ads"] = cards
+    return JSONResponse(resp)
 
 
 @app.get("/views/trending")
