@@ -11380,10 +11380,65 @@ DEFAULT_ICE_SERVERS = [
 ]
 
 
+_CF_ICE_CACHE = {"exp": 0.0, "servers": None}
+
+
+def _cf_turn_fetch(key_id, token):
+    """One Cloudflare Realtime call: mint ephemeral TURN
+    credentials (24h TTL). Returns one normalized
+    RTCIceServer dict, or None on a bad response. Kept as
+    its own function so the suite can stand in for the
+    network."""
+    import urllib.request as _ur
+    body = json.dumps({"ttl": 86400}).encode()
+    req = _ur.Request(
+        "https://rtc.live.cloudflare.com/v1/turn/keys/"
+        + key_id + "/credentials/generate",
+        data=body, method="POST",
+        headers={"Authorization": "Bearer " + token,
+                 "Content-Type": "application/json"})
+    with _ur.urlopen(req, timeout=4) as resp:
+        data = json.loads(resp.read().decode())
+    srv = (data or {}).get("iceServers") or {}
+    if not srv.get("urls"):
+        return None
+    return {"urls": srv["urls"],
+            "username": srv.get("username") or "",
+            "credential": srv.get("credential") or ""}
+
+
+def _cf_ice_servers():
+    """STUN + fresh Cloudflare TURN when the CF keys are in
+    the env; cached until an hour before the minted
+    credentials expire. None when unconfigured or the mint
+    fails — the caller then serves the built-in defaults,
+    exactly as before this layer existed."""
+    key_id = os.environ.get("HERE_CF_TURN_KEY_ID", "").strip()
+    token = os.environ.get("HERE_CF_TURN_TOKEN", "").strip()
+    if not key_id or not token:
+        return None
+    now = time.time()
+    if _CF_ICE_CACHE["servers"] \
+            and _CF_ICE_CACHE["exp"] > now + 3600:
+        return [dict(e) for e in _CF_ICE_CACHE["servers"]]
+    try:
+        srv = _cf_turn_fetch(key_id, token)
+    except Exception:
+        srv = None
+    if not srv:
+        return None
+    out = [dict(e) for e in DEFAULT_ICE_SERVERS[:2]] + [srv]
+    _CF_ICE_CACHE["servers"] = out
+    _CF_ICE_CACHE["exp"] = now + 86400
+    return [dict(e) for e in out]
+
+
 def get_ice_servers():
-    """ICE servers for /ice.json: the HERE_ICE_SERVERS env override
-    (JSON) when set AND valid (a non-empty list of dicts each with a
-    'urls'), else the built-in STUN + Open Relay defaults."""
+    """ICE servers for /ice.json, in order: the HERE_ICE_SERVERS
+    env override (JSON) when set AND valid; ephemeral Cloudflare
+    TURN when its keys are in the env; else the built-in STUN +
+    Open Relay defaults."""
+
     raw = os.environ.get("HERE_ICE_SERVERS", "")
     if raw and raw.strip():
         try:
@@ -11395,6 +11450,9 @@ def get_ice_servers():
                    if isinstance(e, dict) and e.get("urls")]
             if out:
                 return out
+    cf = _cf_ice_servers()
+    if cf:
+        return cf
     return [dict(e) for e in DEFAULT_ICE_SERVERS]
 
 

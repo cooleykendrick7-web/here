@@ -46,6 +46,20 @@ check("/ice.json default includes stun: URLs",
 check("/ice.json default includes turn: URLs (Open Relay)",
       any(str(u).startswith("turn:") for u in urls)
       and any("openrelay" in str(u) for u in urls), str(urls))
+# Build W1: the full documented Open Relay set — the relay paths
+# that survive strict phone / captive networks.
+check("W1: default includes stun:openrelay.metered.ca:80",
+      "stun:openrelay.metered.ca:80" in urls, str(urls))
+check("W1: default includes turn:openrelay.metered.ca:3478 (UDP)",
+      "turn:openrelay.metered.ca:3478" in urls, str(urls))
+check("W1: default includes turns: TLS on 443/tcp",
+      "turns:openrelay.metered.ca:443?transport=tcp" in urls,
+      str(urls))
+check("W1: pre-W1 entries kept (turn :80, :443, :443/tcp)",
+      all(u in urls for u in (
+          "turn:openrelay.metered.ca:80",
+          "turn:openrelay.metered.ca:443",
+          "turn:openrelay.metered.ca:443?transport=tcp")), str(urls))
 check("get_ice_servers() matches the endpoint payload",
       here.get_ice_servers() == servers)
 
@@ -87,6 +101,66 @@ for tpl in ("live.html", "base.html"):
     check(f"{tpl} keeps the hardcoded ICE fallback literal",
           "turn:openrelay.metered.ca:443" in text
           and "ICE_CONFIG" in text)
+    check(f"W1: {tpl} fallback carries the turns: TLS entry",
+          "turns:openrelay.metered.ca:443?transport=tcp" in text)
+    check(f"W1: {tpl} fallback carries turn :3478 + openrelay stun",
+          "turn:openrelay.metered.ca:3478" in text
+          and "stun:openrelay.metered.ca:80" in text)
+
+# ---- Cloudflare TURN layer (tournament fix, Oct 29) ----
+os.environ["HERE_CF_TURN_KEY_ID"] = "key123"
+os.environ["HERE_CF_TURN_TOKEN"] = "tok456"
+_cf_calls = {"n": 0}
+
+
+def _fake_fetch(key_id, token):
+    _cf_calls["n"] += 1
+    assert key_id == "key123" and token == "tok456"
+    return {"urls": ["turn:turn.cloudflare.com:3478?transport=udp",
+                     "turns:turn.cloudflare.com:443?transport=tcp"],
+            "username": "cf-user", "credential": "cf-cred"}
+
+
+_orig_fetch = here._cf_turn_fetch
+here._cf_turn_fetch = _fake_fetch
+here._CF_ICE_CACHE["servers"] = None
+here._CF_ICE_CACHE["exp"] = 0.0
+r = C.get("/ice.json")
+servers = (r.json() or {}).get("iceServers") or []
+urls = []
+for s in servers:
+    u = s.get("urls")
+    urls.extend(u if isinstance(u, list) else [u])
+check("CF: /ice.json serves Cloudflare TURN when keys are set",
+      any("turn.cloudflare.com" in str(u) for u in urls),
+      str(urls))
+check("CF: Open Relay gone while Cloudflare answers",
+      not any("openrelay" in str(u) for u in urls), str(urls))
+r = C.get("/ice.json")
+check("CF: credentials cached, not re-minted per request",
+      _cf_calls["n"] == 1, str(_cf_calls))
+
+
+def _boom(key_id, token):
+    raise RuntimeError("network down")
+
+
+here._cf_turn_fetch = _boom
+here._CF_ICE_CACHE["servers"] = None
+here._CF_ICE_CACHE["exp"] = 0.0
+r = C.get("/ice.json")
+servers = (r.json() or {}).get("iceServers") or []
+urls = []
+for s in servers:
+    u = s.get("urls")
+    urls.extend(u if isinstance(u, list) else [u])
+check("CF: mint failure falls back to Open Relay defaults",
+      any("openrelay" in str(u) for u in urls), str(urls))
+here._cf_turn_fetch = _orig_fetch
+os.environ.pop("HERE_CF_TURN_KEY_ID", None)
+os.environ.pop("HERE_CF_TURN_TOKEN", None)
+here._CF_ICE_CACHE["servers"] = None
+here._CF_ICE_CACHE["exp"] = 0.0
 
 fails = [n for n, ok in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} passed")
