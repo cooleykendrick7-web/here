@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>App Suggestions — Owner — HERE</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;padding:20px}
+a{color:#ff8f98;text-decoration:none}
+.topbar{display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+.brand{font-size:34px;font-weight:900;color:#ffd400}
+.topbar h1{font-size:22px}
+.topbar .spacer{flex:1}
+.logout{color:#9a9a9a;font-size:14px}
+section{margin-bottom:28px}
+.table-wrap{overflow-x:auto;background:#141414;border:1px solid #2a2a2a;border-radius:10px}
+table.admin{width:100%;border-collapse:collapse;font-size:13px}
+table.admin th{background:#1f1f1f;color:#ffd400;text-align:left;padding:9px 10px;font-size:12px;white-space:nowrap}
+table.admin td{padding:8px 10px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+table.admin tr:last-child td{border-bottom:none}
+.status-pill{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 9px;background:#333;color:#fff}
+.status-pill.pending{background:#d41f2e}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer}
+.btn-ghost{display:inline-block;background:#2a2a2a;color:#f0f0f0;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer}
+.inline-form{display:inline}
+.empty{color:#9a9a9a;font-size:14px;padding:14px}
+.note{color:#9a9a9a;font-size:13.5px;margin-bottom:12px;line-height:1.55}
+.idea{max-width:420px;line-height:1.5}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">H</span>
+  <h1>💡 App Suggestions — the people's build list</h1>
+  <span class="spacer"></span>
+  <a class="btn-ghost" href="/owner">← Owner Panel</a>
+  <a class="logout" href="/owner/logout">Logout</a>
+</div>
+
+<p class="note">Ideas from Settings → “Help build HERE”. Milli reviews new ones and brings you the best in chat. Mark <strong>Shipped</strong> and the suggester gets a thank-you notification automatically.</p>
+
+<section>
+  {% if suggestions %}
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>From</th><th>Idea</th><th>Status</th><th>Sent</th><th>Set status</th></tr></thead>
+      <tbody>
+      {% for s in suggestions %}
+        <tr>
+          <td><a href="/user/{{ s.user_id }}">{{ s.uname|e }}</a></td>
+          <td class="idea">{{ s.text|e }}</td>
+          <td><span class="status-pill {% if s.status == 'new' %}pending{% endif %}">{{ labels[s.status] or s.status }}</span></td>
+          <td>{{ s.created_at[:10] }}</td>
+          <td>
+            {% for st in ['approved', 'built', 'passed', 'new'] %}
+            {% if st != s.status %}
+            <form class="inline-form" action="/owner/suggestions/{{ s.id }}/status" method="post"><input type="hidden" name="status" value="{{ st }}"><button class="btn-ghost" type="submit">{{ labels[st] }}</button></form>
+            {% endif %}
+            {% endfor %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No suggestions yet. They'll land here the moment someone uses the box in Settings.</p>
+  {% endif %}
+</section>
+
+</body>
+</html>

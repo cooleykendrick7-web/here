@@ -234,6 +234,32 @@
   </form>
 </div>
 
+<div class="card" id="ideas">
+  <div class="section-title">💡 Help build HERE</div>
+  <p style="margin-top:8px;color:var(--muted)">You use HERE every day — so help develop it. Drop an idea for the app below. Every suggestion is read and reviewed by AI, the best ones are brought to the owner, and when your idea ships you get the credit (and a thank-you in your notifications). The people build this place now.</p>
+  {% if idea_flash == 'sent' %}<p style="margin-top:10px;color:#1d9e50;font-weight:700">✅ Idea sent — it's in the review queue. Thank you!</p>
+  {% elif idea_flash == 'many' %}<p style="margin-top:10px;color:#c0392b;font-weight:700">That's 5 ideas today — plenty for the review pile. More tomorrow!</p>
+  {% elif idea_flash == 'bad' %}<p style="margin-top:10px;color:#c0392b;font-weight:700">Give the idea a few more words (5–600 characters) so the reviewers can run with it.</p>{% endif %}
+  <form action="/settings/suggest" method="post" style="margin-top:12px">
+    <div class="field">
+      <label for="idea-text" style="font-weight:600">Your idea for HERE</label>
+      <textarea id="idea-text" name="text" rows="3" maxlength="600" required placeholder="Example: let hosts pin a comment at the top of a live…" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14.5px"></textarea>
+    </div>
+    <button type="submit" class="btn">Send idea</button>
+  </form>
+  {% if my_suggestions %}
+  <div style="margin-top:16px">
+    <div style="font-weight:700;margin-bottom:8px">Your ideas so far</div>
+    {% for s in my_suggestions %}
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--border)">
+      <div style="flex:1;font-size:14.5px">{{ s.text|e }}</div>
+      <div style="white-space:nowrap;font-size:12.5px;font-weight:700">{{ s.label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
 <div class="card" id="privacy">
   <div class="section-title">🔒 Privacy</div>
   <p style="margin-top:8px;color:var(--muted)">When your profile is private, only your friends can see your profile and your posts. People can still find you in search (with a 🔒) and send you a friend request.</p>

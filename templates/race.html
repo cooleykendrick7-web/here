@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}🏁 The $100 Invite Race — HERE{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:0 auto;padding:8px 2px 30px">
+  <div style="text-align:center;padding:22px 14px 8px">
+    <div style="font-size:44px">🏁</div>
+    <h1 style="font-size:26px;margin:6px 0 4px">The $100 Invite Race</h1>
+    <p style="opacity:.85;margin:0 auto;max-width:480px">Bring the most <strong>real</strong> people to HERE and take home <strong>$100 cash</strong>. Second place wins 1,000 🎟️, third takes 500 🎟️. A join only counts when your person actually uses HERE — posts, joins a live, or uses tickets. Ghost signups don't move the needle.</p>
+    <p style="font-weight:900;margin:14px 0 0;font-size:17px">
+      {% if phase == 'before' %}⏰ Starts Oct 30 — get your link ready
+      {% elif phase == 'open' %}🔥 The race is ON — ends Nov 15 at midnight
+      {% else %}🏁 The race has ended — winner being verified{% endif %}
+    </p>
+    <p style="opacity:.75;margin:6px 0 0">You need at least <strong>{{ min_qualified }} real joins</strong> to take the cash. Ties go to whoever got there first. The winner is verified by the owner before payout — real people only.</p>
+  </div>
+
+  {% if mine %}
+  <div class="card" style="margin-top:16px">
+    <div class="section-title">🏁 Your race</div>
+    <p style="font-size:15px;margin-top:6px">You have <strong>{{ mine.qualified }}</strong> real join{{ 's' if mine.qualified != 1 }} ({{ mine.raw }} signup{{ 's' if mine.raw != 1 }}) — {{ [min_qualified - mine.qualified, 0]|max }} more real joins to qualify for the $100.</p>
+    <div style="background:#e4e6eb;border-radius:6px;height:10px;margin-top:8px;overflow:hidden"><div style="background:var(--red);height:100%;width:{{ [mine.qualified * 100 // min_qualified, 100]|min }}%"></div></div>
+    <p style="margin-top:10px"><a class="btn" href="/invite">🔗 Get my invite link</a></p>
+  </div>
+  {% endif %}
+
+  <div style="display:flex;flex-direction:column;gap:8px;margin-top:18px">
+    {% for b in board %}
+    <div style="display:flex;align-items:center;gap:12px;background:var(--card-bg,#fff);border:1px solid var(--border,#ddd);border-radius:12px;padding:10px 14px">
+      <div style="font-size:20px;width:34px;text-align:center">{% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}{{ loop.index }}{% endif %}</div>
+      {% if b.avatar %}<img src="{{ b.avatar|e }}" alt="" style="width:40px;height:40px;border-radius:50%;object-fit:cover">{% endif %}
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:800"><a href="/user/{{ b.user_id }}">{{ b.name|e }}</a>{% if b.founding_no %} <span title="Original member">🏅 #{{ b.founding_no }}</span>{% endif %}{% if b.is_plus %} ⭐{% endif %}</div>
+        <div style="background:#e4e6eb;border-radius:6px;height:8px;margin-top:5px;overflow:hidden"><div style="background:#1d9e50;height:100%;width:{{ b.pct }}%"></div></div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-weight:900;font-size:17px">{{ b.qualified }} real</div>
+        <div style="font-size:12px;opacity:.7">{{ b.raw }} joined</div>
+      </div>
+    </div>
+    {% else %}
+    <p style="text-align:center;opacity:.75;padding:18px 6px">No racers yet — the board is wide open. First to {{ min_qualified }} real joins takes the $100.</p>
+    {% endfor %}
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <div class="section-title">📜 How it works</div>
+    <ul style="margin:10px 0 0 18px;line-height:1.65;font-size:14.5px">
+      <li>Share your personal invite link from the <a href="/invite">Invite page</a> — every signup through it is credited to you.</li>
+      <li>A join counts as <strong>real</strong> when that person posts, joins a live, or uses tickets. Signups that never do anything don't count toward the prizes.</li>
+      <li>Race window: <strong>Oct 30 – Nov 15, 2026</strong> (Chicago time). Most real joins wins $100 cash; 2nd = 1,000 🎟️, 3rd = 500 🎟️.</li>
+      <li>You also keep earning the standing <strong>10% invite bonus</strong> on everything your people earn — that never ends.</li>
+      <li>One real person, one account. The owner reviews the winner's joins before payout; fake or farmed accounts are removed and don't count.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invite Race — Owner — HERE</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;padding:20px}
+a{color:#ff8f98;text-decoration:none}
+.topbar{display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+.brand{font-size:34px;font-weight:900;color:#ffd400}
+.topbar h1{font-size:22px}
+.topbar .spacer{flex:1}
+.logout{color:#9a9a9a;font-size:14px}
+section{margin-bottom:28px}
+section>h2{font-size:18px;margin-bottom:10px;color:#ffd400}
+.table-wrap{overflow-x:auto;background:#141414;border:1px solid #2a2a2a;border-radius:10px}
+table.admin{width:100%;border-collapse:collapse;font-size:13px}
+table.admin th{background:#1f1f1f;color:#ffd400;text-align:left;padding:9px 10px;font-size:12px;white-space:nowrap}
+table.admin td{padding:8px 10px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+table.admin tr:last-child td{border-bottom:none}
+.status-pill{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 9px;background:#333;color:#fff}
+.status-pill.pending{background:#d41f2e}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer}
+.btn-ghost{display:inline-block;background:#2a2a2a;color:#f0f0f0;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer}
+.empty{color:#9a9a9a;font-size:14px;padding:14px}
+.note{color:#9a9a9a;font-size:13.5px;margin-bottom:12px;line-height:1.55}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">H</span>
+  <h1>🏁 $100 Invite Race — Owner Monitor</h1>
+  <span class="spacer"></span>
+  <a class="btn-ghost" href="/owner">← Owner Panel</a>
+  <a class="logout" href="/owner/logout">Logout</a>
+</div>
+
+<p class="note">Phase: <strong>{{ phase }}</strong> · Minimum to take the cash: <strong>{{ min_qualified }} real joins</strong>. A join is REAL when the invited account posted, joined a live, or touched tickets. Review the drill-down before paying anyone — last-active and per-person activity expose farming at a glance.</p>
+
+<section>
+  <h2>Leaderboard</h2>
+  {% if board %}
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>#</th><th>Racer</th><th>Real joins</th><th>Raw signups</th><th>Qualified?</th></tr></thead>
+      <tbody>
+      {% for b in board %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><a href="/user/{{ b.user_id }}">{{ b.name|e }}</a>{% if b.founding_no %} 🏅 #{{ b.founding_no }}{% endif %}</td>
+          <td><strong>{{ b.qualified }}</strong></td>
+          <td>{{ b.raw }}</td>
+          <td>{% if b.qualified >= min_qualified %}<span class="status-pill" style="background:#1d9e50">IN THE MONEY ZONE</span>{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No invites inside the race window yet.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Drill-down — top racers' people</h2>
+  {% for d in drill %}
+  <h3 style="margin:16px 0 8px">{{ d.inviter.name|e }} — {{ d.inviter.qualified }} real / {{ d.inviter.raw }} raw</h3>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>Person</th><th>Joined</th><th>Posts</th><th>Lives</th><th>Ticket txns</th><th>Real?</th><th>Last active (UTC)</th></tr></thead>
+      <tbody>
+      {% for p in d.invitees %}
+        <tr>
+          <td><a href="/user/{{ p.id }}">{{ p.name|e }}</a></td>
+          <td>{{ p.joined[:10] }}</td>
+          <td>{{ p.posts }}</td>
+          <td>{{ p.lives }}</td>
+          <td>{{ p.txns }}</td>
+          <td>{% if p.qualified %}<span class="status-pill" style="background:#1d9e50">REAL</span>{% else %}<span class="status-pill pending">GHOST</span>{% endif %}</td>
+          <td>{{ p.last_active[:16].replace('T',' ') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">Nothing to drill into yet.</p>
+  {% endfor %}
+</section>
+
+</body>
+</html>

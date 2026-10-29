@@ -1261,6 +1261,12 @@ def init_db():
         sched_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
         created_at TEXT NOT NULL DEFAULT '',
         PRIMARY KEY(sched_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS app_suggestions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'new',
+        created_at TEXT NOT NULL DEFAULT '',
+        decided_at TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
         user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
@@ -3854,6 +3860,7 @@ async def invite_page(request: Request):
         "SELECT COALESCE(SUM(tickets),0) AS s FROM ticket_txns "
         "WHERE user_id=? AND kind='invite_bonus'",
         (user["id"],)).fetchone()["s"]
+    _race = _race_mine(_bc, user["id"])
     _bc.close()
     count = len(invitees)
     link = _abs_url(request, "/join/" + code)
@@ -3863,6 +3870,9 @@ async def invite_page(request: Request):
                    "?size=180x180&data=" + quote(link, safe="")),
         "invitees": invitees, "count": count,
         "bonus_total": bonus_total,
+        "race": {**_race,
+                 "phase": _race_phase(),
+                 "min": RACE_MIN_QUALIFIED},
         "gold_at": 3, "insider_at": 10,
         "gold_pct": min(100, int(count * 100 / 3)),
         "insider_pct": min(100, int(count * 100 / 10)),
@@ -8852,8 +8862,18 @@ async def profile_edit_page(request: Request):
         "SELECT u.id, u.name FROM blocks b JOIN users u "
         "ON u.id=b.blocked_id WHERE b.blocker_id=? ORDER BY u.name",
         (user["id"],)).fetchall()]
+    _my_sugg = [{"text": r["text"], "status": r["status"],
+                 "label": SUGGESTION_STATUS_LABELS.get(
+                     r["status"], r["status"]),
+                 "created_at": r["created_at"]}
+                for r in conn.execute(
+                    "SELECT text, status, created_at FROM "
+                    "app_suggestions WHERE user_id=? ORDER BY id "
+                    "DESC LIMIT 10", (user["id"],)).fetchall()]
     conn.close()
     return render(request, "profile_edit.html", {
+        "my_suggestions": _my_sugg,
+        "idea_flash": request.query_params.get("idea") or "",
         "icon_style": icon_style_of(user),
         "icon_styles": [(s, ICON_STYLE_LABELS[s]) for s in ICON_STYLES],
         "icon_previews": {s: {k: icon_html(k, s) for k in
@@ -12204,6 +12224,223 @@ async def page_shop_page(request: Request, pid: int):
                    if "avatar" in pg.keys() else "",
                    "listings": listings,
                    "back_url": f"/page/{pid}"})
+
+
+# ---------------- The $100 Invite Race (Ken, Oct 29) --------
+# "Sometimes you gotta pay to play." Whoever brings the most
+# REAL joins wins $100 cash; 2nd gets 1,000 tickets, 3rd 500 —
+# but a join only counts when the invited person actually uses
+# HERE (posts, joins a live, or touches tickets). Raw signups
+# are displayed for honesty but never decide the money: that is
+# what keeps the prize safe from fake-account farming. Minimum
+# 20 qualified joins to take the cash. Ken reviews the winner
+# in /owner/race before a dollar moves — his call, always.
+RACE_MIN_QUALIFIED = 20
+
+
+def _race_window():
+    start = datetime(2026, 10, 30, 0, 0,
+                     tzinfo=CHICAGO_TZ).astimezone(
+                         timezone.utc).isoformat()
+    end = datetime(2026, 11, 15, 23, 59, 59,
+                   tzinfo=CHICAGO_TZ).astimezone(
+                       timezone.utc).isoformat()
+    return start, end
+
+
+def _race_phase():
+    s, e = _race_window()
+    n = now_iso()
+    return "before" if n < s else ("after" if n > e else "open")
+
+
+_QUALIFIED_SQL = (
+    "(EXISTS(SELECT 1 FROM posts p WHERE p.user_id=u.id) "
+    "OR EXISTS(SELECT 1 FROM live_viewers v WHERE v.user_id=u.id) "
+    "OR EXISTS(SELECT 1 FROM ticket_txns t WHERE t.user_id=u.id))")
+
+
+def _race_board(conn, limit=20):
+    s, e = _race_window()
+    rows = conn.execute(
+        "SELECT u.invited_by AS inv, COUNT(*) AS raw, "
+        "SUM(CASE WHEN " + _QUALIFIED_SQL + " THEN 1 ELSE 0 END) "
+        "AS qualified, MAX(u.created_at) AS last_join "
+        "FROM users u WHERE u.invited_by IS NOT NULL "
+        "AND u.invited_by != u.id AND u.created_at >= ? "
+        "AND u.created_at <= ? GROUP BY u.invited_by "
+        "ORDER BY qualified DESC, raw DESC, last_join ASC",
+        (s, e)).fetchall()
+    out = []
+    for r in rows[:limit]:
+        inv = conn.execute(
+            "SELECT id, name, avatar, founding_no, plus_until "
+            "FROM users WHERE id=?", (r["inv"],)).fetchone()
+        if not inv:
+            continue
+        out.append({
+            "user_id": inv["id"], "name": inv["name"],
+            "avatar": inv["avatar"],
+            "founding_no": inv["founding_no"],
+            "is_plus": _is_plus(inv),
+            "raw": r["raw"], "qualified": r["qualified"] or 0,
+            "pct": min(100, int(100 * (r["qualified"] or 0)
+                                / RACE_MIN_QUALIFIED))})
+    return out
+
+
+def _race_mine(conn, uid):
+    s, e = _race_window()
+    r = conn.execute(
+        "SELECT COUNT(*) AS raw, SUM(CASE WHEN " + _QUALIFIED_SQL
+        + " THEN 1 ELSE 0 END) AS q FROM users u "
+        "WHERE u.invited_by=? AND u.created_at>=? "
+        "AND u.created_at<=?", (uid, s, e)).fetchone()
+    return {"raw": r["raw"] or 0, "qualified": r["q"] or 0}
+
+
+def _race_invitees(conn, inviter_id):
+    """The owner's truth view: who this inviter actually brought,
+    what each one DID, and when they were last alive on HERE."""
+    s, e = _race_window()
+    rows = conn.execute(
+        "SELECT id, name, avatar, created_at FROM users "
+        "WHERE invited_by=? AND created_at>=? AND created_at<=? "
+        "ORDER BY created_at", (inviter_id, s, e)).fetchall()
+    out = []
+    for u in rows:
+        posts = conn.execute(
+            "SELECT COUNT(*) c, MAX(created_at) m FROM posts "
+            "WHERE user_id=?", (u["id"],)).fetchone()
+        lv = conn.execute(
+            "SELECT COUNT(*) c, MAX(last_seen_at) m FROM "
+            "live_viewers WHERE user_id=?", (u["id"],)).fetchone()
+        tx = conn.execute(
+            "SELECT COUNT(*) c, MAX(created_at) m FROM ticket_txns "
+            "WHERE user_id=?", (u["id"],)).fetchone()
+        stamps = [x for x in (u["created_at"], posts["m"],
+                              lv["m"], tx["m"]) if x]
+        out.append({
+            "id": u["id"], "name": u["name"],
+            "avatar": u["avatar"], "joined": u["created_at"],
+            "posts": posts["c"], "lives": lv["c"],
+            "txns": tx["c"],
+            "qualified": bool(posts["c"] or lv["c"] or tx["c"]),
+            "last_active": max(stamps) if stamps else ""})
+    return out
+
+
+@app.get("/invite-race", response_class=HTMLResponse)
+async def invite_race_page(request: Request):
+    user = current_user(request)
+    conn = db()
+    board = _race_board(conn)
+    mine = _race_mine(conn, user["id"]) if user else None
+    conn.close()
+    return render(request, "race.html", {
+        "board": board, "mine": mine,
+        "phase": _race_phase(), "min_qualified": RACE_MIN_QUALIFIED,
+        "user": user})
+
+
+@app.get("/owner/race", response_class=HTMLResponse)
+async def owner_race_page(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    board = _race_board(conn, limit=25)
+    drill = [{"inviter": b, "invitees": _race_invitees(conn,
+              b["user_id"])} for b in board[:10]]
+    conn.close()
+    return render(request, "owner/race.html", {
+        "board": board, "drill": drill, "phase": _race_phase(),
+        "min_qualified": RACE_MIN_QUALIFIED})
+
+
+SUGGESTION_STATUS_LABELS = {
+    "new": "⏳ In review",
+    "approved": "✅ Approved — on the build list",
+    "built": "🚀 Shipped!",
+    "passed": "🙏 Passed for now",
+}
+
+
+@app.post("/settings/suggest")
+async def settings_suggest(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    text = str(form.get("text") or "").strip()
+    if len(text) < 5 or len(text) > 600:
+        return RedirectResponse(
+            "/settings/profile?idea=bad#ideas", status_code=303)
+    conn = db()
+    today = now_iso()[:10]
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM app_suggestions WHERE user_id=? "
+        "AND substr(created_at,1,10)=?", (user["id"], today)
+    ).fetchone()["c"]
+    if n >= 5:
+        conn.close()
+        return RedirectResponse(
+            "/settings/profile?idea=many#ideas", status_code=303)
+    conn.execute(
+        "INSERT INTO app_suggestions(user_id, text, status, "
+        "created_at) VALUES(?,?,'new',?)",
+        (user["id"], text, now_iso()))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(
+        "/settings/profile?idea=sent#ideas", status_code=303)
+
+
+@app.get("/owner/suggestions", response_class=HTMLResponse)
+async def owner_suggestions_page(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    rows = conn.execute(
+        "SELECT s.*, u.name AS uname, u.avatar AS uavatar "
+        "FROM app_suggestions s JOIN users u ON u.id=s.user_id "
+        "ORDER BY CASE s.status WHEN 'new' THEN 0 "
+        "WHEN 'approved' THEN 1 WHEN 'built' THEN 2 ELSE 3 END, "
+        "s.id DESC LIMIT 200").fetchall()
+    conn.close()
+    return render(request, "owner/suggestions.html",
+                  {"suggestions": [dict(r) for r in rows],
+                   "labels": SUGGESTION_STATUS_LABELS})
+
+
+@app.post("/owner/suggestions/{sid}/status")
+async def owner_suggestion_status(request: Request, sid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    form = await request.form()
+    status = str(form.get("status") or "")
+    if status not in SUGGESTION_STATUS_LABELS:
+        return RedirectResponse("/owner/suggestions",
+                                status_code=303)
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM app_suggestions WHERE id=?",
+        (sid,)).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE app_suggestions SET status=?, decided_at=? "
+            "WHERE id=?", (status, now_iso(), sid))
+        conn.commit()
+        if status == "built" and row["status"] != "built":
+            notify(row["user_id"], "suggestion",
+                   "💡 Your HERE idea shipped: “"
+                   + row["text"][:80] + "” — you helped build "
+                   "this place. Thank you!",
+                   "/settings/profile#ideas")
+    conn.close()
+    return RedirectResponse("/owner/suggestions", status_code=303)
 
 
 @app.get("/founders", response_class=HTMLResponse)
