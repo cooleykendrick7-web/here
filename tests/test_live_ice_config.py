@@ -116,9 +116,12 @@ _cf_calls = {"n": 0}
 def _fake_fetch(key_id, token):
     _cf_calls["n"] += 1
     assert key_id == "key123" and token == "tok456"
-    return {"urls": ["turn:turn.cloudflare.com:3478?transport=udp",
-                     "turns:turn.cloudflare.com:443?transport=tcp"],
-            "username": "cf-user", "credential": "cf-cred"}
+    # The real generate-ice-servers shape: a LIST — CF STUN
+    # plus the TURN entry carrying the ephemeral credential.
+    return [{"urls": ["stun:stun.cloudflare.com:3478"]},
+            {"urls": ["turn:turn.cloudflare.com:3478?transport=udp",
+                      "turns:turn.cloudflare.com:443?transport=tcp"],
+             "username": "cf-user", "credential": "cf-cred"}]
 
 
 _orig_fetch = here._cf_turn_fetch

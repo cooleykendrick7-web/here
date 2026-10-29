@@ -11385,26 +11385,42 @@ _CF_ICE_CACHE = {"exp": 0.0, "servers": None}
 
 def _cf_turn_fetch(key_id, token):
     """One Cloudflare Realtime call: mint ephemeral TURN
-    credentials (24h TTL). Returns one normalized
-    RTCIceServer dict, or None on a bad response. Kept as
-    its own function so the suite can stand in for the
+    credentials (24h TTL) via generate-ice-servers. Returns
+    the normalized LIST of RTCIceServer dicts (Cloudflare's
+    STUN + TURN set), or None on any failure. Kept as its
+    own function so the suite can stand in for the
     network."""
     import urllib.request as _ur
     body = json.dumps({"ttl": 86400}).encode()
     req = _ur.Request(
         "https://rtc.live.cloudflare.com/v1/turn/keys/"
-        + key_id + "/credentials/generate",
+        + key_id + "/credentials/generate-ice-servers",
         data=body, method="POST",
         headers={"Authorization": "Bearer " + token,
                  "Content-Type": "application/json"})
-    with _ur.urlopen(req, timeout=4) as resp:
-        data = json.loads(resp.read().decode())
-    srv = (data or {}).get("iceServers") or {}
-    if not srv.get("urls"):
+    try:
+        with _ur.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as e:
+        # Failure class only — never the token or credentials.
+        print("CF TURN mint failed:", type(e).__name__,
+              getattr(e, "code", ""), flush=True)
         return None
-    return {"urls": srv["urls"],
-            "username": srv.get("username") or "",
-            "credential": srv.get("credential") or ""}
+    raw = (data or {}).get("iceServers")
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for srv in raw:
+        if isinstance(srv, dict) and srv.get("urls"):
+            entry = {"urls": srv["urls"]}
+            if srv.get("username"):
+                entry["username"] = srv["username"]
+            if srv.get("credential"):
+                entry["credential"] = srv["credential"]
+            out.append(entry)
+    return out or None
 
 
 def _cf_ice_servers():
@@ -11422,12 +11438,14 @@ def _cf_ice_servers():
             and _CF_ICE_CACHE["exp"] > now + 3600:
         return [dict(e) for e in _CF_ICE_CACHE["servers"]]
     try:
-        srv = _cf_turn_fetch(key_id, token)
+        servers = _cf_turn_fetch(key_id, token)
     except Exception:
-        srv = None
-    if not srv:
+        servers = None
+    if not servers:
         return None
-    out = [dict(e) for e in DEFAULT_ICE_SERVERS[:2]] + [srv]
+    # Cloudflare's minted set is complete on its own (its
+    # STUN entry plus the TURN/turns transports).
+    out = [dict(e) for e in servers]
     _CF_ICE_CACHE["servers"] = out
     _CF_ICE_CACHE["exp"] = now + 86400
     return [dict(e) for e in out]
