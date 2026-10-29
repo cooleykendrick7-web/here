@@ -10686,6 +10686,24 @@ def _sweep_lives(conn):
             (g["lid"],)).fetchone()
         if lrow:
             _drop_guest(conn, dict(lrow), g["uid"])
+    # Join asks and invites are perishable. A request the host
+    # never settles pinned the asker in a frozen 'Requested' state
+    # forever (Ken's stuck-panel report, Oct 28) — and the host's
+    # list filled with ghosts. 'expired' is terminal but carries
+    # NO decline cooldown: the asker can re-ask the moment they
+    # are back and looking.
+    _req_cut = (datetime.now(timezone.utc)
+                - timedelta(seconds=180)).isoformat()
+    conn.execute(
+        "UPDATE live_join_requests SET status='expired', "
+        "decided_at=? WHERE status='pending' AND kind='request' "
+        "AND created_at<?", (now_iso(), _req_cut))
+    _inv_cut = (datetime.now(timezone.utc)
+                - timedelta(seconds=600)).isoformat()
+    conn.execute(
+        "UPDATE live_join_requests SET status='expired', "
+        "decided_at=? WHERE status='pending' AND kind='invite' "
+        "AND created_at<?", (now_iso(), _inv_cut))
     # Build W2: lazy Showdown resolution rides the same sweep —
     # active battles past their clock finish here (the state poll
     # and the lives list both pass through), then any finished
@@ -13207,13 +13225,15 @@ async def live_state(request: Request, lid: int):
     # pinned shout-out if one is still on the clock, and the
     # viewer's own spendable balance for the gift sheet + chip.
     gift_cutoff = (datetime.now(timezone.utc)
-                   - timedelta(seconds=15)).isoformat()
+                   - timedelta(seconds=45)).isoformat()
     out["recent_gifts"] = [
         {"id": r["id"], "sender_id": r["sender_id"],
          "sender_name": r["sender_name"] or "Deleted user",
          "sender_rank": _rank_of(r["sender_id"]),
          # Build PANEL GIFTS: who the gift landed on (recipient_id
          # is NULL on pre-build rows — those went to the host).
+         "ts": (_parse_ts(r["created_at"]).timestamp()
+                if _parse_ts(r["created_at"]) else 0),
          "recipient_id": r["recipient_id"] or r["host_id"],
          "recipient_name": r["recipient_name"] or "Deleted user",
          "gift_key": r["gift_key"],

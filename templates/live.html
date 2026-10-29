@@ -1021,6 +1021,7 @@ function liveRoomDiff(prev, next){
   var isHost = (B.me === (B.host && B.host.id));
   var likeCount = 0, lastLikeCursor = 0, ownLikesPending = 0;
   var pendingInvites = [];
+  var seenReqIds = {}, reqPrimed = false;
   var activePoll = null;          /* state payload's active_poll */
   var closedPoll = null;          /* state payload's last_closed_poll */
   var battleState = null;         /* state payload's battle (W2) */
@@ -1519,9 +1520,10 @@ function liveRoomDiff(prev, next){
         b.addEventListener('click', askToJoinPanel);
       } else if (face === 'requested'){
         b.className = 'live-box plain';
+        b.title = 'You asked \u2014 waiting for the host';
         var w2 = document.createElement('span');
         w2.className = 'box-word';
-        w2.textContent = '⏳ Requested';
+        w2.textContent = '⏳ Waiting';
         b.appendChild(w2);
       } else {
         b.className = 'live-box plain';
@@ -2223,7 +2225,21 @@ function liveRoomDiff(prev, next){
         .catch(function(err){ lcDeviceError(err); });
     });
   }
+  function canCastDisplay(){
+    /* Ken's rule (Oct 28): on a PANEL, only the host and admins
+       display screens / capture cards. Solo (no panel running)
+       there is nothing to hijack \u2014 the lone host does
+       whatever they want. */
+    if (typeof iAmHost === 'function' && iAmHost()) return true;
+    if (myPanel && myPanel.is_admin) return true;
+    return (panel || []).length <= 1;
+  }
   function startScreenShare(){
+    if (!canCastDisplay()){
+      toast('\u{1F5A5} Only the host or an admin can share a '
+        + 'screen or capture card on a panel.');
+      return Promise.resolve();
+    }
     if (!navigator.mediaDevices
         || !navigator.mediaDevices.getDisplayMedia){
       toast('Screen sharing is not available in this browser.');
@@ -2365,6 +2381,9 @@ function liveRoomDiff(prev, next){
     }
     lcSection('📷 Video source');
     lcDevices.video.forEach(function(d, i){
+      if (!canCastDisplay()
+          && /capture|cam ?link|hdmi|elgato|avermedia/i
+             .test(d.label || '')) return;
       var active = lcVideoKind === 'camera' && d.deviceId === lcVideoId;
       (function(dev, idx){
         lcRow((active ? '● ' : '○ ') + '🎥 '
@@ -2374,7 +2393,8 @@ function liveRoomDiff(prev, next){
         });
       })(d, i);
     });
-    lcRow((lcVideoKind === 'screen' ? '● ' : '○ ')
+    if (canCastDisplay())
+      lcRow((lcVideoKind === 'screen' ? '● ' : '○ ')
           + '🖥 Share my screen', function(){ startScreenShare(); });
     lcSection('🎤 Sound source');
     if (lcScreenAudio){
@@ -4171,7 +4191,7 @@ function liveRoomDiff(prev, next){
      frames on a connected peer is not a camera-off pause, it is
      a dead video path. Camera-off peers stay excluded above via
      video_ok=false and the receiver-muted check. */
-  var ZERO_FRAME_SLOW_MS = 30000;
+  var ZERO_FRAME_SLOW_MS = 15000;
   function peerReceiverTrack(P, kind){
     try {
       var found = null;
@@ -5821,6 +5841,7 @@ function liveRoomDiff(prev, next){
   function renderInviteBanner(){
     var banner = $('live-invite-banner');
     var inv = pendingInvites[0];
+    if (!inv){ banner.hidden = true; return; }
     $('live-invite-text').textContent =
       inv.from_name + ' invited you to join the panel';
     banner.hidden = false;
@@ -6268,7 +6289,32 @@ function liveRoomDiff(prev, next){
     return {W: W, H: H};
   }
   /* Position/scale/rotation of a flight at progress u. */
+  function specTargetFor(uid){
+    if (!uid) return null;
+    var T = tiles[uid];
+    if (!T || !T.el || !stageEl) return null;
+    var sr = stageEl.getBoundingClientRect();
+    var r = T.el.getBoundingClientRect();
+    if (!r.width || !sr.width) return null;
+    return {x: r.left - sr.left + r.width / 2,
+            y: r.top - sr.top + r.height / 2};
+  }
   function specPose(f, u, W, H){
+    var p = specPoseRaw(f, u, W, H);
+    /* The flight ends ON the person getting the gift: over the
+       last stretch the path bends to the recipient's tile, so
+       the burst goes off on their block \u2014 visible to the
+       whole room, owned by the right person. */
+    if (f.tx != null && f.tx !== undefined && u > 0.4){
+      var k = (u - 0.4) / 0.6;
+      k = k * k * (3 - 2 * k);
+      p = {x: p.x + (f.tx - p.x) * k,
+           y: p.y + (f.ty - p.y) * k,
+           rot: p.rot, sc: p.sc, sq: p.sq};
+    }
+    return p;
+  }
+  function specPoseRaw(f, u, W, H){
     var s = f.size, d = f.dir, seed = f.seed;
     var x0 = d > 0 ? -s * 0.6 : W + s * 0.6;
     var x1 = d > 0 ? W - s * 0.55 : s * 0.55;
@@ -6368,6 +6414,8 @@ function liveRoomDiff(prev, next){
       r1: ((h >> 3) % 100) / 100, trail: [], burstAt: -1,
       lastMini: 0
     };
+    var tgt = specTargetFor(g.recipient_id);
+    if (tgt){ f.tx = tgt.x; f.ty = tgt.y; }
     if (f.style === 'burst') f.dur = 2100 + tier * 260;
     specFlights.push(f);
     specRun();
@@ -7492,6 +7540,16 @@ function renderTopGifters(list){
         if (amMember) bindLocalTile();
         sampleSelfView();
         reconcilePeers();
+        (d.pending_requests || []).forEach(function(r){
+          if (!seenReqIds[r.id]){
+            seenReqIds[r.id] = 1;
+            if (reqPrimed && r.kind !== 'invite')
+              toast('\u270b ' + (r.name || 'Someone')
+                + ' wants to join the panel \u2014 open Requests '
+                + 'to let them in.');
+          }
+        });
+        reqPrimed = true;
         renderRequests(d.pending_requests || []);
         renderWatchers(watchersList);
         renderInviteBanner();
@@ -7776,6 +7834,14 @@ function renderTopGifters(list){
   every(10000, function(){
     post('/heartbeat', amMember ? {video_ok: myVideoOk} : undefined)
       .catch(function(){});
+  });
+  /* Preload every gift's art before the first gift flies: the
+     spectacle canvas draws from the browser image cache, and a
+     viewer who never opened the gift tray would otherwise watch
+     their first gifts fly INVISIBLE (cold cache) while the
+     sender's screen shows them fine. */
+  (B.gifts || []).forEach(function(g){
+    if (g && g.img){ var im = new Image(); im.src = g.img; }
   });
   pollState();
   pollSignals();
