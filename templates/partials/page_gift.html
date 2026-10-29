@@ -403,4 +403,60 @@
   });
 })();
 </script>
+{% elif gift_locked %}
+<button type="button" class="btn btn-sm" id="glock-open">{{ ic('gift') }} Gift</button>
+<div id="glock-backdrop" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60"></div>
+<div id="glock-sheet" hidden role="dialog" aria-label="Gift not available yet" style="position:fixed;left:50%;transform:translateX(-50%);bottom:14px;width:min(430px,94vw);background:var(--card-bg,#fff);color:var(--text,#111);border:1px solid var(--border,#ddd);border-radius:16px;padding:18px;z-index:61;box-shadow:0 12px 40px rgba(0,0,0,.3)">
+  <div style="font-weight:900;font-size:17px">🎁 Gift {{ gift_locked.name|e }}</div>
+  <p style="margin:10px 0 0;font-size:14.5px;line-height:1.55">{{ gift_locked.name|e }} can't take gifts yet — they haven't turned on <strong>Creator Mode</strong>. That's the switch that lets gifts land in their wallet.</p>
+  <p style="margin:8px 0 0;font-size:14.5px;line-height:1.55">Want me to let them know you're trying to support them?</p>
+  <p id="glock-status" hidden style="margin:10px 0 0;font-weight:700;color:#1d9e50"></p>
+  <div style="display:flex;gap:9px;margin-top:14px">
+    <button type="button" class="btn" id="glock-nudge" style="flex:1">📣 Let them know</button>
+    <button type="button" class="btn-ghost" id="glock-close" style="flex:1">Not now</button>
+  </div>
+</div>
+<script>
+(function(){
+  var open = document.getElementById('glock-open'),
+      sheet = document.getElementById('glock-sheet'),
+      back = document.getElementById('glock-backdrop'),
+      nudge = document.getElementById('glock-nudge'),
+      status = document.getElementById('glock-status');
+  function show(){ sheet.hidden = false; back.hidden = false; }
+  function hide(){ sheet.hidden = true; back.hidden = true; }
+  open.addEventListener('click', show);
+  back.addEventListener('click', hide);
+  document.getElementById('glock-close').addEventListener('click', hide);
+  nudge.addEventListener('click', function(){
+    nudge.disabled = true;
+    fetch('/gift-nudge', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind: '{{ gift_locked.kind }}',
+                            id: {{ gift_locked.id }}})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        status.hidden = false;
+        if (d && d.ok){
+          status.textContent = d.already_creator
+            ? '✅ They can take gifts now — refresh the page!'
+            : (d.already
+               ? '✅ Already nudged today — they know!'
+               : '✅ Sent! They'll get a nudge in their notifications.');
+          nudge.textContent = '✅ Sent';
+        } else {
+          status.style.color = '#c0392b';
+          status.textContent = (d && d.error) || 'Could not send the nudge.';
+          nudge.disabled = false;
+        }
+      })
+      .catch(function(){
+        status.hidden = false;
+        status.style.color = '#c0392b';
+        status.textContent = 'Could not send the nudge.';
+        nudge.disabled = false;
+      });
+  });
+})();
+</script>
 {% endif %}

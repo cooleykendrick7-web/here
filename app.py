@@ -1261,6 +1261,11 @@ def init_db():
         sched_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
         created_at TEXT NOT NULL DEFAULT '',
         PRIMARY KEY(sched_id, user_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS gift_nudges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER NOT NULL, owner_id INTEGER NOT NULL,
+        kind TEXT NOT NULL, target_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT '')""")
     c.execute("""CREATE TABLE IF NOT EXISTS app_suggestions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL, text TEXT NOT NULL,
@@ -8728,10 +8733,14 @@ async def profile(request: Request, uid: int):
     # The Recent gifts strip shows unless the profile is locked.
     # A blocked pair never reaches here.
     page_gift = None
+    gift_locked = None
     if (user["id"] != uid and not locked
             and prof.get("creator_mode")):
         page_gift = _page_gift_ctx(user, f"/user/{uid}/gift",
                                    prof["name"])
+    elif user["id"] != uid and not locked:
+        gift_locked = {"name": prof["name"], "kind": "profile",
+                       "id": uid}
     recent_page_gifts = ([] if locked
                          else _recent_page_gifts(uid, None))
     tip_goal = None
@@ -8751,6 +8760,7 @@ async def profile(request: Request, uid: int):
                    "wall_open": wall_open,
                    "wall_approve_first": wall_approve_first,
                    "page_gift": page_gift,
+                   "gift_locked": gift_locked,
                    "recent_page_gifts": recent_page_gifts,
                    "composer_friends": composer_friends,
                    "album_photos": album_photos,
@@ -14453,6 +14463,72 @@ async def post_gift(request: Request, pid: int):
     return JSONResponse(payload, status_code=code)
 
 
+@app.post("/gift-nudge")
+async def gift_nudge(request: Request):
+    """One tap from the locked gift sheet: tell a non-creator
+    owner that somebody tried to gift them. One nudge per
+    sender per target per day — encouragement, never spam."""
+    user, err = require_login(request)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    kind = str((data or {}).get("kind") or "")
+    try:
+        tid = int((data or {}).get("id") or 0)
+    except (TypeError, ValueError):
+        tid = 0
+    conn = db()
+    owner_id, target_name = None, ""
+    if kind == "page":
+        pg = conn.execute("SELECT owner_id, name FROM pages "
+                          "WHERE id=?", (tid,)).fetchone()
+        if pg:
+            owner_id, target_name = pg["owner_id"], pg["name"]
+    elif kind == "profile":
+        u = conn.execute("SELECT id, name FROM users WHERE id=?",
+                         (tid,)).fetchone()
+        if u:
+            owner_id, target_name = u["id"], u["name"]
+    if not owner_id:
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "Not available."},
+                            status_code=400)
+    if owner_id == user["id"]:
+        conn.close()
+        return JSONResponse({"ok": False,
+                             "error": "That's you."},
+                            status_code=400)
+    owner = get_user(owner_id) or {}
+    if owner.get("creator_mode"):
+        conn.close()
+        return JSONResponse(
+            {"ok": True, "already_creator": True})
+    day = now_iso()[:10]
+    dupe = conn.execute(
+        "SELECT id FROM gift_nudges WHERE sender_id=? AND kind=? "
+        "AND target_id=? AND substr(created_at,1,10)=?",
+        (user["id"], kind, tid, day)).fetchone()
+    if dupe:
+        conn.close()
+        return JSONResponse({"ok": True, "already": True})
+    conn.execute(
+        "INSERT INTO gift_nudges(sender_id, owner_id, kind, "
+        "target_id, created_at) VALUES(?,?,?,?,?)",
+        (user["id"], owner_id, kind, tid, now_iso()))
+    conn.commit()
+    conn.close()
+    notify(owner_id, "gift_nudge",
+           "🎁 " + user["name"] + " wanted to send “"
+           + target_name + "” a gift — turn on Creator Mode "
+           "to start earning from gifts.",
+           "/settings/profile#creator-mode")
+    return JSONResponse({"ok": True})
+
+
 @app.post("/page/{pid}/gift")
 async def page_page_gift(request: Request, pid: int):
     """🎁 Gift a Page: the PAGE'S OWNER earns — never an admin,
@@ -16474,11 +16550,15 @@ async def page_view(request: Request, pid: int):
     # displayed here).
     pg_ctx = page_ctx(dict(pg), user)
     page_gift = None
+    gift_locked = None
     _pg_owner = get_user(pg["owner_id"]) or {}
     if (pg["owner_id"] != user["id"]
             and _pg_owner.get("creator_mode")):
         page_gift = _page_gift_ctx(user, f"/page/{pid}/gift",
                                    pg["name"])
+    elif pg["owner_id"] != user["id"]:
+        gift_locked = {"name": pg["name"], "kind": "page",
+                       "id": pid}
     recent_page_gifts = _recent_page_gifts(pg["owner_id"], pid)
     _sc = db()
     owner_selling = _sc.execute(
@@ -16489,6 +16569,7 @@ async def page_view(request: Request, pid: int):
                   {"page": pg_ctx, "posts": posts,
                    "owner_selling": owner_selling,
                    "page_gift": page_gift,
+                   "gift_locked": gift_locked,
                    "recent_page_gifts": recent_page_gifts,
                    "composer_friends": cfriends, "composer_pages": cpages})
 
