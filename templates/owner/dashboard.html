@@ -73,6 +73,26 @@ table.admin tr:last-child td{border-bottom:none}
 </section>
 
 <section>
+  <h2>💰 Money by member — who has it, who can get paid</h2>
+  {% if money_users %}
+  <table>
+    <tr><th>Member</th><th>Earned 🎟️</th><th>Worth</th><th>Bank linked</th><th>Can cash out?</th></tr>
+    {% for m in money_users %}
+    <tr>
+      <td>{{ m.name|e }}{% if m.creator %} <span class="pill">CREATOR</span>{% endif %}</td>
+      <td><strong>{{ m.earned }}</strong> ({{ m.lifetime }} lifetime)</td>
+      <td><strong>{{ m.dollars }}</strong></td>
+      <td>{{ "✅ Yes" if m.bank else "— No" }}</td>
+      <td>{% if m.eligible %}<span class="pill" style="background:#e6ffef;border-color:#1d9e50;color:#0c6b32">✅ READY — can cash out now</span>{% elif m.has10 %}<span class="pill">🟡 Has $10+ — needs bank link</span>{% else %}<span class="pill">Building — under $10</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p style="color:#9a9a9a">Nobody has earned tickets yet — the first earner lands here.</p>
+  {% endif %}
+</section>
+
+<section>
   <h2>💵 HERE Money — what the site itself made</h2>
   <div class="stat-cards">
     <div class="stat-card"><div class="num" style="font-size:38px">🏆 {{ money_panel.profit }}</div><div class="lbl">HERE'S PROFIT (all time)</div></div>

@@ -19740,9 +19740,27 @@ async def owner_dashboard(request: Request):
         "leader_raw_name": (_by_raw[0]["name"]
                             if _by_raw else "—"),
     }
+    money_users = []
+    for r in conn.execute(
+            "SELECT id, name, gift_earned, gift_lifetime, "
+            "payout_ready, creator_mode FROM users "
+            "WHERE gift_earned > 0 OR id IN (SELECT user_id "
+            "FROM payout_requests) "
+            "ORDER BY gift_earned DESC LIMIT 50").fetchall():
+        ge = r["gift_earned"] or 0
+        money_users.append({
+            "id": r["id"], "name": r["name"], "earned": ge,
+            "lifetime": r["gift_lifetime"] or 0,
+            "dollars": _money(_earned_dollars(ge)),
+            "bank": bool(r["payout_ready"]),
+            "creator": bool(r["creator_mode"]),
+            "has10": ge >= CASHOUT_MIN_TICKETS,
+            "eligible": (ge >= CASHOUT_MIN_TICKETS
+                         and bool(r["payout_ready"]))})
     conn.close()
     return render(request, "owner/dashboard.html", {
         "race_summary": race_summary,
+        "money_users": money_users,
         "users": users, "friend_activity": friend_activity,
         "flags": flags, "pages": pages, "stats": stats,
         "verifications": verifications,
