@@ -626,6 +626,7 @@
   align-items:center;justify-content:center}
 .live-controls .live-ctl .hic{width:20px;height:20px}
 #ctl-rail-toggle{font-size:18px;padding:4px 2px}
+#ctl-pip.on{background:var(--red);border-color:var(--red-dark)}
 .live-controls.collapsed{width:46px;height:46px;max-height:46px;
   padding:0;border-radius:50%;opacity:.55;overflow:hidden}
 .live-controls.collapsed .live-ctl{display:none}
@@ -800,6 +801,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="live-ctl" id="ctl-flip" hidden>{{ ic('flip') }} Flip</button>
   <button type="button" class="live-ctl" id="ctl-connect" hidden>🎮 Live Connect</button>
   <button type="button" class="live-ctl" id="ctl-studio" hidden>{{ ic('studio') }} Studio</button>
+  <button type="button" class="live-ctl" id="ctl-pip" hidden>🪟 PIP</button>
   <button type="button" class="live-ctl" id="ctl-panel-leave" hidden>{{ ic('logout') }} Leave panel</button>
   <button type="button" class="live-ctl" id="ctl-panel-exit" hidden>🚪 Exit panel</button>
   <!-- host -->
@@ -2428,7 +2430,7 @@ function liveRoomDiff(prev, next){
           + '🖥 Share my screen', function(){ startScreenShare(); });
     if (canCastDisplay())
       lcRow('🪟 Game + my face (picture-in-picture)',
-            function(){ quickGameFace(); });
+            function(){ togglePip(true); });
     lcSection('🎤 Sound source');
     if (lcScreenAudio){
       var st = document.createElement('div');
@@ -2461,38 +2463,72 @@ function liveRoomDiff(prev, next){
     mrow.appendChild(mtxt);
     sheetActions.appendChild(mrow);
   }
-  function quickGameFace(){
-    /* One tap to the talk-show picture: the game / capture card
-       (or shared screen) fills the frame and MY camera rides in
-       the corner. Needs a main source that is not my own face
-       camera \u2014 the Connect sheet is where you pick it. */
-    if (!canCastDisplay()){
-      toast('\u{1F5A5} Only the host or an admin can cast on a panel.');
-      return;
-    }
-    if (lcVideoKind === 'camera'){
-      toast('First pick your capture card above, or Share my '
-        + 'screen \u2014 then tap \u{1FA9F} again and your face '
-        + 'rides over the game.');
-      return;
-    }
-    if (!studio.faceOn){
-      studio.faceOn = true;
-      if (!studio.faceId){
-        var alt = (lcDevices.video || []).filter(function(d){
-          return d.deviceId !== lcVideoId; })[0];
-        studio.faceId = alt ? alt.deviceId : null;
+  function paintPipBtn(){
+    var b = $('ctl-pip');
+    if (b) b.classList.toggle('on',
+      !!(typeof studio !== 'undefined' && studio
+         && studio.on && studio.faceOn));
+  }
+  function pipArmFace(){
+    /* Which camera is my FACE? Main = screen share \u2192 my
+       usual camera. Main = a capture card (it arrives as a
+       "camera" source that is not me) \u2192 the OTHER camera.
+       Null when no second picture exists to ride. */
+    return lcEnumerate().then(function(){
+      var devs = lcDevices.video || [];
+      if (lcVideoKind === 'screen'){
+        var mine = devs.filter(function(d){
+          return d.deviceId === lcVideoId; })[0];
+        return (mine || devs[0] || {}).deviceId || null;
       }
-      studioSaveSettings();
+      var alt = devs.filter(function(d){
+        return d.deviceId !== lcVideoId; })[0];
+      return alt ? alt.deviceId : null;
+    }).catch(function(){ return null; });
+  }
+  function togglePip(fromSheet){
+    if (!canCastDisplay()){
+      toast('\u{1F5A5} Only the host or an admin can put a '
+        + 'picture-in-picture on a panel.');
+      return;
     }
-    var started = studio.on ? Promise.resolve() : studioStart();
-    Promise.resolve(started).then(function(){
-      return studioFaceAcquire();
-    }).then(function(){
-      closeSheet();
-      toast('\u{1FA9F} Game + Face is ON \u2014 viewers see the '
-        + 'game with you in the corner.');
-    }).catch(function(){});
+    if (studio.on && studio.faceOn){
+      studio.faceOn = false;
+      studioSaveSettings();
+      if (studio.faceStream){
+        studio.faceStream.getTracks().forEach(function(x){
+          try { x.stop(); } catch (e) {}
+        });
+        studio.faceStream = null;
+        studio.faceVid.srcObject = null;
+      }
+      paintPipBtn();
+      toast('\u{1FA9F} PIP off \u2014 the game is full screen again.');
+      return;
+    }
+    pipArmFace().then(function(faceId){
+      if (!faceId){
+        toast('\u{1FA9F} PIP needs your game showing plus a '
+          + 'camera for your face: pick your capture card or '
+          + 'Share screen in \u{1F3AE} Live Connect, keep your '
+          + 'webcam plugged in, then tap PIP.');
+        return;
+      }
+      studio.faceOn = true;
+      studio.faceId = faceId;
+      studioSaveSettings();
+      var started = studio.on ? Promise.resolve() : studioStart();
+      Promise.resolve(started).then(function(){
+        if (!studio.faceStream) return studioFaceAcquire();
+      }).then(function(){
+        paintPipBtn();
+        if (studio.faceOn && studio.faceStream){
+          if (fromSheet) closeSheet();
+          toast('\u{1FA9F} PIP is ON \u2014 viewers see the game '
+            + 'with you in the corner.');
+        }
+      }).catch(function(){});
+    });
   }
   function openConnectSheet(){
     lcSheetOpen = true;
@@ -7181,6 +7217,8 @@ function renderTopGifters(list){
     $('ctl-flip').hidden = !member;
     $('ctl-connect').hidden = !member;
     $('ctl-studio').hidden = !member;
+    $('ctl-pip').hidden = !(member && canCastDisplay());
+    paintPipBtn();
     $('ctl-panel-leave').hidden = !(member && !iAmHost());
     $('ctl-panel-exit').hidden = !(iAmHost()
       && (panelOpen || panel.length > 1));
@@ -7282,6 +7320,9 @@ function renderTopGifters(list){
         toast((d && d.error) || 'Could not exit the panel.');
       }
     });
+  });
+  $('ctl-pip').addEventListener('click', function(){
+    togglePip(false);
   });
   $('ctl-sound').addEventListener('click', function(){
     unlockAudio();

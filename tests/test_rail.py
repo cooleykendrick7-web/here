@@ -86,7 +86,8 @@ check("live page carries the rail + chips + exit + PiP pieces",
       r.status_code == 200 and 'id="ctl-rail-toggle"' in r.text
       and 'id="live-chips"' in r.text
       and 'id="ctl-panel-exit"' in r.text
-      and "quickGameFace" in r.text
+      and 'id="ctl-pip"' in r.text
+      and "togglePip" in r.text
       and "Game + my face" in r.text
       and "live-controls.collapsed" in r.text)
 
