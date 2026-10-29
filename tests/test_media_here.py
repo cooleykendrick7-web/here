@@ -92,10 +92,19 @@ r = Fc.get(f"/user/{ARTIST}")
 check("artist profile shows the Media box up top with ARTIST",
       "Media HERE" in r.text and "ARTIST" in r.text
       and "First Song" in r.text and "mh-play-btn" in r.text)
+check("the music tab is collapsible (toggle + foldable body)",
+      "mh-box-toggle" in r.text and "mh-box-body" in r.text
+      and "mediahere_box_open" in r.text)
 r = Fc.get("/home")
 check("the floating player rides every page (base chrome)",
-      'id="mh-player"' in r.text and 'id="mh-pill"' in r.text
+      'id="mh-player"' in r.text and 'id="mh-mini"' in r.text
       and 'id="mh-audio"' in r.text)
+check("the spinning record is gone; the mini bar carries the "
+      "player's own buttons (prev/play/next/stop)",
+      'id="mh-disc"' not in r.text and 'id="mh-pill"' not in r.text
+      and 'id="mh2-prev"' in r.text and 'id="mh2-play"' in r.text
+      and 'id="mh2-next"' in r.text and 'id="mh2-stop"' in r.text
+      and 'id="mh-expand"' in r.text)
 r = Fc.post(f"/media/{tid}/play")
 plays = dbq("SELECT plays FROM media_tracks WHERE id=?",
             (tid,))[0]["plays"]

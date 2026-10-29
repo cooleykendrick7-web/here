@@ -7,7 +7,9 @@
   <div style="display:flex;align-items:center;gap:8px">
     <h3 style="margin:0">{{ '🎤' if media_mode == 'artist' else '🎵' }} Media HERE{% if media_mode == 'artist' %} <span class="pill" style="background:#e01e26;color:#fff;border-color:#e01e26">ARTIST</span>{% endif %}</h3>
     <span style="margin-left:auto;color:var(--muted);font-size:13px">{{ media_tracks|length }} track{{ 's' if media_tracks|length != 1 }}{% if media_tracks %} · {{ media_tracks|sum(attribute='plays') }} plays · {{ media_tracks|sum(attribute='likes') }} likes{% endif %}</span>
+    <button type="button" class="btn-ghost btn-sm mh-box-toggle" aria-expanded="true" title="Collapse / open the music tab">▾</button>
   </div>
+  <div class="mh-box-body">
   {% if profile.is_self and media_flash %}
   <p style="margin:10px 0 0;font-weight:700;{% if media_flash.startswith('err') %}color:#c0392b{% else %}color:#1d9e50{% endif %}">
     {% if media_flash == 'ok' %}✅ Track uploaded — it's live on your profile.
@@ -51,6 +53,7 @@
   </form>
   {% endif %}
   {% include "partials/track_gift.html" %}
+  </div>
   <script>
   if (!window.__mhLike) { window.__mhLike = 1;
     document.addEventListener('click', function(e){
@@ -62,6 +65,20 @@
           if (!d || !d.ok) return;
           b.innerHTML = (d.liked ? '❤️' : '🤍') + ' <span class="mh-like-n">' + d.likes + '</span>';
         }).catch(function(){});
+    });
+    var boxBody = document.querySelector('.mh-box-body');
+    var boxToggle = document.querySelector('.mh-box-toggle');
+    function mhBoxPaint(open){
+      if (boxBody) boxBody.hidden = !open;
+      if (boxToggle){ boxToggle.textContent = open ? '▾' : '▸'; boxToggle.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+    }
+    var mhBoxOpen = true;
+    try { mhBoxOpen = localStorage.getItem('mediahere_box_open') !== '0'; } catch(e){}
+    mhBoxPaint(mhBoxOpen);
+    if (boxToggle) boxToggle.addEventListener('click', function(){
+      mhBoxOpen = !mhBoxOpen;
+      try { localStorage.setItem('mediahere_box_open', mhBoxOpen ? '1' : '0'); } catch(e){}
+      mhBoxPaint(mhBoxOpen);
     });
   }
   </script>
