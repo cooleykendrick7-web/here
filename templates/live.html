@@ -1680,6 +1680,8 @@ function liveRoomDiff(prev, next){
   }
   function bindLocalTile(){
     if (!myStream) return;
+    if (!(typeof studio !== 'undefined' && studio && studio.on))
+      studioParkCanvas();
     /* Studio owns my tile while it is on. The state poll calls
        this every few seconds — rebinding the RAW stream here is
        exactly why the host saw a plain camera (no effects, no
@@ -2836,9 +2838,31 @@ function liveRoomDiff(prev, next){
        graphics must read correctly; the face inside was drawn
        the way viewers should see it. */
     T.video.classList.remove('localvid');
-    T.video.classList.add('localvid-nomirror');
     T.el.classList.add('has-video');
     T.video.play().catch(function(){});
+    /* Self-view truth (Ken's black screen, Oct 28): Safari
+       renders a canvas captureStream as BLACK in a <video> tag
+       while the same stream reaches viewers fine over WebRTC.
+       So my tile displays the Studio canvas itself \u2014 it
+       paints its own picture in every browser, and the
+       captureStream viewers watch references this very element,
+       so moving it into the tile changes nothing for them.
+       z-index 1: above the (black) video, below the name label. */
+    if (studio.canvas){
+      if (studio.canvas.parentNode !== T.el)
+        T.el.appendChild(studio.canvas);
+      studio.canvas.style.cssText = 'position:absolute;inset:0;'
+        + 'width:100%;height:100%;z-index:1;pointer-events:none';
+    }
+  }
+  function studioParkCanvas(){
+    if (typeof studio === 'undefined' || !studio || !studio.canvas)
+      return;
+    studio.canvas.style.cssText = 'position:fixed;left:0;bottom:0;'
+      + 'width:2px;height:2px;opacity:0.01;z-index:-1;'
+      + 'pointer-events:none';
+    if (studio.canvas.parentNode !== document.body)
+      document.body.appendChild(studio.canvas);
   }
   function studioPublish(){
     if (!studio.track) return Promise.resolve();
@@ -2905,6 +2929,7 @@ function liveRoomDiff(prev, next){
   function studioStop(silent){
     if (!studio.on) return Promise.resolve();
     studio.on = false;
+    studioParkCanvas();
     if (studio.raf) cancelAnimationFrame(studio.raf);
     studio.raf = 0;
     if (studio.faceStream){
