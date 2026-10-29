@@ -4524,6 +4524,22 @@ def _home_feed_items(user, post_cards_list):
     if prompt and len(out) >= 3:
         out.insert(min(11, len(out)),
                    {"kind": "interest", "prompt": prompt})
+    # The $100 Invite Race (Ken): while the race runs, the feed
+    # shows who's winning only SOMETIMES — roughly one load in
+    # three, seated a few items in — a sighting, not furniture.
+    try:
+        import random as _rnd
+        if _race_phase() == "open" and _rnd.random() < 0.34:
+            _rc = db()
+            _rb = _race_board(_rc, limit=1)
+            _rc.close()
+            if _rb and (_rb[0]["qualified"] >= 1
+                        or _rb[0]["raw"] >= 3):
+                out.insert(min(4, len(out)),
+                           {"kind": "race", "race": _rb[0],
+                            "min": RACE_MIN_QUALIFIED})
+    except Exception:
+        pass
     return out
 
 
@@ -19630,8 +19646,22 @@ async def owner_dashboard(request: Request):
     # --- ads (Build ADS): house rotation + page-ad oversight ---
     ads_house, ads_user, ads_totals = _owner_ads_ctx(conn)
 
+    _rb_all = _race_board(conn, limit=100)
+    _by_raw = sorted(_rb_all, key=lambda b: -b["raw"])
+    race_summary = {
+        "phase": _race_phase(),
+        "racers": len(_rb_all),
+        "total_real": sum(b["qualified"] for b in _rb_all),
+        "leader_real": _rb_all[0]["qualified"] if _rb_all else 0,
+        "leader_real_name": (_rb_all[0]["name"]
+                             if _rb_all else "—"),
+        "leader_raw": _by_raw[0]["raw"] if _by_raw else 0,
+        "leader_raw_name": (_by_raw[0]["name"]
+                            if _by_raw else "—"),
+    }
     conn.close()
     return render(request, "owner/dashboard.html", {
+        "race_summary": race_summary,
         "users": users, "friend_activity": friend_activity,
         "flags": flags, "pages": pages, "stats": stats,
         "verifications": verifications,

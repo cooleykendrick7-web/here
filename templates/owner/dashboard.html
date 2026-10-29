@@ -62,6 +62,17 @@ table.admin tr:last-child td{border-bottom:none}
 </div>
 
 <section>
+  <h2>🏁 $100 Invite Race <span style="font-size:13px;color:#9a9a9a">({{ race_summary.phase }} · Oct 30 – Nov 15)</span></h2>
+  <div class="stat-cards">
+    <div class="stat-card"><div class="num" style="font-size:19px">{{ race_summary.leader_real_name|e }}</div><div class="lbl">Leading on REAL joins — {{ race_summary.leader_real }} real</div></div>
+    <div class="stat-card"><div class="num" style="font-size:19px">{{ race_summary.leader_raw_name|e }}</div><div class="lbl">Most invites sent — {{ race_summary.leader_raw }} signups</div></div>
+    <div class="stat-card"><div class="num">{{ race_summary.total_real }}</div><div class="lbl">Real joins in the race</div></div>
+    <div class="stat-card"><div class="num">{{ race_summary.racers }}</div><div class="lbl">Racers on the board</div></div>
+  </div>
+  <p><a class="btn" href="/owner/race">Open the full race monitor →</a></p>
+</section>
+
+<section>
   <h2>💵 HERE Money — what the site itself made</h2>
   <div class="stat-cards">
     <div class="stat-card"><div class="num" style="font-size:38px">🏆 {{ money_panel.profit }}</div><div class="lbl">HERE'S PROFIT (all time)</div></div>

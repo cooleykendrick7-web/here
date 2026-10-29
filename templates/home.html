@@ -249,6 +249,18 @@ document.querySelectorAll('.remind-btn').forEach(function(b){
       </div>
       <p class="interest-done" hidden style="margin:10px 0 0;font-weight:700"></p>
     </div>
+  {% elif item.kind == 'race' %}
+    <div class="card" style="border:2px solid var(--red)">
+      <div class="module-head"><b>🏁 $100 Invite Race — who's winning</b><a href="/invite-race">Leaderboard</a></div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
+        {% if item.race.avatar %}<img src="{{ item.race.avatar|e }}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover">{% endif %}
+        <div style="flex:1;min-width:0">
+          <b><a href="/user/{{ item.race.user_id }}">{{ item.race.name|e }}</a></b>{% if item.race.founding_no %} 🏅 #{{ item.race.founding_no }}{% endif %}
+          <div style="color:var(--muted);font-size:13px">is leading with <strong style="color:var(--text)">{{ item.race.qualified }} real joins</strong> ({{ item.race.raw }} joined) — first to {{ item.min }} real joins takes the $100.</div>
+        </div>
+        <a class="btn btn-sm" href="/invite">Join the race</a>
+      </div>
+    </div>
   {% else %}
     {% with post=item.post %}{% include "partials/post_card.html" %}{% endwith %}
   {% endif %}

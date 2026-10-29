@@ -143,6 +143,32 @@ r = Ic.get("/settings/profile")
 check("settings now shows the idea as shipped",
       "Shipped" in r.text)
 
+# ---- dashboard summary + the random feed sighting ----
+r = OWN.get("/owner")
+check("owner DASHBOARD carries the race summary with both leaders",
+      r.status_code == 200 and "Leading on REAL joins" in r.text
+      and "Ivy Inviter" in r.text
+      and "Most invites sent" in r.text)
+
+import random as _random_mod  # noqa: E402
+
+_orig_phase = here._race_phase
+_orig_random = _random_mod.random
+try:
+    here._race_phase = lambda: "open"
+    _random_mod.random = lambda: 0.0
+    r = Ic.get("/home")
+    check("feed shows the race leader on a lucky load",
+          "who's winning" in r.text and "is leading with" in r.text
+          and "Ivy Inviter" in r.text)
+    _random_mod.random = lambda: 0.99
+    r = Ic.get("/home")
+    check("and on an unlucky load it stays out of the feed",
+          "who's winning" not in r.text)
+finally:
+    here._race_phase = _orig_phase
+    _random_mod.random = _orig_random
+
 fails = [n for n, ok in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} passed")
 if fails:
