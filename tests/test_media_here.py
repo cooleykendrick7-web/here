@@ -105,6 +105,14 @@ check("the spinning record is gone; the mini bar carries the "
       and 'id="mh2-prev"' in r.text and 'id="mh2-play"' in r.text
       and 'id="mh2-next"' in r.text and 'id="mh2-stop"' in r.text
       and 'id="mh-expand"' in r.text)
+check("mobile: the player is a skinny VERTICAL rail on the LEFT "
+      "edge, mid-screen (Ken's order)",
+      "writing-mode:vertical-rl" in r.text
+      and "#mh-mini{left:0;right:auto;top:50%" in r.text)
+check("mobile: the rail folds away to an edge tab and returns",
+      'id="mh-tab"' in r.text and 'id="mh2-fold"' in r.text
+      and "S.rail = 'tab'" in r.text
+      and "S.rail = 'open'" in r.text)
 r = Fc.post(f"/media/{tid}/play")
 plays = dbq("SELECT plays FROM media_tracks WHERE id=?",
             (tid,))[0]["plays"]

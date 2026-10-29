@@ -3431,7 +3431,20 @@ document.addEventListener('click', function (e) {
 #mh-mini .mh-btns{display:flex;gap:5px;align-items:center}
 #mh-mini.pulse{animation:mhpulse 1.1s ease-in-out infinite}
 @keyframes mhpulse{0%,100%{box-shadow:0 0 0 0 rgba(224,30,38,.55)}50%{box-shadow:0 0 0 12px rgba(224,30,38,0)}}
-@media (max-width:760px){ #mh-player{bottom:76px} #mh-mini{bottom:76px} }
+#mh2-fold{display:none;width:30px;height:30px;border-radius:50%;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;font-size:11px;cursor:pointer;flex:none}
+#mh-tab{position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:55;background:#17181c;color:#fff;border:1px solid rgba(255,255,255,.22);border-left:none;border-radius:0 12px 12px 0;padding:13px 6px;font-size:15px;cursor:pointer;box-shadow:0 10px 28px rgba(0,0,0,.45);font-family:inherit}
+#mh-tab[hidden]{display:none}
+#mh-tab.pulse{animation:mhpulse 1.1s ease-in-out infinite}
+@media (max-width:760px){
+ #mh-player{left:0;right:auto;top:50%;bottom:auto;transform:translateY(-50%);width:min(300px,84vw);border-radius:0 16px 16px 0}
+ #mh-player .mh-in{flex-direction:column;align-items:stretch;gap:8px}
+ #mh-player .mh-btns{justify-content:center}
+ #mh-mini{left:0;right:auto;top:50%;bottom:auto;transform:translateY(-50%);flex-direction:column;border-radius:0 16px 16px 0;padding:10px 6px;gap:9px;max-width:none}
+ #mh-mini .mh-mini-open{flex-direction:column;gap:5px}
+ #mh-mini-name{writing-mode:vertical-rl;max-height:110px;max-width:none}
+ #mh-mini .mh-btns{flex-direction:column}
+ #mh2-fold{display:block}
+}
 </style>
 <div id="mh-mini" hidden>
   <button type="button" class="mh-mini-open" id="mh-expand" title="Open the full player">🎵 <span id="mh-mini-name">Media HERE</span> ▴</button>
@@ -3441,7 +3454,9 @@ document.addEventListener('click', function (e) {
     <button type="button" id="mh2-next" title="Next">⏭</button>
     <button type="button" id="mh2-stop" title="Stop and close">✕</button>
   </div>
+  <button type="button" id="mh2-fold" title="Fold the player to the edge">◀</button>
 </div>
+<button type="button" id="mh-tab" hidden title="Open the music player">🎵</button>
 <div id="mh-player" hidden>
   <div class="mh-face"{% if user.media_skin %} style="background-image:url('{{ user.media_skin|e }}')"{% endif %}>
     <div class="mh-shade"></div>
@@ -3470,6 +3485,7 @@ document.addEventListener('click', function (e) {
   if (!audio) return;
   var wrap = document.getElementById('mh-player'),
       mini = document.getElementById('mh-mini'),
+      tab = document.getElementById('mh-tab'),
       miniName = document.getElementById('mh-mini-name'),
       titleEl = document.getElementById('mh-title'),
       artistEl = document.getElementById('mh-artist'),
@@ -3486,14 +3502,16 @@ document.addEventListener('click', function (e) {
   function fmt(s){ s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60) + ':' + ('0' + (s % 60)).slice(-2); }
   function paint(){
     var c = cur();
-    if (!c){ wrap.hidden = true; mini.hidden = true; return; }
+    if (!c){ wrap.hidden = true; mini.hidden = true; tab.hidden = true; return; }
     titleEl.textContent = c.t || 'Untitled';
     artistEl.textContent = c.a || '';
     miniName.textContent = c.t || 'Media HERE';
     playBtn.textContent = audio.paused ? '▶' : '⏸';
     play2Btn.textContent = audio.paused ? '▶' : '⏸';
-    if (S.open){ wrap.hidden = false; mini.hidden = true; }
-    else { wrap.hidden = true; mini.hidden = false; }
+    var mobile = window.matchMedia && window.matchMedia('(max-width:760px)').matches;
+    if (S.open){ wrap.hidden = false; mini.hidden = true; tab.hidden = true; }
+    else if (mobile && S.rail === 'tab'){ wrap.hidden = true; mini.hidden = true; tab.hidden = false; }
+    else { wrap.hidden = true; mini.hidden = false; tab.hidden = true; }
   }
   function countPlay(id){
     try { fetch('/media/' + id + '/play', {method: 'POST', keepalive: true}); } catch(e){}
@@ -3506,7 +3524,7 @@ document.addEventListener('click', function (e) {
   }
   function tryPlay(){
     var p = audio.play();
-    if (p && p.catch) p.catch(function(){ mini.classList.add('pulse'); paint(); });
+    if (p && p.catch) p.catch(function(){ mini.classList.add('pulse'); tab.classList.add('pulse'); paint(); });
   }
   window.mhPlayQueue = function(q, i){
     if (!q || !q.length) return;
@@ -3560,6 +3578,15 @@ document.addEventListener('click', function (e) {
     if (audio.paused && S.playing) tryPlay();
     save(); paint();
   });
+  document.getElementById('mh2-fold').addEventListener('click', function(){
+    if (!S) return;
+    S.rail = 'tab'; save(); paint();
+  });
+  tab.addEventListener('click', function(){
+    tab.classList.remove('pulse');
+    if (!S) return;
+    S.rail = 'open'; save(); paint();
+  });
   progWrap.addEventListener('click', function(e){
     if (!audio.duration) return;
     var r = progWrap.getBoundingClientRect();
@@ -3576,7 +3603,7 @@ document.addEventListener('click', function (e) {
     var now = Date.now();
     if (S && now - lastSave > 4000){ lastSave = now; S.pos = audio.currentTime; save(); }
   });
-  audio.addEventListener('play', function(){ if (S){ S.playing = true; save(); } mini.classList.remove('pulse'); paint(); });
+  audio.addEventListener('play', function(){ if (S){ S.playing = true; save(); } mini.classList.remove('pulse'); tab.classList.remove('pulse'); paint(); });
   audio.addEventListener('pause', function(){ if (S){ S.pos = audio.currentTime; save(); } paint(); });
   audio.addEventListener('ended', function(){
     if (S && S.i < S.q.length - 1){ S.i++; S.pos = 0; save(); start(true); tryPlay(); }
