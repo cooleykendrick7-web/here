@@ -59,6 +59,14 @@
       {% endif %}
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
       {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
+      {% if profile.founding_no == 1 and not profile.is_private_locked %}
+      <div style="margin-top:12px;border:1px solid #b8860b;background:linear-gradient(135deg,rgba(245,197,66,.16),rgba(184,134,11,.05));border-radius:14px;padding:12px 14px">
+        <div style="font-weight:900;letter-spacing:.4px">🏛️ FOUNDER &amp; OWNER OF HERE</div>
+        <p style="margin:6px 0 0;opacity:.92">This is the official account of the man who built HERE. 🔴 He hosts <strong>The Lobby</strong> most nights around <strong>10 PM CT</strong> — pull up and say hello in person.</p>
+        <p style="margin:6px 0 0;font-size:12.5px;opacity:.75">HERE will never ask for your password or payment details in a message. Anybody who does is not us.</p>
+        <a class="btn btn-sm" href="/lobby" style="margin-top:9px;display:inline-block">🔴 Visit The Lobby</a>
+      </div>
+      {% endif %}
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
         {% if profile.live_id %}
         <a class="btn" href="/live/{{ profile.live_id }}" style="background:var(--red);animation:livepulse 1.2s infinite">{{ ic('lives') }} LIVE — watch now</a>
