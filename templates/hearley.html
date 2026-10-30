@@ -1,10 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Ask Hearley — HERE{% endblock %}
 {% block content %}
+<style>
+.hl-face{width:78px;height:78px;border-radius:50%;object-fit:cover;border:2px solid #ffd400;box-shadow:0 4px 18px rgba(0,0,0,.35);flex:none;background:#141414}
+.hl-av{width:34px;height:34px;border-radius:50%;object-fit:cover;flex:none;border:1.5px solid #ffd400;background:#141414}
+</style>
 
 <div class="card">
   <div style="display:flex;align-items:center;gap:12px">
-    <span style="font-size:38px;line-height:1">🤖</span>
+    <video class="hl-face" autoplay muted loop playsinline poster="/static/hearley-face.jpg" aria-label="Hearley"><source src="/static/hearley-live.mp4" type="video/mp4"></video>
     <div>
       <div class="section-title" style="margin:0">Hearley — HERE's house helper</div>
       <p style="color:var(--muted);font-size:13.5px;margin-top:2px">Ask me how anything on HERE works. Straight answers, no runaround.</p>
@@ -41,10 +45,18 @@
     row.style.gap = '9px';
     row.style.alignItems = 'flex-start';
     if (who === 'me'){ row.style.flexDirection = 'row-reverse'; }
-    var av = document.createElement('span');
-    av.textContent = who === 'me' ? '🧑' : '🤖';
-    av.style.fontSize = '22px';
-    av.style.lineHeight = '1.2';
+    var av;
+    if (who === 'me'){
+      av = document.createElement('span');
+      av.textContent = '🧑';
+      av.style.fontSize = '22px';
+      av.style.lineHeight = '1.2';
+    } else {
+      av = document.createElement('img');
+      av.src = '/static/hearley-face.jpg';
+      av.alt = 'Hearley';
+      av.className = 'hl-av';
+    }
     var b = document.createElement('div');
     b.style.maxWidth = '82%';
     b.style.padding = '10px 13px';
