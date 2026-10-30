@@ -92,6 +92,10 @@
 .live-fs[hidden]{display:none}
 #live-stage-slot{position:absolute;inset:0}
 .live-stage{position:absolute;inset:0;height:100%;background:#000;overflow:hidden}
+#stage-bg{position:absolute;inset:0;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:.55;z-index:0;pointer-events:none}
+#live-grid{position:relative;z-index:1}
+.live-platchips{display:flex;gap:5px;flex-wrap:wrap;margin-top:4px}
+.live-platchips .kind-tag{background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35)}
 .live-grid{position:absolute;inset:0;background:#000}
 .live-grid.cols-1 .live-tile{position:absolute;inset:0;width:100%;height:100%;
   aspect-ratio:auto;border-radius:0}
@@ -746,12 +750,19 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
 <div class="live-fs" id="live-fs">
  <div id="live-stage-slot">
 <div class="live-stage" id="live-stage">
+  <div id="stage-bg"></div>
   <div class="live-grid cols-1" id="live-grid"></div>
   <div class="live-topbar">
     <span class="live-pill"><span class="dot">●</span> LIVE</span>
     <div class="live-meta">
       <div class="live-host">{{ host.name|e }}{% if host.live_level %} <span class="lvl-chip" title="Streamer Live Level">{{ host.live_level.label|e }}</span>{% endif %}</div>
       {% if live.title %}<div class="live-title">{{ live.title|e }}</div>{% endif %}
+      {% if platform_label or platform_tags %}<div class="live-platchips">{% if platform_label %}<span class="kind-tag">{{ platform_label|e }}</span>{% endif %}{% for t in platform_tags %}<span class="kind-tag">#{{ t|e }}</span>{% endfor %}</div>{% endif %}
+      {% if role == "host" %}<div style="margin-top:5px;display:flex;gap:6px;align-items:center">
+        <button type="button" class="mini-btn" id="bd-btn">🖼 Backdrop</button>
+        <button type="button" class="mini-btn" id="bd-clear"{% if not live.backdrop %} hidden{% endif %}>✖ Clear</button>
+        <input type="file" id="bd-file" accept="image/*" hidden>
+      </div>{% endif %}
       <div id="live-prompt" hidden></div>
       <div class="live-topgifters" id="live-top-gifters" hidden></div>
     </div>
@@ -1242,7 +1253,7 @@ function liveRoomDiff(prev, next){
     }
     var phName = document.createElement('span');
     phName.className = 'ph-name';
-    phName.textContent = member.name || '';
+    phName.textContent = member.seat_label || member.name || '';
     ph.appendChild(phName);
     /* Build W3: the tile's honest video state line — "📷 Camera
        off" / "📶 Connecting video…" / "📶 Reconnecting video…" —
@@ -1380,7 +1391,7 @@ function liveRoomDiff(prev, next){
     var T = tiles[member.user_id];
     if (!T) return;
     T.member = member;
-    var nm = (member.user_id === B.me ? 'You' : (member.name || ''));
+    var nm = (member.user_id === B.me ? 'You' : (member.seat_label || member.name || ''));
     if (T.labelName.textContent !== nm) T.labelName.textContent = nm;
     var b = '';
     if (member.role === 'host') b += '👑 ';
@@ -5392,6 +5403,33 @@ function liveRoomDiff(prev, next){
           });
           row.appendChild(adm);
         }
+        if (iAmHost() || iAmAdmin() || tg.user_id === B.me){
+          var lab = document.createElement('button');
+          lab.type = 'button'; lab.className = 'mini-btn';
+          window.hereIconText(lab, 'tag', '🏷', tg.seat_label
+            ? ' Seat: ' + tg.seat_label : ' Name this seat');
+          lab.addEventListener('click', function(){
+            if (lab.dataset.editing) return;
+            lab.dataset.editing = '1';
+            lab.style.display = 'none';
+            var inp = document.createElement('input');
+            inp.type = 'text'; inp.maxLength = 24;
+            inp.value = tg.seat_label || '';
+            inp.placeholder = 'Seat name — blank = their name';
+            inp.style.cssText = 'flex:1;min-width:120px';
+            var save = document.createElement('button');
+            save.type = 'button'; save.className = 'mini-btn';
+            save.textContent = 'Save';
+            save.addEventListener('click', function(){
+              act('/seat-label', {user_id: tg.user_id,
+                  label: inp.value}, 'Seat named.');
+            });
+            row.appendChild(inp);
+            row.appendChild(save);
+            inp.focus();
+          });
+          row.appendChild(lab);
+        }
         if (canActOn(tg)){
           var kick = document.createElement('button');
           kick.type = 'button'; kick.className = 'mini-btn';
@@ -7592,6 +7630,50 @@ function renderTopGifters(list){
       role: 'guest', admin: false, muted: false});
     return out;
   }
+  var curBackdrop = null;
+  function applyBackdrop(url){
+    curBackdrop = url || '';
+    var el = document.getElementById('stage-bg');
+    if (el) el.style.backgroundImage =
+      curBackdrop ? 'url("' + curBackdrop + '")' : '';
+    var clr = document.getElementById('bd-clear');
+    if (clr) clr.hidden = !curBackdrop;
+  }
+  applyBackdrop(B.backdrop || '');
+  (function(){
+    var btn = document.getElementById('bd-btn'),
+        file = document.getElementById('bd-file'),
+        clr = document.getElementById('bd-clear');
+    if (!btn || !file) return;
+    btn.addEventListener('click', function(){ file.click(); });
+    file.addEventListener('change', function(){
+      if (!file.files || !file.files[0]) return;
+      var fd = new FormData();
+      fd.append('backdrop', file.files[0]);
+      fetch('/live/' + B.id + '/backdrop', {method: 'POST',
+          credentials: 'same-origin', body: fd})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d && d.ok){ applyBackdrop(d.url || '');
+            toast('Backdrop set — your platform, your brand.'); }
+          else toast((d && d.error) || 'That did not work.');
+        })
+        .catch(function(){ toast('That did not work.'); });
+      file.value = '';
+    });
+    if (clr) clr.addEventListener('click', function(){
+      var fd = new FormData();
+      fd.append('clear', '1');
+      fetch('/live/' + B.id + '/backdrop', {method: 'POST',
+          credentials: 'same-origin', body: fd})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d && d.ok){ applyBackdrop(''); toast('Backdrop cleared.'); }
+          else toast((d && d.error) || 'That did not work.');
+        })
+        .catch(function(){ toast('That did not work.'); });
+    });
+  })();
   function pollState(){
     if (ended) return;
     /* Poll discipline (Build N): a hidden tab stops polling
@@ -7605,6 +7687,8 @@ function renderTopGifters(list){
         if (!d || !d.ok) return;
         if (d.status === 'ended'){ teardownEnded(); return; }
         viewersEl.textContent = d.viewers;
+        if (typeof d.backdrop === 'string'
+            && d.backdrop !== curBackdrop) applyBackdrop(d.backdrop);
         (d.comments || []).forEach(function(c){
           if (c.id > lastComment) lastComment = c.id;
           addComment(c);

@@ -13272,7 +13272,11 @@ async def live_page(request: Request, lid: int):
             # still enforced server-side from GIFT_CATALOG).
             "tickets": (dict(user).get("tickets_balance") or 0),
             "gifts": [GIFT_CATALOG[k] for k in GIFT_ORDER],
-            "shout_cost": SHOUT_COST_TICKETS}
+            "shout_cost": SHOUT_COST_TICKETS,
+            # Platforms branding: the host's backdrop + shelf.
+            "backdrop": avatar_url(live.get("backdrop") or ""),
+            "category": live.get("category") or "",
+            "tags": _live_tags(live)}
     # Browse mode (fullscreen-live rework): the watch page renders a
     # browse section server-side at load — other current lives this
     # viewer may watch (live_now_for, excluding THIS live) and the
@@ -13300,6 +13304,9 @@ async def live_page(request: Request, lid: int):
         "browse_posts": browse_posts,
         "boot": json.dumps(boot).replace("</", "<\\/"),
         "embed": embed,
+        "platform_label": PLATFORM_CAT_LABELS.get(
+            live.get("category") or "", ""),
+        "platform_tags": _live_tags(live),
         "can_share_live": not host_private,
         "live_share_url": f"https://joincomehere.com/l/{lid}",
         "live_share_text": live_share_text,
@@ -13815,6 +13822,8 @@ async def live_state(request: Request, lid: int):
             _vok = mrow.get("video_ok") if mrow else None
         panel.append({
             "user_id": pid, "name": person["name"],
+            "seat_label": (mrow.get("seat_label") if mrow else None)
+            or "",
             "avatar": person["avatar"],
             "role": "host" if pid == live["host_id"] else "guest",
             "admin": pid in admin_ids,
@@ -13878,6 +13887,8 @@ async def live_state(request: Request, lid: int):
         "panel": panel,
         "spotlight_id": live.get("spotlight_id"),
         "is_lobby": bool(live.get("is_lobby")),
+        "backdrop": avatar_url(live.get("backdrop") or ""),
+        "category": live.get("category") or "",
         "entry_tickets": live["entry_tickets"] or 0,
         "captain_id": captain_id,
         "prompt": (daily_prompt() if live.get("is_lobby")
@@ -16953,6 +16964,94 @@ async def live_guest_leave(request: Request, lid: int):
 
 
 # ---------------- live panel: admins, invites, moderation, likes ----
+@app.post("/live/{lid}/backdrop")
+async def live_backdrop(request: Request, lid: int):
+    """Platform branding (host only): set or clear the backdrop
+    image — the host's logo — that covers the stage behind the
+    tiles for everybody in the room."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host brands their platform."},
+            status_code=403)
+    form = await request.form()
+    conn = db()
+    old = live.get("backdrop") or ""
+    if (form.get("clear") or "") == "1":
+        conn.execute("UPDATE live_sessions SET backdrop='' "
+                     "WHERE id=?", (lid,))
+        conn.commit()
+        conn.close()
+        if old:
+            _delete_upload(old)
+        return JSONResponse({"ok": True, "url": ""})
+    try:
+        key = save_upload(form.get("backdrop"), "backdrops",
+                          IMG_EXTS, max_mb=5)
+    except ValueError as e:
+        conn.close()
+        return JSONResponse({"ok": False, "error": str(e)},
+                            status_code=400)
+    if not key:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "Pick an image first."},
+            status_code=400)
+    conn.execute("UPDATE live_sessions SET backdrop=? WHERE id=?",
+                 (key, lid))
+    conn.commit()
+    conn.close()
+    if old and old != key:
+        _delete_upload(old)
+    return JSONResponse({"ok": True, "url": avatar_url(key)})
+
+
+@app.post("/live/{lid}/seat-label")
+async def live_seat_label(request: Request, lid: int):
+    """Name a panel seat (Ken's Platforms order: the blocks are
+    custom-named — a co-host chair, a DJ booth, Caller #1).
+    The host or an admin may name any seat; a panelist may
+    name their own. Blank clears back to the person's name."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    target = _live_body_int(_live_parse_body(data), "user_id")
+    label = " ".join(str(
+        _live_parse_body(data).get("label") or "").split())[:24]
+    if not target:
+        return JSONResponse({"ok": False, "error": "Which seat?"},
+                            status_code=400)
+    conn = db()
+    allowed = (live["host_id"] == user["id"]
+               or target == user["id"]
+               or _live_is_admin(conn, lid, user["id"]))
+    row = _live_member_row(conn, lid, target)
+    if not allowed:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "The host names the seats on their platform."},
+            status_code=403)
+    if not row or row.get("left_at"):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That seat is empty right now."},
+            status_code=400)
+    conn.execute("UPDATE live_members SET seat_label=? "
+                 "WHERE live_id=? AND user_id=?",
+                 (label, lid, target))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "label": label})
+
+
 @app.post("/live/{lid}/appoint-admin")
 async def live_appoint_admin(request: Request, lid: int):
     """Host only: appoint a person IN the room (active watcher or
