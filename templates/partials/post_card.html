@@ -115,7 +115,7 @@
     var btn = wrap ? wrap.querySelector(".post-vol-btn") : null;
     function sync() {
       if (!btn) { return; }
-      window.hereSetIcon(btn, v.muted ? 'mute' : 'speaker', v.muted ? '\U0001f507' : '\U0001f50a');
+      window.hereSetIcon(btn, v.muted ? 'mute' : 'speaker', v.muted ? '🔇' : '🔊');
       btn.setAttribute("aria-label",
                        v.muted ? "Turn sound on" : "Turn sound off");
     }

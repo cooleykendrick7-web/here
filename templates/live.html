@@ -7156,7 +7156,7 @@ function openAuctionSheet(){
   if(box.dataset.k===key) return; box.dataset.k=key;
   if (!items.length){ box.innerHTML=''; return; }
   var myId = B.me;
-  var html = '<div class="shop-head">\U0001F6CD Live shop · ' + (stats.watching||0)
+  var html = '<div class="shop-head">🛍 Live shop · ' + (stats.watching||0)
     + ' watching · ' + (stats.sold||0) + ' sold</div>';
   html += items.map(function(s){
     var mine = s.seller_id === myId;
