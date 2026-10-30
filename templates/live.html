@@ -519,6 +519,9 @@
 .auct-bids button.ghost{background:rgba(255,255,255,.15)}
 .auct-bids input{width:92px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;padding:8px;font-size:13.5px}
 .auct-start{width:100%;background:rgba(24,18,4,.85);border:1.5px dashed #b8860b;color:#ffd257;border-radius:14px;padding:10px;font-weight:900;cursor:pointer;font-size:14px}
+.auct-row{display:flex;gap:6px;align-items:stretch}
+.auct-row .auct-start{flex:1}
+.auct-hide{flex:none;width:38px;border-radius:14px;border:1.5px dashed rgba(255,210,87,.5);background:rgba(24,18,4,.85);color:#ffd257;cursor:pointer;font-size:14px;font-weight:900}
 .live-ctl{background:var(--lg-bg);color:#fff;border:var(--lg-border);border-radius:999px;
   height:38px;padding:0 10px;font-size:12.5px;font-weight:700;cursor:pointer;
   display:inline-flex;align-items:center;gap:6px;
@@ -965,6 +968,10 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
     <button type="button" class="live-ctl" id="ctl-spot-save">Save</button>
   </div>
   <div style="font-size:12px;color:rgba(255,255,255,.78);margin-top:4px">Name your spots in order — people apply for them by name, and whoever you seat there wears it.</div>
+  <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">
+    <span style="font-size:13px">🏷 Auction button</span>
+    <button type="button" class="live-ctl" id="ctl-auct-toggle">Hide</button>
+  </div>
 </div>
 
 <div class="live-panel stack-card">
@@ -7008,10 +7015,26 @@ function renderAuction(a, d){
   curAuction = a;
   if (!a){
     if (iAmHost()){
-      if (box.dataset.k !== 'host-start'){
+      var auctHidden = false;
+      try { auctHidden = localStorage.getItem(
+        'here_live_auction_btn') === 'hide'; } catch (e) {}
+      if (auctHidden){
+        if (box.dataset.k !== 'host-hidden'){
+          box.dataset.k = 'host-hidden';
+          box.innerHTML = '';
+        }
+      } else if (box.dataset.k !== 'host-start'){
         box.dataset.k = 'host-start';
-        box.innerHTML = '<button type="button" class="auct-start" id="auct-open">🏷 Start an auction — sell to the highest bidder</button>';
+        box.innerHTML = '<div class="auct-row"><button type="button" class="auct-start" id="auct-open">🏷 Start an auction — sell to the highest bidder</button><button type="button" class="auct-hide" id="auct-hide" title="Hide this button — bring it back from Panel controls">✖</button></div>';
         document.getElementById('auct-open').addEventListener('click', openAuctionSheet);
+        document.getElementById('auct-hide').addEventListener('click', function(){
+          try { localStorage.setItem(
+            'here_live_auction_btn', 'hide'); } catch (e) {}
+          box.dataset.k = 'host-hidden';
+          box.innerHTML = '';
+          paintPanelCtl();
+          toast('\ud83c\udff7 Auction button hidden \u2014 bring it back from your Panel controls.');
+        });
       }
     } else if (box.dataset.k !== 'none'){
       box.dataset.k = 'none';
@@ -7394,6 +7417,15 @@ function renderTopGifters(list){
     var sni = $('ctl-spot-names');
     if (sni && document.activeElement !== sni)
       sni.value = spotNames.join(', ');
+    var at = $('ctl-auct-toggle');
+    if (at){
+      var ah = false;
+      try { ah = localStorage.getItem(
+        'here_live_auction_btn') === 'hide'; } catch (e) {}
+      at.textContent = ah
+        ? '\ud83c\udff7 Auction button: hidden \u2014 Show'
+        : '\ud83c\udff7 Auction button: showing \u2014 Hide';
+    }
     $('ctl-boxes-minus').disabled = panelBoxes <= 1;
     $('ctl-boxes-plus').disabled = panelBoxes >= 8;
   }
@@ -7574,6 +7606,19 @@ function renderTopGifters(list){
   $('ctl-spot-save').addEventListener('click', function(){
     act('/spot-names', {names: $('ctl-spot-names').value},
         '🏷 Your spots are named.');
+  });
+  $('ctl-auct-toggle').addEventListener('click', function(){
+    var hide = false;
+    try {
+      hide = localStorage.getItem('here_live_auction_btn')
+             !== 'hide';
+      localStorage.setItem('here_live_auction_btn',
+                           hide ? 'hide' : 'show');
+    } catch (e) {}
+    var ab = document.getElementById('live-auction');
+    if (ab) ab.dataset.k = '';
+    try { renderAuction(curAuction, null); } catch (e) {}
+    paintPanelCtl();
   });
   $('ctl-boxes-minus').addEventListener('click', function(){
     if (panelBoxes > 1) act('/panel-boxes', {boxes: panelBoxes - 1});
