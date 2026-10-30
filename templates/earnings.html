@@ -106,7 +106,7 @@
 <div class="card">
   <div class="section-title">{{ ic('moneybag') }} Cash out</div>
   {% if pending %}
-  <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and sends automatically — it's your money, no approval needed. You'll see it marked paid right here.</p>
+  {% if pending.hand_note %}<p style="font-size:15px;margin-top:8px">✅ <strong>Paid by hand.</strong> {{ pending.hand_note|e }} Your <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> bank send from {{ pending.when|e }} is still queued and will land too — watch this space.</p>{% else %}<p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and sends automatically — it's your money, no approval needed. You'll see it marked paid right here.</p>{% endif %}
   <p class="cashout-status" style="font-size:14.5px;margin-top:8px">Cash-out status: on its way — {{ pending.dollars|e }} sends automatically; nothing is waiting on anybody's approval.</p>
   {% elif can_cashout %}
   <p class="cashout-status" style="font-size:15px;margin-top:8px;font-weight:800">✅ You're ready — you can cash out {{ cashout_dollars|e }} now</p>

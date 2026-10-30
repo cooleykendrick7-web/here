@@ -1598,6 +1598,14 @@ def init_db():
     if "fee_tickets" not in _pr_cols:
         c.execute("ALTER TABLE payout_requests ADD COLUMN "
                   "fee_tickets INTEGER DEFAULT 0")
+    # Auto-pay era (Oct 30): the owner may pay a creator BY HAND
+    # on top of a still-queued request (Ken paid Sunflwr $20 by
+    # hand; her $13 bank send still goes through). hand_note is
+    # that payment's display annotation — the request itself
+    # stays pending until its bank send completes it.
+    if "hand_note" not in _pr_cols:
+        c.execute("ALTER TABLE payout_requests ADD COLUMN "
+                  "hand_note TEXT DEFAULT ''")
     # Build O: password recovery. token_hash is the ONLY credential
     # copy (sha256 of the raw token); token_plain holds the raw token
     # ONLY while delivery='queued' so the owner panel can show the
@@ -18952,7 +18960,8 @@ async def tickets_page(request: Request):
         "can_cashout": earned >= CASHOUT_MIN_TICKETS and not pending,
         "pending": ({"tickets": pending["tickets"],
                      "dollars": _money(pending["dollars_cents"]),
-                     "when": fancy_time(pending["created_at"])}
+                     "when": fancy_time(pending["created_at"]),
+                     "hand_note": pending["hand_note"] or ""}
                     if pending else None),
         "packs": [TICKET_PACKS[k] for k in
                   ("pack100", "pack500", "pack1500")],
@@ -19305,7 +19314,8 @@ async def earnings_page(request: Request):
         "locked_content": locked_content,
         "pending": ({"tickets": pending["tickets"],
                      "dollars": _money2(pending["dollars_cents"]),
-                     "when": fancy_time(pending["created_at"])}
+                     "when": fancy_time(pending["created_at"]),
+                     "hand_note": pending["hand_note"] or ""}
                     if pending else None),
         "can_cashout": earned >= CASHOUT_MIN_TICKETS and not pending,
         "cashout_min": CASHOUT_MIN_TICKETS,
@@ -19419,6 +19429,8 @@ def _payout_status_text(pr):
     status (wallet page 'Your cash-outs' list)."""
     st = pr["status"]
     if st == "pending":
+        if (pr.get("hand_note") or "").strip():
+            return "✅ Paid by hand — bank send still coming"
         return "⏳ Queued — sends automatically"
     if st == "sending":
         return "💸 Sending to your bank…"
@@ -20998,6 +21010,7 @@ async def owner_dashboard(request: Request):
         "method": r["method"],
         "stripe_transfer_id": r["stripe_transfer_id"],
         "user_payout_ready": bool(r["user_payout_ready"]),
+        "hand_note": r["hand_note"] or "",
         "created_at": fancy_time(r["created_at"])}
         for r in prow_orders]
     tickets_sold = conn.execute(
@@ -21479,6 +21492,37 @@ async def owner_payout_send(request: Request, pid: int):
     return redir("/owner",
                  f"💸 Sent {_money(info['dollars_cents'])} to the "
                  f"streamer's bank (request {pid}).")
+
+
+@app.post("/owner/payouts/{pid}/hand-note")
+async def owner_payout_hand_note(request: Request, pid: int):
+    """Annotate a still-pending cash-out with a by-hand payment
+    the owner made OUTSIDE the ticket rails (Ken paid Sunflwr
+    $20 by hand on top of her queued $13, Oct 30). The request
+    is NOT settled by this — its bank send still completes it —
+    but the creator's pages show 'Paid by hand' instead of
+    'queued', and the desk carries the note."""
+    err = require_owner(request)
+    if err:
+        return err
+    try:
+        form = await request.form()
+        note = (form.get("note") or "").strip()[:200]
+    except Exception:
+        note = ""
+    conn = db()
+    cur = conn.execute(
+        "UPDATE payout_requests SET hand_note=? WHERE id=? AND "
+        "status IN ('pending','sending')", (note, pid))
+    conn.commit()
+    conn.close()
+    if cur.rowcount != 1:
+        return redir("/owner",
+                     "That cash-out isn't waiting anymore — "
+                     "no note added.")
+    return redir("/owner",
+                 f"💵 Noted on request {pid} — it shows as paid "
+                 "by hand, and its bank send still goes through.")
 
 
 @app.post("/owner/payouts/{pid}/paid")

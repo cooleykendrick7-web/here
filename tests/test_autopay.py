@@ -167,6 +167,31 @@ check("next pass pays the whole queue",
       req_of(U1ID)["status"] == "paid"
       and req_of(U2ID)["status"] == "paid")
 
+# ---- 5. hand-pay note: shows as paid, request still completes
+HATTIE, HID = make_user("Hattie", "hattie@auto.test", ready=True)
+CALLS["mode"] = "broke"
+HATTIE.post("/tickets/cashout", data={"payout_note": "bank"})
+pr = req_of(HID)
+check("setup: Hattie's cash-out is queued",
+      pr and pr["status"] == "pending", str(pr))
+NOTE = "Paid $20 by hand Oct 30 — bank send still coming ($32)"
+r = OWN.post(f"/owner/payouts/{pr['id']}/hand-note",
+             data={"note": NOTE})
+check("owner hand-note lands on the request",
+      req_of(HID)["hand_note"] == NOTE
+      and "Noted" in flash_of(r))
+page = HATTIE.get("/tickets").text
+check("her wallet shows Paid by hand + the note",
+      "Paid by hand" in page and "$20 by hand" in page)
+check("her history status reads paid-by-hand",
+      "Paid by hand — bank send still coming" in page)
+CALLS["mode"] = "ok"
+HATTIE.get("/tickets")
+pr = req_of(HID)
+check("the bank send still completes it (fully paid)",
+      pr and pr["status"] == "paid" and pr["hand_note"] == NOTE,
+      str(pr))
+
 fails = [n for n, ok in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} passed")
 if fails:

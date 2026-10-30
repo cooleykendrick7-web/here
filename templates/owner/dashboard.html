@@ -212,7 +212,7 @@ table.admin tr:last-child td{border-bottom:none}
           <td><strong>{{ p.dollars|e }}</strong></td>
           <td>{{ p.payout_note|e }}</td>
           <td>{{ p.created_at|e }}</td>
-          <td><span class="status-pill {{ p.status|e }}">{{ p.status|e }}</span>{% if p.status == 'paid' and p.method == 'stripe' %}<div style="font-size:11.5px;color:#9a9a9a">💸 Stripe → bank{% if p.stripe_transfer_id %} · {{ p.stripe_transfer_id|e }}{% endif %}</div>{% elif p.status == 'paid' and p.method == 'manual' %}<div style="font-size:11.5px;color:#9a9a9a">✋ paid by hand</div>{% elif p.status == 'pending' and p.user_payout_ready %}<div style="font-size:11.5px;color:#9a9a9a">🏦 bank ready</div>{% endif %}</td>
+          <td><span class="status-pill {{ p.status|e }}">{{ p.status|e }}</span>{% if p.status == 'paid' and p.method == 'stripe' %}<div style="font-size:11.5px;color:#9a9a9a">💸 Stripe → bank{% if p.stripe_transfer_id %} · {{ p.stripe_transfer_id|e }}{% endif %}</div>{% elif p.status == 'paid' and p.method == 'manual' %}<div style="font-size:11.5px;color:#9a9a9a">✋ paid by hand</div>{% elif p.status == 'pending' and p.user_payout_ready %}<div style="font-size:11.5px;color:#9a9a9a">🏦 bank ready</div>{% endif %}{% if p.hand_note %}<div style="font-size:11.5px;color:#7ee2a0">💵 {{ p.hand_note|e }}</div>{% endif %}</td>
           <td style="white-space:nowrap">
             {% if p.status == 'pending' %}
             {% if p.user_payout_ready %}
@@ -229,6 +229,10 @@ table.admin tr:last-child td{border-bottom:none}
             {% endif %}
             <form class="inline-form" action="/owner/payouts/{{ p.id }}/declined" method="post" onsubmit="return confirm('Decline this cash-out? The tickets go back to {{ p.user_name|e }}\'s earnings.');">
               <button type="submit" class="btn-ghost">Decline</button>
+            </form>
+            <form class="inline-form" action="/owner/payouts/{{ p.id }}/hand-note" method="post">
+              <input type="text" name="note" placeholder="Paid $20 by hand…" maxlength="200" style="width:150px">
+              <button type="submit" class="btn-ghost">💵 Note hand pay</button>
             </form>
             {% elif p.status == 'sending' %}
             <span style="font-size:12.5px;color:#9a9a9a">send attempted — check Stripe</span>

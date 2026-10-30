@@ -118,7 +118,7 @@
 </div>
   <div class="section-title">💰 Cash out earnings</div>
   {% if pending %}
-  <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and sends automatically — it's your money, no approval needed. You'll see it marked paid right here.</p>
+  {% if pending.hand_note %}<p style="font-size:15px;margin-top:8px">✅ <strong>Paid by hand.</strong> {{ pending.hand_note|e }} Your <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> bank send from {{ pending.when|e }} is still queued and will land too — watch this space.</p>{% else %}<p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and sends automatically — it's your money, no approval needed. You'll see it marked paid right here.</p>{% endif %}
   {% elif can_cashout %}
   <p style="font-size:14.5px;margin-top:8px">You can cash out <strong>all {{ earned }} earned tickets = {{ earned_dollars|e }}</strong>. Tell us exactly where to send it — the owner sends payouts by hand and marks them paid.</p>
   <form method="post" action="/tickets/cashout" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
