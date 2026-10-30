@@ -135,6 +135,26 @@
   grid-column:1/-1;aspect-ratio:16/9;height:auto;max-height:54vh}
 .live-grid.panel-grid.has-spotlight .live-tile.spot-tile video{
   object-fit:contain;background:#000}
+/* Personal focus (Ken, Oct 30): ⤢ on a tile blows it up on
+   the tapper's screen only — pure local layout. In focus
+   mode the small tiles compact so a phone still shows the
+   whole panel; the focused tile wears a gold edge so you
+   can tell your private view from the host's spotlight. */
+.live-tile .tile-focus{position:absolute;top:6px;right:42px;z-index:3;width:30px;height:30px;
+  border-radius:50%;border:var(--lg-border);background:var(--lg-bg);color:#fff;font-size:15px;
+  font-weight:800;cursor:pointer;line-height:1;
+  backdrop-filter:var(--lg-blur-sm);-webkit-backdrop-filter:var(--lg-blur-sm)}
+.live-tile .tile-focus.on{background:#e50914;border-color:#e50914}
+.live-grid.panel-grid.has-spotlight.my-focus .live-tile.spot-tile{
+  outline:2px solid rgba(245,197,66,.85);outline-offset:-2px}
+.live-grid.panel-grid.has-spotlight.my-focus .live-tile:not(.spot-tile){
+  aspect-ratio:1/1;max-height:17vh}
+@media (orientation:landscape){
+  .live-grid.panel-grid.has-spotlight.my-focus .live-tile.spot-tile{max-height:none}
+  .live-grid.panel-grid.has-spotlight.my-focus .live-tile:not(.spot-tile){
+    aspect-ratio:auto;max-height:none}
+}
+#focus-exit{position:absolute;top:64px;right:10px;z-index:6}
 /* Drag grip (host/admin): drag a block to its new home. */
 .live-tile .tile-grip{position:absolute;bottom:36px;right:4px;z-index:5;
   cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;
@@ -752,6 +772,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
 <div class="live-stage" id="live-stage">
   <div id="stage-bg"></div>
   <div class="live-grid cols-1" id="live-grid"></div>
+  <button type="button" id="focus-exit" class="mini-btn" hidden>✖ Exit focus</button>
   <div class="live-topbar">
     <span class="live-pill"><span class="dot">●</span> LIVE</span>
     <div class="live-meta">
@@ -1076,7 +1097,14 @@ function liveRoomDiff(prev, next){
   var battleDurPick = 300;        /* challenge length picker (W2) */
   /* ---- Build X: panel grid state ---- */
   var panelOpen = false;
-  var spotlightId = null;   /* talk-show spotlight (state-driven) */          /* state payload's panel_open */
+  var spotlightId = null;   /* talk-show spotlight (state-driven) */
+  var myFocusId = null;     /* personal focus (Ken, Oct 30): the
+                               tile *I* blew up — my screen only,
+                               never sent to the server */
+  function toggleFocus(uid){
+    myFocusId = (myFocusId === uid) ? null : uid;
+    renderTiles();
+  }          /* state payload's panel_open */
   var panelBoxes = 5;             /* state payload's panel_boxes */
   var myJoin = null;              /* state payload's my_join */
   var layoutPref = 'grid';        /* 'grid' | 'rail', per device */
@@ -1350,6 +1378,20 @@ function liveRoomDiff(prev, next){
         openManageSheet(targetId);
       });
     })(uid);
+    /* Personal focus (Ken, Oct 30): ⤢ blows this tile up on
+       MY screen only. Its own button, like the tile's other
+       chrome, so the tap never touches the gift-tap below. */
+    var focusBtn = document.createElement('button');
+    focusBtn.type = 'button';
+    focusBtn.className = 'tile-focus';
+    focusBtn.textContent = '⤢';
+    focusBtn.title = 'Focus — big on my screen only';
+    (function(targetId){
+      focusBtn.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        toggleFocus(targetId);
+      });
+    })(uid);
     /* Build X: role chip at the tile's top-left — the host's
        tile is labeled "Host", like the reference layout. */
     var roleChip = document.createElement('span');
@@ -1362,6 +1404,7 @@ function liveRoomDiff(prev, next){
     el.appendChild(video);
     el.appendChild(label);
     el.appendChild(menuBtn);
+    el.appendChild(focusBtn);
     el.appendChild(roleChip);
     el.appendChild(lvlChip);
     /* Build PANEL GIFTS: tapping a tile aims my gifts at that
@@ -1378,6 +1421,7 @@ function liveRoomDiff(prev, next){
     gridEl.appendChild(el);
     tiles[uid] = {el: el, video: video, ph: ph, labelName: tname,
                   badges: badges, srcTag: srcTag, menuBtn: menuBtn,
+                  focusBtn: focusBtn,
                   member: member, dot: dot, recon: recon,
                   phStatus: phStatus, videoState: '',
                   grip: grip,
@@ -1507,13 +1551,20 @@ function liveRoomDiff(prev, next){
     Object.keys(tiles).forEach(function(uid){
       if (!panelById[uid]) removeTile(+uid);
     });
-    var spot = (spotlightId && panelById[spotlightId]
-                && panel.length > 1) ? spotlightId : null;
+    var spot = (myFocusId && panelById[myFocusId]
+                && panel.length > 1) ? myFocusId
+      : (spotlightId && panelById[spotlightId]
+         && panel.length > 1) ? spotlightId : null;
     panel.forEach(function(m){
       var T2 = tiles[m.user_id];
       if (T2) T2.el.classList.toggle('spot-tile',
                                      !!spot && m.user_id === spot);
+      if (T2 && T2.focusBtn)
+        T2.focusBtn.classList.toggle('on',
+                                     m.user_id === myFocusId);
     });
+    var fxEl = document.getElementById('focus-exit');
+    if (fxEl) fxEl.hidden = !(myFocusId && spot === myFocusId);
     var mode = stageLayout(), cls, cells = panel.length;
     if (mode === 'grid' || spot){
       /* Cells = people + the host's empty boxes, so filling a
@@ -1521,7 +1572,8 @@ function liveRoomDiff(prev, next){
       cells += emptySquareCount();
       var cols = gridCols(cells);
       cls = 'live-grid panel-grid cols-' + cols
-        + (spot ? ' has-spotlight' : '');
+        + (spot ? ' has-spotlight' : '')
+        + (spot && spot === myFocusId ? ' my-focus' : '');
       gridEl.style.setProperty('--pcols', cols);
       gridEl.style.setProperty('--prows',
         Math.max(1, Math.ceil(cells / cols)));
@@ -5261,6 +5313,11 @@ function liveRoomDiff(prev, next){
               act('/spotlight', {user_id: tg.user_id});
             });
           }
+          sheetBtn(myFocusId === tg.user_id
+              ? '⤢ Unfocus (my screen only)'
+              : '⤢ Focus — my screen only', false, function(){
+            toggleFocus(tg.user_id);
+          });
           if (tg.rank === 'regular'){
             sheetBtn('⭐ Remove regular', false, function(){
               act('/rank', {user_id: tg.user_id, rank: 'guest'});
@@ -7630,6 +7687,13 @@ function renderTopGifters(list){
       role: 'guest', admin: false, muted: false});
     return out;
   }
+  (function(){
+    var fx = document.getElementById('focus-exit');
+    if (fx) fx.addEventListener('click', function(){
+      myFocusId = null;
+      renderTiles();
+    });
+  })();
   var curBackdrop = null;
   function applyBackdrop(url){
     curBackdrop = url || '';
