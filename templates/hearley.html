@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Ask Hearley — HERE{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div style="display:flex;align-items:center;gap:12px">
+    <span style="font-size:38px;line-height:1">🤖</span>
+    <div>
+      <div class="section-title" style="margin:0">Hearley — HERE's house helper</div>
+      <p style="color:var(--muted);font-size:13.5px;margin-top:2px">Ask me how anything on HERE works. Straight answers, no runaround.</p>
+    </div>
+  </div>
+
+  <div id="hl-log" style="margin-top:16px;display:flex;flex-direction:column;gap:10px"></div>
+
+  <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap" id="hl-chips">
+    <button type="button" class="btn-ghost btn-sm" data-q="How do I cash out?">💰 How do I cash out?</button>
+    <button type="button" class="btn-ghost btn-sm" data-q="How do I go live?">🎥 How do I go live?</button>
+    <button type="button" class="btn-ghost btn-sm" data-q="What is a Verified Vendor?">🏷 What's a Verified Vendor?</button>
+    <button type="button" class="btn-ghost btn-sm" data-q="How do tickets work?">🎟️ How do tickets work?</button>
+    <button type="button" class="btn-ghost btn-sm" data-q="Tell me about the Invite Race">🏁 The Invite Race</button>
+    <button type="button" class="btn-ghost btn-sm" data-q="How do I sell on the Market?">🛒 Selling on the Market</button>
+  </div>
+
+  <form id="hl-form" style="margin-top:14px;display:flex;gap:8px">
+    <input type="text" id="hl-input" placeholder="Ask Hearley anything about HERE…" autocomplete="off" maxlength="500" style="flex:1;background:#f0f2f5;border:1px solid var(--border);border-radius:999px;padding:11px 16px;font-size:14.5px">
+    <button type="submit" class="btn" id="hl-send">Ask</button>
+  </form>
+  <p style="color:var(--muted);font-size:12.5px;margin-top:10px">Hearley knows HERE inside out. For account trouble she can't fix, the support inbox is wearehereyouarehere@gmail.com — the owner runs it himself. <a href="/faq">Prefer reading? The FAQ →</a></p>
+</div>
+
+<script>
+(function(){
+  var log = document.getElementById('hl-log');
+  var form = document.getElementById('hl-form');
+  var input = document.getElementById('hl-input');
+  var send = document.getElementById('hl-send');
+  function bubble(who, text, link, label){
+    var row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.gap = '9px';
+    row.style.alignItems = 'flex-start';
+    if (who === 'me'){ row.style.flexDirection = 'row-reverse'; }
+    var av = document.createElement('span');
+    av.textContent = who === 'me' ? '🧑' : '🤖';
+    av.style.fontSize = '22px';
+    av.style.lineHeight = '1.2';
+    var b = document.createElement('div');
+    b.style.maxWidth = '82%';
+    b.style.padding = '10px 13px';
+    b.style.borderRadius = '14px';
+    b.style.fontSize = '14.5px';
+    b.style.lineHeight = '1.55';
+    b.style.whiteSpace = 'pre-wrap';
+    if (who === 'me'){ b.style.background = '#d41f2e'; b.style.color = '#fff'; }
+    else { b.style.background = '#f0f2f5'; b.style.color = '#1c1e21'; }
+    b.textContent = text;
+    if (link){
+      var a = document.createElement('a');
+      a.href = link;
+      a.textContent = (label || 'Open') + ' →';
+      a.style.display = 'inline-block';
+      a.style.marginTop = '7px';
+      a.style.fontWeight = '800';
+      b.appendChild(document.createElement('br'));
+      b.appendChild(a);
+    }
+    row.appendChild(av);
+    row.appendChild(b);
+    log.appendChild(row);
+    row.scrollIntoView({behavior:'smooth', block:'nearest'});
+    return b;
+  }
+  function ask(q){
+    q = (q || '').trim();
+    if (!q) return;
+    bubble('me', q);
+    input.value = '';
+    send.disabled = true;
+    var wait = bubble('hl', 'One sec…');
+    fetch('/api/hearley/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({q:q})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        wait.parentNode.remove();
+        if (d && d.ok){ bubble('hl', d.answer, d.link, d.link_label); }
+        else { bubble('hl', "My brain hiccuped — try me again. If it keeps happening, the support inbox is wearehereyouarehere@gmail.com."); }
+      })
+      .catch(function(){
+        wait.parentNode.remove();
+        bubble('hl', "I couldn't reach my brain just now — try again in a moment.");
+      })
+      .finally(function(){ send.disabled = false; input.focus(); });
+  }
+  form.addEventListener('submit', function(e){ e.preventDefault(); ask(input.value); });
+  var chips = document.getElementById('hl-chips');
+  chips.addEventListener('click', function(e){
+    var t = e.target.closest('[data-q]');
+    if (t) ask(t.getAttribute('data-q'));
+  });
+  bubble('hl', "Hey! 👋 I'm Hearley, HERE's house helper. Ask me how anything works — posting, going live, tickets, cashing out, the Market, badges… or tap a question below.");
+  var q0 = new URLSearchParams(window.location.search).get('q');
+  if (q0) ask(q0);
+})();
+</script>
+
+{% endblock %}

@@ -335,7 +335,7 @@ table.admin tr:last-child td{border-bottom:none}
         {% for v in verifications %}
         <tr>
           <td>{{ v.id }}</td>
-          <td>{{ v.kind|e }}</td>
+          <td>{{ v.kind_label|e }}</td>
           <td><a href="{{ v.link }}">{{ v.name|e }}</a>{% if v.status == 'approved' %} <span style="color:#FFD700" title="Verified">★</span>{% endif %}</td>
           <td>{{ v.requester_name|e }}</td>
           <td>{{ v.posts }}</td>
@@ -411,6 +411,12 @@ table.admin tr:last-child td{border-bottom:none}
           <td>{{ u.posts }}</td>
           <td>{{ u.friends }}</td>
           <td>
+            <form class="inline-form" action="/owner/users/{{ u.id }}/badge/vuser" method="post">
+              <button type="submit" class="btn-ghost" title="Flip the red Verified User sticker on this profile">🛡 Verified User: {{ 'ON' if u.is_verified_user else 'OFF' }}</button>
+            </form>
+            <form class="inline-form" action="/owner/users/{{ u.id }}/badge/vvendor" method="post">
+              <button type="submit" class="btn-ghost" title="Flip the gold Verified Vendor sticker on this profile">🏷 Verified Vendor: {{ 'ON' if u.is_verified_vendor else 'OFF' }}</button>
+            </form>
             <form class="inline-form" action="/owner/user/{{ u.id }}/remove" method="post" onsubmit="return confirm('Remove user {{ u.name|e }} and ALL their content?');">
               <button type="submit" class="btn">Remove User</button>
             </form>

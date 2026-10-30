@@ -53,7 +53,7 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
     {% if seller.avatar %}<img class="avatar" src="{{ seller.avatar|e }}" alt="">
     {% else %}<span class="av-ph">{{ seller.name[:1]|upper|e }}</span>{% endif %}
     <div>
-      <div class="nm">{{ seller.name|e }}</div>
+      <div class="nm">{{ seller.name|e }}{% with bv_vendor=seller.is_verified_vendor, bv_size=16 %}{% include "partials/badges.html" %}{% endwith %}</div>
       <div class="meta">selling on HERE Market{% if listing.location %} · 📍 {{ listing.location|e }}{% endif %}</div>
     </div>
   </div>

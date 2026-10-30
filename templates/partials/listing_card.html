@@ -10,7 +10,7 @@
     <div class="mkt-meta">{% if l.location %}{{ l.location|e }} · {% endif %}{{ l.created|e }}</div>
     <div class="mkt-seller">
       {% if l.seller_avatar %}<img src="{{ l.seller_avatar|e }}" alt="">{% endif %}
-      <a href="/user/{{ l.seller_id }}">{{ l.seller_name|e }}</a>
+      <a href="/user/{{ l.seller_id }}">{{ l.seller_name|e }}</a>{% with bv_vendor=l.seller_vvendor, bv_size=15 %}{% include "partials/badges.html" %}{% endwith %}
       {% if l.saved %}<span class="mkt-saved-tag">♥ Saved</span>{% endif %}
     </div>
     {% if mine_page %}

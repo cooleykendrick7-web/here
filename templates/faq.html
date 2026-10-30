@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Help &amp; FAQ — HERE{% endblock %}
+{% block content %}
+
+<div class="card" style="background:linear-gradient(135deg,#1a0508,#3d0a10);color:#fff;border:none">
+  <div class="section-title" style="color:#fff">🤖 Ask Hearley — HERE's house helper</div>
+  <p style="margin-top:8px;font-size:14.5px;line-height:1.55">Don't feel like reading? <strong>Hearley</strong> answers real questions about how HERE works — straight, specific answers about posting, going live, tickets, cashing out, the Market, badges, all of it.</p>
+  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+    <a class="btn" href="/hearley">🤖 Chat with Hearley</a>
+    <a class="btn-ghost" style="color:#fff;border-color:rgba(255,255,255,.5)" href="/hearley?q=how%20do%20I%20cash%20out">How do I cash out?</a>
+    <a class="btn-ghost" style="color:#fff;border-color:rgba(255,255,255,.5)" href="/hearley?q=how%20do%20I%20go%20live">How do I go live?</a>
+    <a class="btn-ghost" style="color:#fff;border-color:rgba(255,255,255,.5)" href="/hearley?q=what%20is%20a%20verified%20vendor">What's a Verified Vendor?</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">❓ How HERE works — the FAQ</div>
+  <p style="color:var(--muted);font-size:14px;margin-top:6px">Tap a question to open the answer. Everything here is the plain truth about how this house runs.</p>
+
+  <details style="margin-top:14px">
+    <summary style="cursor:pointer;font-weight:800">🚀 Getting started — posts, friends, messages</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p><strong>Post:</strong> tap ➕ Create up top, write it, pick who sees it (Public, Friends, or Only me), hit Post. Photos, video, feelings, and songs all ride along.</p>
+      <p style="margin-top:6px"><strong>Stories</strong> sit at the top of the feed and last 24 hours. <strong>Peeps</strong> are short, loud posts in the same feed.</p>
+      <p style="margin-top:6px"><strong>Friends:</strong> search a name up top, open the profile, tap Add Friend. Friends see your friends-only posts and can call you. <strong>Messages:</strong> the envelope up top is your Inbox — text, photos, voice.</p>
+    </div>
+  </details>
+
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer;font-weight:800">🎥 Platforms — going live</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p>Every live on HERE is a <strong>Platform</strong>. Tap the red Platforms button, then Go Live — title it, pick a category, you're on air. The <strong>Lobby</strong> is the always-open Platform: walk in anytime.</p>
+      <p style="margin-top:6px"><strong>Want on stage?</strong> In a Platform, tap <em>Apply for a spot</em>. The host sees your name and lets you in. On stage, your mute and camera are yours. Watchers can comment live and gift the host.</p>
+    </div>
+  </details>
+
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer;font-weight:800">🎟️ Live Tickets &amp; gifts — the money of HERE</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p>Fans buy <strong>Live Tickets</strong>: 100 for $0.99 · 500 for $4.99 · 1,500 for $13.99, on the Tickets page (Stripe handles the card; your balance updates the second it clears).</p>
+      <p style="margin-top:6px">Send gifts on lives, posts, Peeps, and tracks. Gifts leave your spend balance and land in the creator's <strong>earned</strong> balance. Every earned ticket is worth <strong>half a cent, guaranteed</strong> — the $13.99 pack gifted in full pays the creator <strong>$7.50</strong>. No follower minimum, ever.</p>
+    </div>
+  </details>
+
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer;font-weight:800">💰 Cashing out — turning tickets into money</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p>At <strong>2,000 earned tickets ($10)</strong> the cash-out door opens on the Tickets page. Set up bank payouts once (about five minutes, on Stripe's own page — HERE never sees your bank numbers) and approved cash-outs land in your bank in about two business days. Bank-ready cash-outs send themselves; it's your money, there's no approval line.</p>
+    </div>
+  </details>
+
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer;font-weight:800">🛒 The Market — buying &amp; selling</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p>List from the Market page: up to 4 photos, a price (0 = FREE), a category. Buyers message you in your Inbox. <strong>HERE doesn't handle payments</strong> — meet in a public place and pay the seller directly. A boost (100 tickets) pushes your listing up front.</p>
+      <p style="margin-top:6px">Look for the gold <strong>Verified Vendor</strong> sticker beside a seller's name — that seller is stood-up and trusted by the owner.</p>
+    </div>
+  </details>
+
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer;font-weight:800">🏅 Badges &amp; stickers — the marks of HERE</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p>★ <strong>The golden star</strong> — an important page on HERE. Apply in Settings; the owner reviews your page and posts himself. The bar: very interesting, very eye-catching, attention-grabbing.</p>
+      <p style="margin-top:6px">🛡 <strong>Verified User</strong> (red sticker) — the owner has stood this person up as a real member of HERE.</p>
+      <p style="margin-top:6px">🏷 <strong>Verified Vendor</strong> (gold sticker) — a seller the owner trusts; it shows on their Market listings too.</p>
+      <p style="margin-top:6px">🎤 <strong>Verified Artist</strong> (gold plaque) — the HERE record label's artists. Artist mode lives in Settings.</p>
+      <p style="margin-top:6px;color:var(--muted)">Psst: the User and Vendor stickers have a quiet request door buried deep in Settings, near the very bottom. Most people never find it. You just did.</p>
+    </div>
+  </details>
+
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer;font-weight:800">🏁 The $100 Invite Race (Oct 30 – Nov 15, 2026)</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p>First place <strong>$100 cash</strong> · second <strong>1,000 tickets</strong> · third <strong>500 tickets</strong>. A join counts only when your invited person actually <em>uses</em> HERE — posts, joins a live, or uses tickets. Ghost signups don't count. Minimum 20 real joins for the money to pay out, and the owner verifies the winner before anybody gets paid. Board: <a href="/invite-race">joincomehere.com/invite-race</a>.</p>
+    </div>
+  </details>
+
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer;font-weight:800">🔒 Privacy &amp; safety</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p>Every post picks its audience. Settings → Privacy can make your whole profile friends-only. <strong>Block</strong> ends contact both ways; <strong>Silence</strong> just quiets somebody for you. Anything can be flagged — flags go to the owner's desk and he alone decides: remove, keep, or warn.</p>
+    </div>
+  </details>
+
+  <details style="margin-top:12px">
+    <summary style="cursor:pointer;font-weight:800">🔑 Account help</summary>
+    <div style="margin-top:8px;font-size:14.5px;line-height:1.6">
+      <p>Forgot your password? The login page's reset door emails a one-time link to the address on your account (good for one hour — check spam). Anything else, the support inbox is <strong>wearehereyouarehere@gmail.com</strong>, run by the owner himself. Say your HERE name and the problem, plain and simple.</p>
+    </div>
+  </details>
+</div>
+
+{% endblock %}

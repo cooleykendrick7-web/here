@@ -397,6 +397,39 @@
   {% endif %}
 </div>
 
+<div class="card">
+  <details>
+    <summary style="cursor:pointer;font-weight:800;font-size:15px">🕵️ Psst — the badge door (most people never find this)</summary>
+    <p style="margin-top:10px;color:var(--muted)">Two more stickers ride beside a name on HERE, and this quiet corner of Settings is the only place to ask for one. Word travels — that's the point.</p>
+    <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      {% with bv_user=1, bv_full=1 %}{% include "partials/badges.html" %}{% endwith %}
+      <span style="flex:1;min-width:200px"><strong>Verified User.</strong> The red sticker says the owner has stood you up as a real member of HERE. It rides beside your name on your profile and your posts.</span>
+    </div>
+    {% if profile.is_verified_user %}
+    <p style="margin-top:8px">✅ You wear it — look beside your name on your profile.</p>
+    {% elif profile.vuser_status == 'pending' %}
+    <p style="margin-top:8px">⏳ Request in — the owner reviews every one by hand.</p>
+    {% else %}
+    <form action="/verify/vuser/request" method="post" style="margin-top:10px">
+      <button type="submit" class="btn-ghost">Ask for the Verified User sticker</button>
+    </form>
+    {% endif %}
+    <div style="margin-top:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      {% with bv_vendor=1, bv_full=1 %}{% include "partials/badges.html" %}{% endwith %}
+      <span style="flex:1;min-width:200px"><strong>Verified Vendor.</strong> The gold sticker tells buyers this seller is stood-up and trusted. It rides beside your name and on your Market listings.</span>
+    </div>
+    {% if profile.is_verified_vendor %}
+    <p style="margin-top:8px">✅ You wear it — buyers can see it on your listings.</p>
+    {% elif profile.vvendor_status == 'pending' %}
+    <p style="margin-top:8px">⏳ Request in — the owner reviews every one by hand.</p>
+    {% else %}
+    <form action="/verify/vvendor/request" method="post" style="margin-top:10px">
+      <button type="submit" class="btn-ghost">Ask for the Verified Vendor sticker</button>
+    </form>
+    {% endif %}
+  </details>
+</div>
+
 {% endblock %}
 
 {% block scripts %}

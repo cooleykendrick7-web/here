@@ -28,7 +28,7 @@
       {% if profile.spot_name %}
       <h2 class="spot-title">{{ profile.spot_name|e }}</h2>
       <div class="spot-owner-line">
-        <span class="spot-real-name">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}{% if profile.artist_verified %} {% with ab_size=22 %}{% include "partials/artist_badge.html" %}{% endwith %}{% endif %}</span>
+        <span class="spot-real-name">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}{% if profile.artist_verified %} {% with ab_size=22 %}{% include "partials/artist_badge.html" %}{% endwith %}{% endif %}{% with bv_user=profile.is_verified_user, bv_vendor=profile.is_verified_vendor, bv_size=19 %}{% include "partials/badges.html" %}{% endwith %}</span>
         {% if not profile.is_self %}
         <form class="inline-form" action="/tap/{{ profile.id }}" method="post">
           <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">{{ ic('tap') }} Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>
@@ -38,7 +38,7 @@
         {% endif %}
       </div>
       {% else %}
-      <h2 style="font-size:24px">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}{% if profile.founding %} <a href="/founders" title="The Original 100 wall" style="display:inline-block;vertical-align:middle;background:linear-gradient(135deg,#f5c542,#b8860b);color:#231a00;font-size:12px;font-weight:900;padding:3px 9px;border-radius:999px;letter-spacing:.3px;text-decoration:none">🏅 ORIGINAL{% if profile.founding_no %} #{{ profile.founding_no }}{% else %} 100{% endif %}</a>{% endif %}{% if profile.is_plus %} <span title="HERE Plus member" style="background:linear-gradient(135deg,#7b2ff7,#e01e26);color:#fff;font-size:10.5px;font-weight:900;padding:2px 7px;border-radius:999px;vertical-align:middle">⭐ PLUS</span>{% endif %}{% if profile.artist_verified %} {% with ab_size=24 %}{% include "partials/artist_badge.html" %}{% endwith %}{% endif %}
+      <h2 style="font-size:24px">{{ profile.name|e }}{% if profile.is_verified %} <span class="verified-star" title="Verified — an important page on HERE">{{ ic('verified') }}</span>{% endif %}{% if profile.founding %} <a href="/founders" title="The Original 100 wall" style="display:inline-block;vertical-align:middle;background:linear-gradient(135deg,#f5c542,#b8860b);color:#231a00;font-size:12px;font-weight:900;padding:3px 9px;border-radius:999px;letter-spacing:.3px;text-decoration:none">🏅 ORIGINAL{% if profile.founding_no %} #{{ profile.founding_no }}{% else %} 100{% endif %}</a>{% endif %}{% if profile.is_plus %} <span title="HERE Plus member" style="background:linear-gradient(135deg,#7b2ff7,#e01e26);color:#fff;font-size:10.5px;font-weight:900;padding:2px 7px;border-radius:999px;vertical-align:middle">⭐ PLUS</span>{% endif %}{% if profile.artist_verified %} {% with ab_size=24 %}{% include "partials/artist_badge.html" %}{% endwith %}{% endif %}{% with bv_user=profile.is_verified_user, bv_vendor=profile.is_verified_vendor, bv_size=21 %}{% include "partials/badges.html" %}{% endwith %}
         {% if not profile.is_self %}
         <form class="inline-form" action="/tap/{{ profile.id }}" method="post">
           <button type="submit" class="btn-ghost btn-sm" title="Tap {{ profile.name|e }}">{{ ic('tap') }} Tap{% if profile.tap_count %} ({{ profile.tap_count }}){% endif %}</button>
@@ -57,6 +57,7 @@
       <span class="kind-tag">🎤 Live Level: {{ profile.live_level.label|e }}</span>
       {% if profile.showdown_w or profile.showdown_l or profile.showdown_d %}<span class="kind-tag">⚔️ Showdowns: {{ profile.showdown_w }}W – {{ profile.showdown_l }}L{% if profile.showdown_d %} – {{ profile.showdown_d }}D{% endif %}</span>{% endif %}
       {% endif %}
+      {% if profile.is_verified_user or profile.is_verified_vendor %}<div style="margin-top:9px;display:flex;gap:10px;flex-wrap:wrap">{% with bv_user=profile.is_verified_user, bv_vendor=profile.is_verified_vendor, bv_full=1 %}{% include "partials/badges.html" %}{% endwith %}</div>{% endif %}
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
       {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
       {% if profile.founding_no == 1 and not profile.is_private_locked %}

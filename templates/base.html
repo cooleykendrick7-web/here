@@ -138,6 +138,18 @@ img{max-width:100%}
   text-shadow:0 0 6px #fff,0 0 12px #FFD700,0 0 8px rgba(212,31,46,.8)}
 .verified-wrap{display:inline-flex;align-items:center;gap:4px}
 
+/* ===== Verified User / Verified Vendor stickers ===== */
+.bv-seal{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;vertical-align:-3px;flex:none;margin-left:3px;border:1.5px solid rgba(255,255,255,.9);box-shadow:0 1px 5px rgba(0,0,0,.35), inset 0 1px 2px rgba(255,255,255,.55)}
+.bv-user{background:radial-gradient(circle at 32% 30%, #ff6a5e, #d41f2e 55%, #8f101c)}
+.bv-vendor{background:radial-gradient(circle at 32% 30%, #ffe98a, #f5c542 55%, #a87408)}
+.bv-sticker{display:inline-flex;align-items:center;gap:8px;padding:5px 13px 5px 6px;border-radius:999px;transform:rotate(-2deg);border:2px solid rgba(255,255,255,.92);box-shadow:0 3px 12px rgba(0,0,0,.4), inset 0 1px 2px rgba(255,255,255,.6)}
+.bv-sticker .bv-seal{margin-left:0}
+.bv-user-bg{background:linear-gradient(120deg,#e8303a,#a5121e);color:#fff}
+.bv-vendor-bg{background:linear-gradient(120deg,#ffd94d,#d99a12);color:#231a00}
+.bv-txt{display:flex;flex-direction:column;line-height:1.05;text-align:left}
+.bv-txt b{font-size:12.5px;font-weight:900;letter-spacing:.6px}
+.bv-txt i{font-style:normal;font-size:8.5px;font-weight:800;letter-spacing:2.2px;opacity:.85}
+
 /* ===== MySpace-style full profile backgrounds ===== */
 body.has-profile-bg{background-color:#0b0b0e;background-size:cover;
   background-position:center top;background-repeat:no-repeat;background-attachment:scroll}
@@ -1384,6 +1396,8 @@ body .bolt .hic{fill:currentColor;stroke:none;filter:none}
   <a href="/market"><span>{{ ic('market') }}</span> Market</a>
   <a href="/hidden"><span>{{ ic('hide') }}</span> Hidden</a>
   <a href="/invite"><span>{{ ic('invite') }}</span> Invite</a>
+  <a href="/faq"><span>❓</span> Help &amp; FAQ</a>
+  <a href="/hearley"><span>🤖</span> Ask Hearley</a>
   <div class="menu-group">Settings</div>
   <a href="/settings/profile"><span>{{ ic('post') }}</span> Edit Profile</a>
   <a href="/settings/profile#spot"><span>{{ ic('home') }}</span> Your Spot</a>
@@ -1427,6 +1441,8 @@ body .bolt .hic{fill:currentColor;stroke:none;filter:none}
     <a class="menu-item" href="/market"><span class="menu-ic">{{ ic('market') }}</span> Market</a>
     <a class="menu-item" href="/hidden"><span class="menu-ic">{{ ic('hide') }}</span> Hidden</a>
     <a class="menu-item" href="/invite"><span class="menu-ic">{{ ic('invite') }}</span> Invite</a>
+    <a class="menu-item" href="/faq"><span class="menu-ic">❓</span> Help &amp; FAQ</a>
+    <a class="menu-item" href="/hearley"><span class="menu-ic">🤖</span> Ask Hearley</a>
     <div class="menu-group">Settings</div>
     <a class="menu-item" href="/settings/profile"><span class="menu-ic">{{ ic('post') }}</span> Edit Profile</a>
     <a class="menu-item" href="/settings/profile#spot"><span class="menu-ic">{{ ic('home') }}</span> Your Spot</a>

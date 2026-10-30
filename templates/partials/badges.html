@@ -1,0 +1,22 @@
+{# Verified User / Verified Vendor stickers (Ken — Oct 30, 2026).
+   Owner-granted trust stickers that ride beside a name.
+   Set with {% with %}: bv_user / bv_vendor (bools),
+   bv_size = mini seal px (default 18), bv_full = 1 for the big
+   sticker with the words (profile header). The red seal + white
+   check is the VERIFIED USER; the gold seal + black price-tag is
+   the VERIFIED VENDOR. Styles live in base.html (.bv-*). #}
+{% set _s = bv_size|default(18) %}
+{% if bv_user|default(false) %}
+  {% if bv_full|default(0) %}
+  <span class="bv-sticker bv-user-bg" title="Verified User on HERE"><span class="bv-seal bv-user" style="width:27px;height:27px"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true"><path d="M4 12.6l5.2 5L20 6.8" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="bv-txt"><b>VERIFIED USER</b><i>ON HERE</i></span></span>
+  {% else %}
+  <span class="bv-seal bv-user" style="width:{{ _s }}px;height:{{ _s }}px" title="Verified User on HERE"><svg viewBox="0 0 24 24" width="{{ (_s * 0.66)|round|int }}" height="{{ (_s * 0.66)|round|int }}" fill="none" aria-hidden="true"><path d="M4 12.6l5.2 5L20 6.8" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  {% endif %}
+{% endif %}
+{% if bv_vendor|default(false) %}
+  {% if bv_full|default(0) %}
+  <span class="bv-sticker bv-vendor-bg" title="Verified Vendor on HERE"><span class="bv-seal bv-vendor" style="width:27px;height:27px"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3.5 3.5h7.6l9 9-7.6 7.6-9-9z" fill="#231a00"/><circle cx="8" cy="8" r="1.9" fill="#f5c542"/></svg></span><span class="bv-txt"><b>VERIFIED VENDOR</b><i>ON HERE</i></span></span>
+  {% else %}
+  <span class="bv-seal bv-vendor" style="width:{{ _s }}px;height:{{ _s }}px" title="Verified Vendor on HERE"><svg viewBox="0 0 24 24" width="{{ (_s * 0.62)|round|int }}" height="{{ (_s * 0.62)|round|int }}" aria-hidden="true"><path d="M3.5 3.5h7.6l9 9-7.6 7.6-9-9z" fill="#231a00"/><circle cx="8" cy="8" r="1.9" fill="#f5c542"/></svg></span>
+  {% endif %}
+{% endif %}

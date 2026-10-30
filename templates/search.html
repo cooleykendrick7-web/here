@@ -20,7 +20,7 @@
     {% if u.avatar %}<img class="avatar av-40" src="{{ u.avatar|e }}" alt="">
     {% else %}<span class="av-ph av-40">{{ u.name[:1]|upper|e }}</span>{% endif %}
     <div class="grow">
-      <div class="nm"><a href="/user/{{ u.id }}">{{ u.name|e }}</a>{% if u.is_private %} <span title="Private profile">🔒</span>{% endif %} {% set pres = u.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
+      <div class="nm"><a href="/user/{{ u.id }}">{{ u.name|e }}</a>{% with bv_user=u.vuser, bv_vendor=u.vvendor, bv_size=16 %}{% include "partials/badges.html" %}{% endwith %}{% if u.is_private %} <span title="Private profile">🔒</span>{% endif %} {% set pres = u.presence %}{% set show_label = false %}{% include "partials/presence_bolt.html" %}</div>
     </div>
     <div class="row-actions">
       {% if u.is_self %}
