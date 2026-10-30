@@ -18859,7 +18859,7 @@ def _txn_line(t):
         return f"Pinned a shout-out (−{abs(t['tickets'])} 🎟️)"
     if k == "cashout_hold":
         return (f"Cash-out requested — {abs(t['tickets'])} 🎟️ held "
-                "for approval")
+                "(sends automatically)")
     if k == "cashout_paid":
         return f"Cash-out paid 💰 {t['note'] or ''}".strip()
     if k == "cashout_return":
@@ -18907,6 +18907,10 @@ async def tickets_page(request: Request):
     if (me.get("stripe_acct_id") and stripe_enabled()
             and (not me.get("payout_ready") or setup_q == "done")):
         me["payout_ready"] = _refresh_payout_ready(me)
+    # Auto-pay: a bank-ready user landing here with a cash-out
+    # queued fires the sweep before the page reads its state.
+    if me.get("payout_ready"):
+        _payout_sweep()
     balance = me.get("tickets_balance") or 0
     earned = me.get("gift_earned") or 0
     conn = db()
@@ -19043,8 +19047,11 @@ async def tickets_buy(request: Request):
 async def tickets_cashout(request: Request):
     """Cash out ALL earned tickets (min 2000). Tickets move to a
     hold immediately (gift_earned -= n, cashout_hold txn) and the
-    owner decides in the owner panel — paying changes nothing more;
-    declining returns them (gift_earned += n, cashout_return)."""
+    money SENDS ITSELF — a bank-ready streamer's transfer fires
+    before this handler returns (see _payout_attempt); the owner
+    desk is oversight/backstop only. Declining a still-pending
+    request returns the tickets (gift_earned += n,
+    cashout_return)."""
     user, err = require_login(request)
     if err:
         return err
@@ -19072,8 +19079,7 @@ async def tickets_cashout(request: Request):
             (user["id"],)).fetchone():
         conn.close()
         return redir("/tickets",
-                     "You already have a cash-out waiting for "
-                     "approval.")
+                     "You already have a cash-out on its way.")
     n = earned
     fee_tickets = 0
     if (get_user(user["id"]) or {}).get(
@@ -19095,12 +19101,13 @@ async def tickets_cashout(request: Request):
         "VALUES(?,?,?,?,?,?)",
         (user["id"], pay_tickets, _earned_dollars(pay_tickets),
          note, fee_tickets, stamp))
+    req_id = cur2.lastrowid
     if fee_tickets:
         fee_cents = _earned_dollars(fee_tickets)
         conn.execute(
             "INSERT INTO label_fees(user_id, payout_request_id, "
             "tickets, cents, created_at) VALUES(?,?,?,?,?)",
-            (user["id"], cur2.lastrowid, fee_tickets, fee_cents,
+            (user["id"], req_id, fee_tickets, fee_cents,
              stamp))
         _fund_set(conn, _fund_cents(conn) + fee_cents)
     conn.execute(
@@ -19108,9 +19115,38 @@ async def tickets_cashout(request: Request):
         "VALUES(?,?,?,?)", (user["id"], "cashout_hold", -n, stamp))
     conn.commit()
     conn.close()
+    # Auto-pay (Ken's order Oct 30): it's the creator's money —
+    # no approval gate. The sweep attempts this request (and any
+    # older queued ones) right now.
+    _payout_sweep()
+    conn = db()
+    row = conn.execute(
+        "SELECT status FROM payout_requests WHERE id=?",
+        (req_id,)).fetchone()
+    me2 = conn.execute(
+        "SELECT payout_ready FROM users WHERE id=?",
+        (user["id"],)).fetchone()
+    conn.close()
+    status = row["status"] if row else "pending"
+    dollars = _money(_earned_dollars(pay_tickets))
+    if status == "paid":
+        return redir("/tickets",
+                     f"💸 Sent! Your {dollars} is on its way to "
+                     "your bank (lands in about 2 business days).")
+    if status == "sending":
+        return redir("/tickets",
+                     "💸 Your cash-out is sending — it completes "
+                     "on its own. No approval needed.")
+    if me2 and me2["payout_ready"]:
+        return redir("/tickets",
+                     "Cash-out requested 💰 — it's queued and "
+                     "sends by itself as soon as HERE's payout "
+                     "balance covers it. It's your money: no "
+                     "approval needed, ever.")
     return redir("/tickets",
-                 "Cash-out sent for approval 💰 — the owner sends it "
-                 "and marks it paid.")
+                 "Cash-out requested 💰 — finish your bank setup "
+                 "(Bank payouts below) and it sends automatically. "
+                 "No approval needed — it's your money.")
 
 
 @app.get("/earnings", response_class=HTMLResponse)
@@ -19383,7 +19419,7 @@ def _payout_status_text(pr):
     status (wallet page 'Your cash-outs' list)."""
     st = pr["status"]
     if st == "pending":
-        return "⏳ Waiting for approval"
+        return "⏳ Queued — sends automatically"
     if st == "sending":
         return "💸 Sending to your bank…"
     if st == "declined":
@@ -21291,30 +21327,33 @@ async def owner_verify_decline(request: Request, rid: int):
     return redir("/owner")
 
 
-@app.post("/owner/payouts/{pid}/send")
-async def owner_payout_send(request: Request, pid: int):
-    """Owner approves a cash-out AND sends it: a Stripe Transfer to
-    the streamer's Express account (their bank). Only for pending
-    requests whose streamer is payout_ready.
+def _payout_attempt(pid):
+    """One guarded attempt to send payout request pid to the
+    streamer's bank via Stripe Connect — the single money-out
+    path behind BOTH the owner's Send button and the automatic
+    cash-out flow (Ken's order Oct 30, 2026: a cash-out is the
+    creator's own money, so there is no approval gate — a
+    bank-ready request sends itself).
 
     Idempotency (the double-send guard): the request is claimed
-    'pending' -> 'sending' in ONE guarded UPDATE before Stripe is
-    called, so a double-click / second tab can never create two
-    transfers — every decision path (paid / declined / send) only
-    acts on 'pending'. Outcomes:
-    - Transfer created: status 'paid', method 'stripe', transfer id
-      stored, the usual 0-delta cashout_paid audit row. Balances do
-      NOT move (tickets were held at request time).
-    - Stripe definitively refuses (HTTP error): the claim reverts
-      to 'pending' — no transfer exists, so the owner can safely
-      decide again, including paying by hand.
-    - Stripe doesn't answer (network/timeout): the outcome is
-      UNKNOWN, so the request stays 'sending' — stuck VISIBLE rather
-      than silently re-sendable; the owner checks Stripe first.
-    """
-    err = require_owner(request)
-    if err:
-        return err
+    'pending' -> 'sending' in ONE guarded UPDATE before Stripe
+    is called, and every settle path only acts on the claimed
+    row, so no caller — button, sweep, or retry — can ever
+    create two transfers for one request. Returns
+    (outcome, info):
+    - 'paid':     transfer created; status 'paid', method
+                  'stripe', transfer id stored, the usual
+                  0-delta cashout_paid audit row. Balances do
+                  NOT move (tickets were held at request time).
+    - 'refused':  Stripe definitively refused (HTTP error): the
+                  claim reverts to 'pending' — no transfer
+                  exists, so a later attempt is safe.
+                  info['cls'] is the safe reason class.
+    - 'unknown':  Stripe didn't answer (network/timeout): the
+                  request stays 'sending' — stuck VISIBLE rather
+                  than silently re-sendable.
+    - 'gone':     not pending (already decided / missing).
+    - 'notready': the streamer hasn't finished bank setup."""
     conn = db()
     pr = conn.execute(
         "SELECT pr.*, u.stripe_acct_id AS acct, "
@@ -21323,12 +21362,10 @@ async def owner_payout_send(request: Request, pid: int):
         (pid,)).fetchone()
     if not pr or pr["status"] != "pending":
         conn.close()
-        return redir("/owner", "That cash-out was already decided.")
+        return "gone", {}
     if not pr["ready"] or not pr["acct"]:
         conn.close()
-        return redir("/owner",
-                     "That streamer hasn't finished bank setup — "
-                     "pay this one by hand instead.")
+        return "notready", {}
     cur = conn.execute(
         "UPDATE payout_requests SET status='sending' WHERE id=? "
         "AND status='pending'", (pid,))
@@ -21336,7 +21373,8 @@ async def owner_payout_send(request: Request, pid: int):
     conn.commit()
     conn.close()
     if not claimed:
-        return redir("/owner", "That cash-out was already decided.")
+        return "gone", {}
+    info = {"dollars_cents": pr["dollars_cents"]}
     transfer_id = None
     refused = None
     try:
@@ -21367,16 +21405,10 @@ async def owner_payout_send(request: Request, pid: int):
             _connect_mark("blocked", cls)
         print(f"[payouts] transfer for request {pid} refused: "
               f"{refused}")
-        return redir("/owner",
-                     f"Stripe refused the send: {cls} — request "
-                     f"{pid} is still pending; you can pay by hand "
-                     "instead.")
+        info["cls"] = cls
+        return "refused", info
     if not transfer_id:
-        return redir("/owner",
-                     f"The send for request {pid} was attempted but "
-                     "Stripe didn't answer — check Stripe before "
-                     "doing anything else. The request is marked "
-                     "'sending' and can't be sent twice.")
+        return "unknown", info
     stamp = now_iso()
     conn = db()
     conn.execute(
@@ -21391,8 +21423,61 @@ async def owner_payout_send(request: Request, pid: int):
     conn.commit()
     conn.close()
     _connect_mark("ready")
+    return "paid", info
+
+
+def _payout_sweep():
+    """Auto-pay pass: attempt every pending cash-out whose
+    streamer is bank-ready, oldest first. Stops at the first
+    balance refusal — if HERE's Stripe balance can't cover one,
+    it can't cover the rest; the remainder retry on the next
+    pass. Returns how many requests were paid."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT pr.id FROM payout_requests pr JOIN users u "
+        "ON u.id = pr.user_id WHERE pr.status='pending' "
+        "AND u.payout_ready AND u.stripe_acct_id IS NOT NULL "
+        "AND u.stripe_acct_id != '' ORDER BY pr.id ASC").fetchall()
+    conn.close()
+    paid = 0
+    for r in rows:
+        outcome, info = _payout_attempt(r["id"])
+        if outcome == "paid":
+            paid += 1
+        elif (outcome == "refused"
+              and "not enough money" in (info.get("cls") or "")):
+            break
+    return paid
+
+
+@app.post("/owner/payouts/{pid}/send")
+async def owner_payout_send(request: Request, pid: int):
+    """Owner backstop send: cash-outs normally send THEMSELVES
+    automatically (see _payout_attempt); this button retries one
+    by hand from the desk. Same guarded path, same outcomes."""
+    err = require_owner(request)
+    if err:
+        return err
+    outcome, info = _payout_attempt(pid)
+    if outcome == "gone":
+        return redir("/owner", "That cash-out was already decided.")
+    if outcome == "notready":
+        return redir("/owner",
+                     "That streamer hasn't finished bank setup — "
+                     "pay this one by hand instead.")
+    if outcome == "refused":
+        return redir("/owner",
+                     f"Stripe refused the send: {info.get('cls')} "
+                     f"— request {pid} is still pending; you can "
+                     "pay by hand instead.")
+    if outcome == "unknown":
+        return redir("/owner",
+                     f"The send for request {pid} was attempted but "
+                     "Stripe didn't answer — check Stripe before "
+                     "doing anything else. The request is marked "
+                     "'sending' and can't be sent twice.")
     return redir("/owner",
-                 f"💸 Sent {_money(pr['dollars_cents'])} to the "
+                 f"💸 Sent {_money(info['dollars_cents'])} to the "
                  f"streamer's bank (request {pid}).")
 
 

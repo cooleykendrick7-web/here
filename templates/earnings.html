@@ -106,8 +106,8 @@
 <div class="card">
   <div class="section-title">{{ ic('moneybag') }} Cash out</div>
   {% if pending %}
-  <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and is waiting for the owner's approval. You'll see it marked paid right here.</p>
-  <p class="cashout-status" style="font-size:14.5px;margin-top:8px">Cash-out status: waiting for the owner's approval — once it's approved, {{ pending.dollars|e }} is on its way to you.</p>
+  <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and sends automatically — it's your money, no approval needed. You'll see it marked paid right here.</p>
+  <p class="cashout-status" style="font-size:14.5px;margin-top:8px">Cash-out status: on its way — {{ pending.dollars|e }} sends automatically; nothing is waiting on anybody's approval.</p>
   {% elif can_cashout %}
   <p class="cashout-status" style="font-size:15px;margin-top:8px;font-weight:800">✅ You're ready — you can cash out {{ cashout_dollars|e }} now</p>
   <p style="font-size:14.5px;margin-top:8px">You can cash out <strong>all {{ earned }} earned tickets = {{ cashout_dollars|e }}</strong>. Tell us exactly where to send it — the owner sends payouts by hand and marks them paid.</p>
@@ -137,7 +137,7 @@
 <div class="card">
   <div class="section-title">🏦 Bank payouts</div>
   {% if bank_state == 'ready' %}
-  <p style="font-size:14.5px;margin-top:8px">✅ <strong>Bank payouts ready</strong> — when the owner approves your cash-out, the money goes straight to your bank (lands in about 2 business days). No more typing a Cash App handle.</p>
+  <p style="font-size:14.5px;margin-top:8px">✅ <strong>Bank payouts ready</strong> — when you cash out, the money goes straight to your bank (lands in about 2 business days). No more typing a Cash App handle.</p>
   <form method="post" action="/payouts/update" style="margin-top:10px">
     <button type="submit" class="btn-ghost">Update bank details</button>
   </form>

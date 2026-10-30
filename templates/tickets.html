@@ -118,7 +118,7 @@
 </div>
   <div class="section-title">💰 Cash out earnings</div>
   {% if pending %}
-  <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and is waiting for the owner's approval. You'll see it marked paid right here.</p>
+  <p style="font-size:15px;margin-top:8px">⏳ Your cash-out of <strong>{{ pending.tickets }} 🎟️ ({{ pending.dollars|e }})</strong> was sent {{ pending.when|e }} and sends automatically — it's your money, no approval needed. You'll see it marked paid right here.</p>
   {% elif can_cashout %}
   <p style="font-size:14.5px;margin-top:8px">You can cash out <strong>all {{ earned }} earned tickets = {{ earned_dollars|e }}</strong>. Tell us exactly where to send it — the owner sends payouts by hand and marks them paid.</p>
   <form method="post" action="/tickets/cashout" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
@@ -154,7 +154,7 @@
   {% if setup_q == 'unavailable' %}
   <p style="font-size:14.5px;margin-top:8px">🏦 <strong>Bank payouts are being switched on</strong> — the owner is finishing a verification step with Stripe. Hand payouts still work meanwhile: cash out above as usual and the owner sends it by hand.</p>
   {% elif bank_state == 'ready' %}
-  <p style="font-size:14.5px;margin-top:8px">✅ <strong>Bank payouts ready</strong> — when the owner approves your cash-out, the money goes straight to your bank (lands in about 2 business days). No more typing a Cash App handle.</p>
+  <p style="font-size:14.5px;margin-top:8px">✅ <strong>Bank payouts ready</strong> — when you cash out, the money goes straight to your bank (lands in about 2 business days). No more typing a Cash App handle.</p>
   <form method="post" action="/payouts/update" style="margin-top:10px">
     <button type="submit" class="btn-ghost">Update bank details</button>
   </form>

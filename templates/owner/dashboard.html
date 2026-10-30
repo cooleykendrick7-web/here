@@ -197,7 +197,7 @@ table.admin tr:last-child td{border-bottom:none}
 
 <section>
   <h2>💰 Payouts (Live Tickets cash-outs)</h2>
-  <p style="color:#9a9a9a;font-size:13px;margin-bottom:6px">Streamers cash out earned tickets at $0.005 each. Tickets are held the moment they ask. If a streamer finished <strong>bank setup</strong>, tap <strong>💸 Approve &amp; send via Stripe</strong> — Stripe sends it to their bank for you. Otherwise <strong>send the money yourself</strong> (Cash App / bank — their note says where), then tap <strong>Mark paid</strong>. Declining returns their tickets instantly.</p>
+  <p style="color:#9a9a9a;font-size:13px;margin-bottom:6px">Streamers cash out earned tickets at $0.005 each. <strong>Cash-outs now send THEMSELVES automatically</strong> the moment a bank-ready streamer asks — no approval (Ken's order Oct 30: it's their money). This desk is your window and backstop: anything still pending is waiting on HERE's Stripe balance or the streamer's bank setup, and you can still <strong>💸 Send now via Stripe</strong>, <strong>send the money yourself</strong> (Cash App / bank — their note says where) then <strong>Mark paid</strong>, or decline (returns their tickets instantly).</p>
   <p style="font-size:13.5px;margin-bottom:10px">{% if connect_state.state == 'ready' %}🏦 Bank payouts: <strong>ON</strong> — Stripe payouts to streamer banks are live.{% elif connect_state.state == 'blocked' %}🏦 Bank payouts: <strong>waiting on Stripe verification (owner step)</strong>{% if connect_state.error %} — last word from Stripe: {{ connect_state.error|e }}{% endif %}. Hand payouts work meanwhile.{% else %}🏦 Bank payouts: not proven yet — the state flips ON the first time a streamer sets up bank payouts (or shows the Stripe blocker if verification is still owed). Hand payouts work meanwhile.{% endif %}</p>
   <div class="table-wrap">
     <table class="admin">
@@ -217,7 +217,7 @@ table.admin tr:last-child td{border-bottom:none}
             {% if p.status == 'pending' %}
             {% if p.user_payout_ready %}
             <form class="inline-form" action="/owner/payouts/{{ p.id }}/send" method="post" onsubmit="return confirm('Send {{ p.dollars|e }} to {{ p.user_name|e }}\'s bank via Stripe?');">
-              <button type="submit" class="btn">💸 Approve &amp; send via Stripe</button>
+              <button type="submit" class="btn">💸 Send now via Stripe</button>
             </form>
             <form class="inline-form" action="/owner/payouts/{{ p.id }}/paid" method="post" onsubmit="return confirm('Mark {{ p.dollars|e }} paid to {{ p.user_name|e }} by hand? Only tap this AFTER you sent the money yourself.');">
               <button type="submit" class="btn-ghost">Mark paid (by hand)</button>

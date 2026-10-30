@@ -232,9 +232,9 @@ check("second request refused while one is pending",
 html = H.get("/earnings").text
 check("dashboard shows the in-flight cash-out (tickets + $)",
       "2695 🎟️" in html and "$13.47" in html
-      and "waiting for the owner's approval" in html)
+      and "sends automatically" in html)
 check("history lists the pending request",
-      "Waiting for approval" in html)
+      "Queued — sends automatically" in html)
 check("no cash-out form while a request is in flight",
       'action="/tickets/cashout"' not in html)
 
