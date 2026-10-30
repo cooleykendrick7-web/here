@@ -58,9 +58,9 @@
       <a class="btn" href="/live/{{ l.id }}">▶ Watch</a>
       {% if not l.is_self %}
       {% if l.my_join_pending %}
-      <button type="button" class="btn-ghost btn-sm" disabled>⏳ Asked — waiting for host</button>
+      <button type="button" class="btn-ghost btn-sm" disabled>⏳ Applied — waiting on the host</button>
       {% else %}
-      <button type="button" class="btn-ghost btn-sm js-ask-join" data-live="{{ l.id }}">{{ ic('ask') }} Ask to join panel</button>
+      <button type="button" class="btn-ghost btn-sm js-ask-join" data-live="{{ l.id }}">{{ ic('ask') }} Apply for a spot</button>
       {% endif %}
       {% if l.following %}
       <span class="kind-tag">Following ✓</span>
@@ -164,11 +164,11 @@
       ask.className = 'btn-ghost btn-sm';
       if (live.my_join_pending){
         ask.disabled = true;
-        ask.textContent = '⏳ Asked — waiting for host';
+        ask.textContent = '⏳ Applied — waiting on the host';
       } else {
         ask.className += ' js-ask-join';
         ask.setAttribute('data-live', live.id);
-        ask.textContent = '🙋 Ask to join panel';
+        ask.textContent = '🎙 Apply for a spot';
       }
       actions.appendChild(ask);
     }
@@ -250,7 +250,7 @@
       if (pick) window.location.href = '/live/' + pick.id;
     }
   });
-  /* ---- 🙋 Ask to join panel from a card (Build W1) --------------
+  /* ---- 🎙 Apply for a spot from a card (Build W1) --------------
      Same flow as asking inside the room: register presence with a
      heartbeat first (you join the room as a viewer), then file
      the join request — any signed-in user may ask, the HOST (or
@@ -275,18 +275,18 @@
         if (d && d.ok && d.already_guest){
           btn.textContent = '🎥 You are on the panel';
         } else if (d && d.ok){
-          btn.textContent = '⏳ Asked — waiting for host';
+          btn.textContent = '⏳ Applied — waiting on the host';
         } else {
           btn.disabled = false;
           btn.className = 'btn-ghost btn-sm js-ask-join';
-          btn.textContent = '🙋 Ask to join panel';
+          btn.textContent = '🎙 Apply for a spot';
           if (d && d.error) btn.title = d.error;
         }
       })
       .catch(function(){
         btn.disabled = false;
         btn.className = 'btn-ghost btn-sm js-ask-join';
-        btn.textContent = '🙋 Ask to join panel';
+        btn.textContent = '🎙 Apply for a spot';
       });
   }
   document.addEventListener('click', function(e){

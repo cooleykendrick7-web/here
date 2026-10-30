@@ -155,6 +155,7 @@
     aspect-ratio:auto;max-height:none}
 }
 #focus-exit{position:absolute;top:64px;right:10px;z-index:6}
+#spots-pill{position:absolute;top:64px;left:10px;z-index:6}
 /* Drag grip (host/admin): drag a block to its new home. */
 .live-tile .tile-grip{position:absolute;bottom:36px;right:4px;z-index:5;
   cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;
@@ -773,6 +774,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <div id="stage-bg"></div>
   <div class="live-grid cols-1" id="live-grid"></div>
   <button type="button" id="focus-exit" class="mini-btn" hidden>✖ Exit focus</button>
+  <button type="button" id="spots-pill" class="mini-btn" hidden></button>
   <div class="live-topbar">
     <span class="live-pill"><span class="dot">●</span> LIVE</span>
     <div class="live-meta">
@@ -842,7 +844,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <button type="button" class="live-ctl" id="ctl-gift" hidden>{{ ic('gift') }} Gift</button>
   <button type="button" class="live-ctl" id="ctl-sound" hidden>🔊 Tap for sound</button>
   {% if role == 'watcher' %}<button type="button" class="live-ctl" id="ctl-minimize" hidden>➖ Minimize</button>{% endif %}
-  <button type="button" class="live-ctl" id="ctl-join" hidden>{{ ic('ask') }} Ask to join panel</button>
+  <button type="button" class="live-ctl" id="ctl-join" hidden>{{ ic('ask') }} Apply for a spot</button>
   <button type="button" class="live-ctl" id="ctl-invite-others" hidden>➕ Invite others</button>
   <button type="button" class="live-ctl" id="ctl-leave" hidden>{{ ic('logout') }} Leave</button>
 </div>
@@ -942,13 +944,18 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
 <div class="live-panel stack-card" id="live-panelctl" hidden>
   <div style="font-weight:800;margin-bottom:3px">👥 Panel</div>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <button type="button" class="live-ctl" id="ctl-panel-toggle">{{ ic('friends') }} Open panel</button>
-    <span style="font-size:13px">Guest boxes</span>
+    <span style="font-size:13px">🎙 Cast spots</span>
     <button type="button" class="live-ctl" id="ctl-boxes-minus" title="Fewer boxes">−</button>
     <strong id="live-boxes-n">5</strong>
     <button type="button" class="live-ctl" id="ctl-boxes-plus" title="More boxes">+</button>
   </div>
-  <div style="font-size:12px;color:rgba(255,255,255,.78);margin-top:4px">Open the panel for the grid. Boxes = guests at once.</div>
+  <div style="font-size:12px;color:rgba(255,255,255,.78);margin-top:4px">Only people on your cast get a box — no empty boxes, ever. Spots = how many can join you at once.</div>
+  <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">
+    <span style="font-size:13px">🏷 Spot names</span>
+    <input id="ctl-spot-names" maxlength="200" placeholder="DJ, Co-Host, Caller #1" style="flex:1;min-width:140px">
+    <button type="button" class="live-ctl" id="ctl-spot-save">Save</button>
+  </div>
+  <div style="font-size:12px;color:rgba(255,255,255,.78);margin-top:4px">Name your spots in order — people apply for them by name, and whoever you seat there wears it.</div>
 </div>
 
 <div class="live-panel stack-card">
@@ -1245,7 +1252,10 @@ function liveRoomDiff(prev, next){
      host full-bleed with a tile rail, the pre-X panel look).
      Grid vs rail is a per-viewer, per-device preference. */
   function stageLayout(){
-    if (!panelOpen) return 'solo';
+    /* Spots (Ken, Oct 30): PEOPLE decide the stage — a host
+       alone is full-screen solo; the moment somebody seats,
+       the grid/rail opens with exactly the people on it. */
+    if (panel.length <= 1) return 'solo';
     return layoutPref === 'rail' ? 'rail' : 'grid';
   }
   function emptySquareCount(){
@@ -1565,11 +1575,12 @@ function liveRoomDiff(prev, next){
     });
     var fxEl = document.getElementById('focus-exit');
     if (fxEl) fxEl.hidden = !(myFocusId && spot === myFocusId);
+    paintSpotsPill();
     var mode = stageLayout(), cls, cells = panel.length;
     if (mode === 'grid' || spot){
       /* Cells = people + the host's empty boxes, so filling a
          square never re-flows the grid's shape mid-show. */
-      cells += emptySquareCount();
+      /* cells stay = people only (spots rule) */
       var cols = gridCols(cells);
       cls = 'live-grid panel-grid cols-' + cols
         + (spot ? ' has-spotlight' : '')
@@ -1584,7 +1595,7 @@ function liveRoomDiff(prev, next){
         + (panel.length > 1 ? ' has-panel' : '');
     }
     if (gridEl.className !== cls) gridEl.className = cls;
-    syncBoxes(mode === 'grid' || !!spot);
+    syncBoxes(false);  /* no empty boxes, ever */
     paintLayoutButton();
   }
   /* Empty guest squares (Build X): pure DOM — no media, no
@@ -1638,11 +1649,11 @@ function liveRoomDiff(prev, next){
   function askToJoinPanel(){
     post('/join-request').then(function(d){
       if (d && d.ok)
-        toast('✋ Request sent — the host or an admin can let you in.');
+        toast('✋ Application sent — the host can let you in.');
       else
-        toast((d && d.error) || 'Could not send the request.');
+        toast((d && d.error) || 'Could not send the application.');
       pollState();
-    }).catch(function(){ toast('Could not send the request.'); });
+    }).catch(function(){ toast('Could not send the application.'); });
   }
   function paintLayoutButton(){
     var btn = $('ctl-layout');
@@ -5386,12 +5397,19 @@ function liveRoomDiff(prev, next){
       var kind = document.createElement('span');
       kind.className = 'kind';
       kind.textContent = r.kind === 'invite' ? 'invited — waiting'
-                                             : 'asked to join';
+        : 'applied' + (r.spot_name ? ' — wants ' + r.spot_name : '');
       row.appendChild(nm);
       row.appendChild(kind);
+      if (r.suggested_by_name){
+        var sg = document.createElement('span');
+        sg.className = 'kind';
+        sg.style.color = '#ffd75e';
+        sg.textContent = '⭐ ' + r.suggested_by_name + ' suggests';
+        row.appendChild(sg);
+      }
       var sp = document.createElement('span'); sp.style.flex = '1';
       row.appendChild(sp);
-      if (r.kind !== 'invite'){
+      if (r.kind !== 'invite' && iAmHost()){
         var ok = document.createElement('button');
         ok.type = 'button'; ok.className = 'btn btn-sm'; window.hereIconText(ok, 'check', '✅', ' Let in');
         ok.addEventListener('click', function(){
@@ -5403,6 +5421,22 @@ function liveRoomDiff(prev, next){
           act('/join-decide', {request_id: r.id, approve: 0});
         });
         row.appendChild(ok); row.appendChild(no);
+      } else if (r.kind !== 'invite'
+                 && (iAmAdmin() || B.captain_id === B.me)){
+        /* Admins advise, the host decides (Ken's rule). */
+        var sgb = document.createElement('button');
+        sgb.type = 'button'; sgb.className = 'btn-ghost btn-sm';
+        if (r.suggested_by){
+          sgb.disabled = true;
+          sgb.textContent = '⭐ Suggested';
+        } else {
+          sgb.textContent = '⭐ Suggest';
+          sgb.addEventListener('click', function(){
+            act('/join-suggest', {request_id: r.id},
+                '⭐ Suggested to the host.');
+          });
+        }
+        row.appendChild(sgb);
       }
       box.appendChild(row);
     });
@@ -7347,9 +7381,10 @@ function renderTopGifters(list){
     if (!card) return;
     card.hidden = !iAmHost();
     if (!iAmHost()) return;
-    $('ctl-panel-toggle').textContent = panelOpen
-      ? '👥 Close panel' : '👥 Open panel';
     $('live-boxes-n').textContent = panelBoxes;
+    var sni = $('ctl-spot-names');
+    if (sni && document.activeElement !== sni)
+      sni.value = spotNames.join(', ');
     $('ctl-boxes-minus').disabled = panelBoxes <= 1;
     $('ctl-boxes-plus').disabled = panelBoxes >= 8;
   }
@@ -7411,13 +7446,18 @@ function renderTopGifters(list){
       btn.textContent = '⏳ Waiting for the host…';
       return;
     }
+    if (panel.length - 1 >= panelBoxes){
+      btn.disabled = true;
+      btn.textContent = '🎙 Cast full — no spots open';
+      return;
+    }
     btn.disabled = false;
-    btn.textContent = '🙋 Ask to join panel';
+    btn.textContent = '🎙 Apply for a spot';
     if (d.my_join && d.my_join.status === 'declined' && d.my_join.decided_at){
       var age = (Date.now() - Date.parse(d.my_join.decided_at)) / 1000;
       if (age < 60){
         btn.disabled = true;
-        btn.textContent = '🙋 Ask again in ' + Math.ceil(60 - age) + 's';
+        btn.textContent = '🎙 Apply again in ' + Math.ceil(60 - age) + 's';
       }
     }
     if (msg.dataset.sticky !== '1') msg.hidden = true;
@@ -7484,9 +7524,9 @@ function renderTopGifters(list){
       msg.hidden = false;
       msg.dataset.sticky = '1';
       if (d && d.ok){
-        msg.textContent = '✋ Request sent — the host or an admin can let you in.';
+        msg.textContent = '✋ Application sent — the host can let you in.';
       } else {
-        msg.textContent = (d && d.error) || 'Could not send the request.';
+        msg.textContent = (d && d.error) || 'Could not send the application.';
       }
       pollState();
     });
@@ -7522,8 +7562,9 @@ function renderTopGifters(list){
     boxesSig = ''; /* squares belong to the new mode now */
     renderTiles();
   });
-  $('ctl-panel-toggle').addEventListener('click', function(){
-    act('/panel-open', {open: !panelOpen});
+  $('ctl-spot-save').addEventListener('click', function(){
+    act('/spot-names', {names: $('ctl-spot-names').value},
+        '🏷 Your spots are named.');
   });
   $('ctl-boxes-minus').addEventListener('click', function(){
     if (panelBoxes > 1) act('/panel-boxes', {boxes: panelBoxes - 1});
@@ -7694,6 +7735,90 @@ function renderTopGifters(list){
       renderTiles();
     });
   })();
+
+  /* ---- 🎙 Spots (Ken's panel order, Oct 30): the open-spot
+     count, always visible; for a watcher the pill IS the
+     Apply door — named open spots get a picker sheet, an
+     unnamed room applies in one tap. Accepting stays the
+     host's alone; the pill for the host is the count. ---- */
+  var spotNames = [];            /* state payload's spot_names */
+  var myJoinState = null;        /* state payload's my_join */
+  var suggestSeen = {}, suggestPrimed = false;
+  function spotsOpenCount(){
+    return Math.max(0, panelBoxes - Math.max(0, panel.length - 1));
+  }
+  function paintSpotsPill(){
+    var pill = document.getElementById('spots-pill');
+    if (!pill) return;
+    if (panelById[B.me]){ pill.hidden = true; return; }
+    var n = spotsOpenCount();
+    pill.hidden = false;
+    if (isHost){
+      pill.disabled = true;
+      pill.textContent = n > 0
+        ? '\ud83c\udf99 ' + n + (n === 1 ? ' spot' : ' spots') + ' open'
+        : '\ud83c\udf99 Cast full';
+      return;
+    }
+    if (myJoinState && myJoinState.status === 'pending'){
+      pill.disabled = true;
+      pill.textContent = '\u23f3 Applied \u2014 waiting on the host';
+      return;
+    }
+    pill.disabled = n <= 0;
+    pill.textContent = n > 0
+      ? '\ud83c\udf99 ' + n + (n === 1 ? ' spot' : ' spots')
+        + ' open \u2014 Apply'
+      : '\ud83c\udf99 No spots open';
+  }
+  function applyForSpot(idx){
+    closeSheet();
+    post('/join-request',
+         idx === null || idx === undefined ? {} : {spot: idx})
+    .then(function(d){
+      if (d && d.ok){
+        toast('\u270b Application sent'
+          + (idx !== null && idx !== undefined && spotNames[idx]
+             ? ' for ' + spotNames[idx] : '')
+          + ' \u2014 the host can let you in.');
+        pollState();
+      } else {
+        toast((d && d.error) || 'Could not send the application.');
+      }
+    });
+  }
+  function openApplySheet(){
+    var guests = Math.max(0, panel.length - 1);
+    var openIdx = [];
+    for (var i = guests; i < panelBoxes; i++) openIdx.push(i);
+    var named = openIdx.some(function(i){ return !!spotNames[i]; });
+    if (!named){ applyForSpot(null); return; }
+    sheetTitle.dataset.sheet = 'apply';
+    window.hereIconText(sheetTitle, 'ask', '\ud83c\udf99',
+                        ' Apply for a spot');
+    sheetActions.innerHTML = '';
+    manageTarget = null;
+    $('live-sheet-cancel').textContent = 'Not now';
+    openIdx.forEach(function(i){
+      var label = spotNames[i] ? ('Apply \u2014 ' + spotNames[i])
+                               : ('Apply \u2014 Spot ' + (i + 1));
+      sheetActions.appendChild(sheetBtn(
+        '\ud83c\udf99 ' + label, false,
+        function(){ applyForSpot(i); }));
+    });
+    sheetActions.appendChild(sheetBtn(
+      '\ud83c\udf99 Apply \u2014 any spot', false,
+      function(){ applyForSpot(null); }));
+    sheetEl.hidden = false;
+    sheetBd.hidden = false;
+  }
+  document.getElementById('spots-pill').addEventListener(
+    'click', function(){
+      if (isHost || panelById[B.me]) return;
+      if (myJoinState && myJoinState.status === 'pending') return;
+      if (spotsOpenCount() <= 0) return;
+      openApplySheet();
+    });
   var curBackdrop = null;
   function applyBackdrop(url){
     curBackdrop = url || '';
@@ -7831,6 +7956,8 @@ function renderTopGifters(list){
         spotlightId = d.spotlight_id || null;
         if (typeof d.panel_boxes === 'number')
           panelBoxes = d.panel_boxes;
+        spotNames = d.spot_names || [];
+        myJoinState = d.my_join || null;
         myJoin = d.my_join || null;
         watchersList = d.watchers || [];
         inviteCandidates = d.invite_candidates || [];
@@ -7870,16 +7997,30 @@ function renderTopGifters(list){
             seenReqIds[r.id] = 1;
             if (reqPrimed && r.kind !== 'invite')
               toast('\u270b ' + (r.name || 'Someone')
-                + ' wants to join the panel \u2014 open Requests '
+                + ' applied for a spot \u2014 open Requests '
                 + 'to let them in.');
           }
         });
+        if (isHost){
+          (d.pending_requests || []).forEach(function(r){
+            if (r.suggested_by){
+              if (suggestPrimed
+                  && suggestSeen[r.id] !== r.suggested_by)
+                toast('\u2b50 ' + (r.suggested_by_name || 'An admin')
+                  + ' suggests ' + (r.name || 'an applicant')
+                  + ' \u2014 check Requests.');
+              suggestSeen[r.id] = r.suggested_by;
+            }
+          });
+          suggestPrimed = true;
+        }
         reqPrimed = true;
         try{ renderRequests(d.pending_requests || []); }catch(_e){}
         try{ renderWatchers(watchersList); }catch(_e){}
         try{ renderInviteBanner(); }catch(_e){}
         updateControls();
         updateJoinButton(d);
+        paintSpotsPill();
       })
       .catch(function(){});
   }
