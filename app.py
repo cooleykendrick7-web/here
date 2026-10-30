@@ -11516,9 +11516,9 @@ def _lives_sections(rows):
 
 @app.get("/lives", response_class=HTMLResponse)
 async def lives_page(request: Request):
-    user, err = require_login(request)
-    if err:
-        return err
+    # Public window (deterrent fix): strangers may SEE who is
+    # live; watching itself still passes the live gate.
+    user = current_user(request)
     rows = _lives_page_list(user, is_owner(request))
     _bconn = db()
     _recent = _recent_showdowns(_bconn)
@@ -12179,6 +12179,20 @@ async def paidwall_page(request: Request):
         "WHERE pr.status='paid' ORDER BY "
         "COALESCE(pr.decided_at, pr.created_at) DESC LIMIT 50"
         ).fetchall()
+    # Money in motion (deterrent fix): while the wall itself
+    # is empty, the page proves the economy is real with live
+    # aggregates — tickets sold, fan dollars in, and what
+    # creators have already banked toward cash-out.
+    _sales_n, _gross_c, _fee_c = _buy_aggregates(conn)
+    sold_tickets = conn.execute(
+        "SELECT COALESCE(SUM(tickets),0) s FROM ticket_txns "
+        "WHERE kind='buy'").fetchone()["s"]
+    owed_tickets = conn.execute(
+        "SELECT COALESCE(SUM(gift_earned),0) s FROM users"
+        ).fetchone()["s"]
+    earning = conn.execute(
+        "SELECT COUNT(*) c FROM users WHERE gift_earned > 0"
+        ).fetchone()["c"]
     conn.close()
     wall = [{"name": r["name"], "avatar": r["avatar"],
              "founding_no": r["founding_no"],
@@ -12189,7 +12203,12 @@ async def paidwall_page(request: Request):
     return render(request, "paidwall.html",
                   {"wall": wall, "total_cents": total,
                    "total_dollars": _money(total),
-                   "creators": creators})
+                   "creators": creators,
+                   "sold_tickets": sold_tickets,
+                   "sold_dollars": _money(_gross_c),
+                   "owed_dollars": _money(
+                       _earned_dollars(owed_tickets)),
+                   "earning": earning})
 
 
 @app.get("/paid/{token}", response_class=HTMLResponse)
@@ -12683,9 +12702,9 @@ async def founders_page(request: Request):
     """The Original 100 wall: the first hundred real accounts,
     numbered by join order, with the still-open seats showing —
     scarcity you can count, because every seat is a real person."""
-    user, err = require_login(request)
-    if err:
-        return err
+    # Public window (deterrent fix): the wall is a showroom
+    # piece — strangers count the seats before joining.
+    user = current_user(request)
     conn = db()
     rows = conn.execute(
         "SELECT id, name, avatar, founding_no, created_at FROM "

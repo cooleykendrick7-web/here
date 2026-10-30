@@ -87,6 +87,16 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
   <div class="switch"><a href="/forgot">Forgot password?</a></div>
   <div class="switch">New to HERE? <a href="/signup{% if next %}?next={{ next|urlencode }}{% endif %}">Create an account</a></div>
 </div>
+<div class="app-card" style="text-align:center">
+  <h3>👀 New here? Look around first</h3>
+  <p>No account needed to peek:</p>
+  <p style="line-height:2.1;font-weight:700">
+    <a href="/lives">🔴 Who's live now</a> ·
+    <a href="/artists">🎤 Artists &amp; the Label</a> ·
+    <a href="/paidwall">💸 The Wall of Paid</a> ·
+    <a href="/founders">🏅 The Original 100</a>
+  </p>
+</div>
 <div class="app-card" id="app-card">
   <h3 id="app-card-title">📱 Get the HERE app</h3>
   <p>Same HERE you know — right on your home screen, fullscreen, one tap away.</p>

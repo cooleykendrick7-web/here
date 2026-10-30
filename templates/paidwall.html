@@ -26,8 +26,10 @@
   </div>
   {% else %}
   <div class="card" style="text-align:center;margin-top:16px">
-    <p style="font-size:16px;margin:6px 0">The first names land here very soon.</p>
-    <p style="opacity:.8;margin:0">Turn on Creator Mode, earn gifts, and cash out $10 to be the first on the wall.</p>
+    <p style="font-size:16px;margin:6px 0">The money is already moving:</p>
+    <p style="font-weight:900;font-size:19px;margin:8px 0">🎟️ {{ sold_tickets }} tickets sold · {{ sold_dollars|e }} in fan money</p>
+    <p style="margin:0">Creators have banked <strong style="color:#1d9e50">{{ owed_dollars|e }}</strong> in earnings so far{% if earning %} across {{ earning }} creator{% if earning != 1 %}s{% endif %}{% endif %} — the first cash-outs are lining up now, and the first names land on this wall the day they pay out.</p>
+    <p style="opacity:.8;margin:10px 0 0">Turn on Creator Mode, earn gifts, and cash out $10 to be the first on the wall.</p>
   </div>
   {% endif %}
 </div>
