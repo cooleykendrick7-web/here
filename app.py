@@ -601,6 +601,26 @@ def init_db():
     c.execute("UPDATE users SET verification_status='none' WHERE verification_status IS NULL")
     c.execute("UPDATE pages SET is_verified=0 WHERE is_verified IS NULL")
     c.execute("UPDATE pages SET verification_status='none' WHERE verification_status IS NULL")
+    # --- Verified User / Verified Vendor stickers (Ken, Oct 30 2026):
+    # two more owner-granted badges beside the name. is_verified_user /
+    # is_verified_vendor are the on/off flags; vuser_status /
+    # vvendor_status track the settings request lifecycle
+    # ('none'|'pending'|'approved'|'declined'). Requests ride the SAME
+    # verification_requests table with kind 'vuser' / 'vvendor'
+    # (target_id = the user's id), so the owner queue below is the
+    # single door for every badge on HERE.
+    if "is_verified_user" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN is_verified_user INTEGER DEFAULT 0")
+    if "vuser_status" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN vuser_status TEXT DEFAULT 'none'")
+    if "is_verified_vendor" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN is_verified_vendor INTEGER DEFAULT 0")
+    if "vvendor_status" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN vvendor_status TEXT DEFAULT 'none'")
+    c.execute("UPDATE users SET is_verified_user=0 WHERE is_verified_user IS NULL")
+    c.execute("UPDATE users SET vuser_status='none' WHERE vuser_status IS NULL")
+    c.execute("UPDATE users SET is_verified_vendor=0 WHERE is_verified_vendor IS NULL")
+    c.execute("UPDATE users SET vvendor_status='none' WHERE vvendor_status IS NULL")
     # --- MySpace-style full profile backgrounds (safe on existing DBs) ---
     if "background" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN background TEXT DEFAULT ''")
@@ -1929,6 +1949,27 @@ def redir(url, flash=""):
     return RedirectResponse(url, status_code=303)
 
 
+# ---- owner-panel in-place actions (Ken's order Oct 30, 2026) ----
+# "I hate when I click on something and make a change it jumps to
+# another page — let me make the change and be able to make that
+# change again on someone else." Every owner POST route below
+# answers JSON when the panel's script asks (X-Owner-Ajax: 1) and
+# keeps the classic redirect for a plain form submit, so the panel
+# updates the row where it sits — no reload, no lost scroll spot.
+def _oa(request):
+    return request.headers.get("x-owner-ajax") == "1"
+
+
+def _oa_json(msg, **extra):
+    body = {"ok": True, "msg": msg}
+    body.update(extra)
+    return JSONResponse(body)
+
+
+def _oa_fail(msg):
+    return JSONResponse({"ok": False, "msg": msg})
+
+
 def back(request: Request, fallback="/home"):
     ref = request.headers.get("referer", "")
     # only allow same-origin relative redirects
@@ -2947,6 +2988,7 @@ def post_card(p, viewer, owner_on=False):
         conn.close()
         return None
     a = conn.execute("SELECT id,name,avatar,is_verified,"
+                     "is_verified_user,is_verified_vendor,"
                      "private_profile,founding_no,creator_mode,"
                      "plus_until "
                      "FROM users WHERE id=?",
@@ -3069,6 +3111,8 @@ def post_card(p, viewer, owner_on=False):
         "author_creator": bool(a["creator_mode"]) if a else False,
         "author_avatar": avatar,
         "author_verified": bool(a["is_verified"]) if a else False,
+        "author_vuser": bool(a["is_verified_user"]) if a else False,
+        "author_vvendor": bool(a["is_verified_vendor"]) if a else False,
         "kind": p["kind"], "body": p["body"] or "",
         "body_html": linkify_body(p["body"] or "", tagged_users, tagged_pages),
         "feeling": p["feeling"] or "", "link_url": p["link_url"] or "",
@@ -8768,6 +8812,10 @@ async def profile(request: Request, uid: int):
         "req_status": status,
         "tap_count": tcount,
         "is_verified": bool(prof.get("is_verified")),
+        "is_verified_user": bool(prof.get("is_verified_user")),
+        "vuser_status": prof.get("vuser_status") or "none",
+        "is_verified_vendor": bool(prof.get("is_verified_vendor")),
+        "vvendor_status": prof.get("vvendor_status") or "none",
         "founding": bool(prof.get("founding")),
         "founding_no": prof.get("founding_no"),
         "is_plus": _is_plus(prof),
@@ -8850,7 +8898,7 @@ async def profile(request: Request, uid: int):
     else:
         _mconn = db()
         _mrows = _mconn.execute(
-            "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+            "SELECT l.*, u.name AS sname, u.avatar AS savatar, u.is_verified_vendor AS svvendor "
             "FROM market_listings l JOIN users u ON u.id=l.seller_id "
             "WHERE l.seller_id=? AND l.status!='deleted' "
             "ORDER BY (l.status='sold'), l.created_at DESC LIMIT 6",
@@ -9064,6 +9112,10 @@ async def profile_edit_page(request: Request):
                     "background": avatar_url(user.get("background", "")),
                     "is_verified": bool(user.get("is_verified")),
                     "verification_status": user.get("verification_status") or "none",
+                    "is_verified_user": bool(user.get("is_verified_user")),
+                    "vuser_status": user.get("vuser_status") or "none",
+                    "is_verified_vendor": bool(user.get("is_verified_vendor")),
+                    "vvendor_status": user.get("vvendor_status") or "none",
                     "status_mode": mode,
                     "private_profile": 1 if user.get("private_profile")
                     else 0,
@@ -12549,7 +12601,7 @@ async def user_shop_page(request: Request, uid: int):
         conn.close()
         return redir("/market", "That shop isn't available.")
     rows = conn.execute(
-        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar, u.is_verified_vendor AS svvendor "
         "FROM market_listings l JOIN users u ON u.id=l.seller_id "
         "WHERE l.seller_id=? AND l.status='active' ORDER BY "
         "CASE WHEN l.boost_until > strftime('%s','now') THEN 0 "
@@ -12576,7 +12628,7 @@ async def page_shop_page(request: Request, pid: int):
         conn.close()
         return redir("/pages", "Page not found.")
     rows = conn.execute(
-        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar, u.is_verified_vendor AS svvendor "
         "FROM market_listings l JOIN users u ON u.id=l.seller_id "
         "WHERE l.seller_id=? AND l.status='active' ORDER BY "
         "CASE WHEN l.boost_until > strftime('%s','now') THEN 0 "
@@ -12789,6 +12841,8 @@ async def owner_suggestion_status(request: Request, sid: int):
     form = await request.form()
     status = str(form.get("status") or "")
     if status not in SUGGESTION_STATUS_LABELS:
+        if _oa(request):
+            return _oa_fail("That suggestion status isn't valid.")
         return RedirectResponse("/owner/suggestions",
                                 status_code=303)
     conn = db()
@@ -12807,6 +12861,11 @@ async def owner_suggestion_status(request: Request, sid: int):
                    "this place. Thank you!",
                    "/settings/profile#ideas")
     conn.close()
+    if _oa(request):
+        return _oa_json(
+            "Suggestion marked: "
+            + SUGGESTION_STATUS_LABELS[status],
+            status=status, label=SUGGESTION_STATUS_LABELS[status])
     return RedirectResponse("/owner/suggestions", status_code=303)
 
 
@@ -13409,6 +13468,8 @@ async def owner_live_end(request: Request, lid: int):
         _end_live_row(conn, live)
         conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Live ended for everyone.")
     return redir("/owner")
 
 
@@ -15711,6 +15772,14 @@ async def owner_artist_app(request: Request, aid: int,
                    "now gift your tracks.",
                    f"/user/{app_row['user_id']}")
     conn.close()
+    if _oa(request):
+        if not app_row:
+            return _oa_fail("That application is gone.")
+        return _oa_json(
+            "🎤 Artist approved — the plaque is live."
+            if decision == "approve" else "Application passed.",
+            status="approved" if decision == "approve"
+            else "passed")
     return redir("/owner/artists?msg=done")
 
 
@@ -18093,7 +18162,7 @@ async def search(request: Request):
         params = [f"%{t}%" for t in tokens]
         urows = conn.execute(
             f"SELECT id,name,avatar,last_seen_at,status_mode,inbox_status,"
-            f"private_profile "
+            f"private_profile,is_verified_user,is_verified_vendor "
             f"FROM users WHERE ({ors}) OR email LIKE ? "
             f"ORDER BY CASE WHEN name LIKE ? THEN 0 ELSE 1 END, name LIMIT 50",
             params + [f"%{q}%", f"%{q}%"]).fetchall()
@@ -18109,6 +18178,8 @@ async def search(request: Request):
                   "presence": presence_of(r),
                   "is_self": r["id"] == user["id"],
                   "is_private": bool(r["private_profile"]),
+                  "vuser": bool(r["is_verified_user"]),
+                  "vvendor": bool(r["is_verified_vendor"]),
                   "req": req_status(user["id"], r["id"])}
                  for r in urows if r["id"] not in _blocked_search]
         pages = []
@@ -20050,6 +20121,7 @@ def _listing_card(row, saved=False):
                         and row["boost_until"] > time.time()),
         "created": fancy_time(row["created_at"]),
         "seller_name": row["sname"] if "sname" in keys else "",
+        "seller_vvendor": bool(row["svvendor"]) if "svvendor" in keys and row["svvendor"] else False,
         "seller_avatar": (avatar_url(row["savatar"])
                           if "savatar" in keys and row["savatar"] else ""),
         "saved": bool(saved),
@@ -20058,7 +20130,7 @@ def _listing_card(row, saved=False):
 
 def _get_listing(conn, lid):
     return conn.execute(
-        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar, u.is_verified_vendor AS svvendor "
         "FROM market_listings l JOIN users u ON u.id=l.seller_id "
         "WHERE l.id=?", (lid,)).fetchone()
 
@@ -20184,7 +20256,7 @@ async def market_browse(request: Request):
              + "l.price_cents DESC, l.created_at DESC"}[sort]
     conn = db()
     rows = conn.execute(
-        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar, u.is_verified_vendor AS svvendor "
         "FROM market_listings l JOIN users u ON u.id=l.seller_id WHERE "
         + " AND ".join(where) + f" ORDER BY {order} LIMIT 200",
         args).fetchall()
@@ -20210,7 +20282,7 @@ async def market_mine(request: Request):
         return err
     conn = db()
     rows = conn.execute(
-        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar, u.is_verified_vendor AS svvendor "
         "FROM market_listings l JOIN users u ON u.id=l.seller_id "
         "WHERE l.seller_id=? AND l.status!='deleted' "
         "ORDER BY (l.status='sold'), l.created_at DESC",
@@ -20240,7 +20312,7 @@ async def market_saved(request: Request):
         return err
     conn = db()
     rows = conn.execute(
-        "SELECT l.*, u.name AS sname, u.avatar AS savatar "
+        "SELECT l.*, u.name AS sname, u.avatar AS savatar, u.is_verified_vendor AS svvendor "
         "FROM market_saves s JOIN market_listings l ON l.id=s.listing_id "
         "JOIN users u ON u.id=l.seller_id "
         "WHERE s.user_id=? AND l.status!='deleted' "
@@ -20337,6 +20409,7 @@ async def market_detail(request: Request, lid: int):
         "gone": False, "listing": _listing_card(row, saved=saved),
         "seller": ({"id": seller["id"], "name": seller["name"],
                     "avatar": avatar_url(seller.get("avatar", "")),
+                    "is_verified_vendor": bool(seller.get("is_verified_vendor")),
                     "joined": fancy_time(seller["created_at"])}
                    if seller else None),
         "is_seller": row["seller_id"] == user["id"],
@@ -20789,6 +20862,7 @@ async def public_listing(request: Request, lid: int):
     return render(request, "public_listing.html", {
         "listing": card,
         "seller": {"name": row["sname"],
+                   "is_verified_vendor": bool(row["svvendor"]) if "svvendor" in row.keys() and row["svvendor"] else False,
                    "avatar": avatar_url(row["savatar"] or "")},
         "og_image": og_image,
         "excerpt": (row["description"] or row["title"] or "")[:200],
@@ -21135,6 +21209,13 @@ async def owner_ad_status(request: Request, aid: int):
         conn.execute("UPDATE ads SET status=? WHERE id=?", (status, aid))
         conn.commit()
         conn.close()
+        if _oa(request):
+            label = {"active": "▶ Ad is running.",
+                     "paused": "⏸ Ad paused.",
+                     "ended": "⏹ Ad ended."}[status]
+            return _oa_json(label, status=status)
+    elif _oa(request):
+        return _oa_fail("That ad status isn't one I can set.")
     return redir("/owner")
 
 
@@ -21167,6 +21248,9 @@ async def owner_ad_delete(request: Request, aid: int):
     conn.close()
     if media_path:
         _delete_upload(media_path)
+    if _oa(request):
+        return (_oa_json("🗑 Ad removed completely.") if ad
+                else _oa_fail("Ad not found."))
     return redir("/owner", "🗑 Ad removed completely."
                  if ad else "Ad not found.")
 
@@ -21247,7 +21331,9 @@ async def owner_dashboard(request: Request):
             "(user_id=? OR friend_id=?)", (u["id"], u["id"])).fetchone()["c"]
         users.append({"id": u["id"], "name": u["name"], "email": u["email"],
                       "created_at": fancy_time(u["created_at"]),
-                      "posts": posts_n, "friends": friends_n})
+                      "posts": posts_n, "friends": friends_n,
+                      "is_verified_user": bool(u["is_verified_user"]),
+                      "is_verified_vendor": bool(u["is_verified_vendor"])})
 
     fact = conn.execute(
         "SELECT f.*, a.name AS req_name, b.name AS tgt_name FROM friendships f "
@@ -21298,7 +21384,7 @@ async def owner_dashboard(request: Request):
         "vr.created_at DESC LIMIT 100").fetchall()
     verifications = []
     for r in vrows:
-        if r["kind"] == "user":
+        if r["kind"] in ("user", "vuser", "vvendor"):
             tgt = conn.execute("SELECT id,name FROM users WHERE id=?",
                                (r["target_id"],)).fetchone()
             posts_n = conn.execute("SELECT COUNT(*) c FROM posts WHERE user_id=?",
@@ -21317,6 +21403,10 @@ async def owner_dashboard(request: Request):
             extra_lbl, link = "members", f"/page/{r['target_id']}"
         verifications.append({
             "id": r["id"], "kind": r["kind"],
+            "kind_label": {"user": "star", "page": "page star",
+                           "vuser": "VERIFIED USER sticker",
+                           "vvendor": "VERIFIED VENDOR sticker"}.get(
+                               r["kind"], r["kind"]),
             "name": tgt["name"] if tgt else "Deleted",
             "link": link,
             "requester_name": r["requester_name"] or "Deleted user",
@@ -21555,6 +21645,9 @@ async def owner_flag_dismiss(request: Request, fid: int):
     conn.execute("UPDATE moderation_flags SET status='dismissed' WHERE id=?", (fid,))
     conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Flag dismissed — the content stays.",
+                        status="dismissed")
     return redir("/owner")
 
 
@@ -21595,6 +21688,8 @@ async def owner_flag_remove(request: Request, fid: int):
         conn.execute("UPDATE moderation_flags SET status='removed' WHERE id=?", (fid,))
         conn.commit()
         conn.close()
+    if _oa(request):
+        return _oa_json("Content removed.", status="removed")
     return redir("/owner")
 
 
@@ -21633,6 +21728,8 @@ async def owner_user_remove(request: Request, uid: int):
     conn.execute("DELETE FROM users WHERE id=?", (uid,))
     conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("User removed, with all their content.")
     return redir("/owner")
 
 
@@ -21687,14 +21784,26 @@ async def owner_verify_approve(request: Request, rid: int):
     conn = db()
     vr = conn.execute("SELECT * FROM verification_requests WHERE id=?", (rid,)).fetchone()
     if vr and vr["status"] == "pending":
-        table = "users" if vr["kind"] == "user" else "pages"
-        conn.execute(
-            f"UPDATE {table} SET is_verified=1, verification_status='approved' WHERE id=?",
-            (vr["target_id"],))
+        if vr["kind"] == "vuser":
+            conn.execute("UPDATE users SET is_verified_user=1, "
+                         "vuser_status='approved' WHERE id=?",
+                         (vr["target_id"],))
+        elif vr["kind"] == "vvendor":
+            conn.execute("UPDATE users SET is_verified_vendor=1, "
+                         "vvendor_status='approved' WHERE id=?",
+                         (vr["target_id"],))
+        else:
+            table = "users" if vr["kind"] == "user" else "pages"
+            conn.execute(
+                f"UPDATE {table} SET is_verified=1, verification_status='approved' WHERE id=?",
+                (vr["target_id"],))
         conn.execute("UPDATE verification_requests SET status='approved', reviewed_at=? WHERE id=?",
                      (now_iso(), rid))
         conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Approved — the badge is live.",
+                        status="approved")
     return redir("/owner")
 
 
@@ -21706,14 +21815,285 @@ async def owner_verify_decline(request: Request, rid: int):
     conn = db()
     vr = conn.execute("SELECT * FROM verification_requests WHERE id=?", (rid,)).fetchone()
     if vr and vr["status"] == "pending":
-        table = "users" if vr["kind"] == "user" else "pages"
-        conn.execute(f"UPDATE {table} SET verification_status='declined' WHERE id=?",
-                     (vr["target_id"],))
+        if vr["kind"] == "vuser":
+            conn.execute("UPDATE users SET vuser_status='declined' WHERE id=?",
+                         (vr["target_id"],))
+        elif vr["kind"] == "vvendor":
+            conn.execute("UPDATE users SET vvendor_status='declined' WHERE id=?",
+                         (vr["target_id"],))
+        else:
+            table = "users" if vr["kind"] == "user" else "pages"
+            conn.execute(f"UPDATE {table} SET verification_status='declined' WHERE id=?",
+                         (vr["target_id"],))
         conn.execute("UPDATE verification_requests SET status='declined', reviewed_at=? WHERE id=?",
                      (now_iso(), rid))
         conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Declined.", status="declined")
     return redir("/owner")
+
+
+# ---------------- Verified User / Verified Vendor stickers ----------------
+# Ken's order Oct 30, 2026: two more badges beside the name. The
+# VERIFIED USER sticker (red seal) says "a real, stood-up member of
+# HERE"; the VERIFIED VENDOR sticker (gold seal) says "a stood-up
+# seller — safe to buy from". Only the owner grants them: from the
+# owner panel's per-user switches, or by approving a request. The
+# request door is buried deep in Settings on purpose — a quiet
+# word-of-mouth door, not a menu item. Requests share the
+# verification_requests table (kind 'vuser' / 'vvendor').
+
+def _badge_request(request, kind, flag_col, status_col, label):
+    user, err = require_login(request)
+    if err:
+        return err
+    fresh = get_user(user["id"])
+    if fresh.get(flag_col):
+        return redir("/settings/profile",
+                     f"You already wear the {label}. It shows beside your name.")
+    if (fresh.get(status_col) or "none") == "pending":
+        return redir("/settings/profile",
+                     f"Your {label} request is already in — the owner will review it.")
+    conn = db()
+    conn.execute(f"UPDATE users SET {status_col}='pending' WHERE id=?",
+                 (user["id"],))
+    conn.execute(
+        "INSERT INTO verification_requests(kind, target_id, requester_id, status, created_at) "
+        "VALUES(?,?,?,?,?)",
+        (kind, user["id"], user["id"], "pending", now_iso()))
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile",
+                 f"{label} request sent — the owner reviews every one by hand.")
+
+
+@app.post("/verify/vuser/request")
+async def verify_vuser_request(request: Request):
+    return _badge_request(request, "vuser", "is_verified_user",
+                          "vuser_status", "Verified User sticker")
+
+
+@app.post("/verify/vvendor/request")
+async def verify_vvendor_request(request: Request):
+    return _badge_request(request, "vvendor", "is_verified_vendor",
+                          "vvendor_status", "Verified Vendor sticker")
+
+
+@app.post("/owner/users/{uid}/badge/{kind}")
+async def owner_user_badge_toggle(request: Request, uid: int, kind: str):
+    """Owner panel switch: flip a user's Verified User / Verified
+    Vendor sticker on or off. Turning one ON also settles any
+    pending request for that badge (it was just granted by hand)."""
+    err = require_owner(request)
+    if err:
+        return err
+    cols = {"vuser": ("is_verified_user", "vuser_status"),
+            "vvendor": ("is_verified_vendor", "vvendor_status")}
+    if kind not in cols:
+        return redir("/owner")
+    flag_col, status_col = cols[kind]
+    conn = db()
+    row = conn.execute(f"SELECT {flag_col} AS f FROM users WHERE id=?",
+                       (uid,)).fetchone()
+    if row:
+        newv = 0 if row["f"] else 1
+        conn.execute(
+            f"UPDATE users SET {flag_col}=?, {status_col}=? WHERE id=?",
+            (newv, "approved" if newv else "none", uid))
+        if newv:
+            conn.execute(
+                "UPDATE verification_requests SET status='approved', reviewed_at=? "
+                "WHERE kind=? AND target_id=? AND status='pending'",
+                (now_iso(), kind, uid))
+        conn.commit()
+    conn.close()
+    if _oa(request):
+        label = ("Verified User" if kind == "vuser"
+                 else "Verified Vendor")
+        if not row:
+            return _oa_fail("That user is gone.")
+        return _oa_json(
+            f"{label} turned {'ON' if newv else 'OFF'}.",
+            on=bool(newv))
+    return redir("/owner")
+
+
+# ---------------- Help: FAQ + Hearley the help bot ----------------
+# Ken's order Oct 30, 2026: a FAQ tab that teaches people how to
+# run HERE, plus an in-app helper named Hearley who answers real
+# questions with specific answers. Hearley's brain is a curated
+# knowledge base about HERE itself (accurate by construction — she
+# only says what the site actually does); anything outside it gets
+# an honest "that's one for the owner" plus the support door.
+
+@app.get("/faq", response_class=HTMLResponse)
+async def faq_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    return render(request, "faq.html", {})
+
+
+@app.get("/hearley", response_class=HTMLResponse)
+async def hearley_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    return render(request, "hearley.html", {})
+
+
+# (keyword phrases/words, answer, optional link path, optional link label)
+HEARLEY_KB = [
+    (["how do i post", "make a post", "write a post", "post something", "composer"],
+     "Tap the ➕ Create button up top (or the composer at the top of your feed), write what's on your mind, pick who can see it — Public, Friends, or Only me — and hit Post. You can add a photo, a video, a feeling, or a song. Your post lands in the feed and on your profile.",
+     "/home", "Open the feed"),
+    (["delete a post", "delete my post", "remove a post"],
+     "Open your post, tap the ⋯ menu on it, and choose Delete. It's gone for everybody, right away. There's no undo, so be sure before you tap.",
+     None, None),
+    (["hide a post", "dont want to see", "don't want to see", "unhide"],
+     "On any post, tap the ⋯ menu and choose Hide — it disappears from YOUR feed only; everybody else still sees it. You can unhide from the ⋯ menu on your profile's hidden list.",
+     None, None),
+    (["story", "stories", "add a story"],
+     "Stories live at the top of the feed and last 24 hours. Tap the + on your own story circle to add a photo or video — friends see it, then it disappears on its own.",
+     "/home", "See stories"),
+    (["peep", "peeps"],
+     "Peeps are HERE's short posts — quick hits that ride the feed. Same composer, keep it short and loud. Friends can react, comment, and gift a Peep just like a post.",
+     "/home", "Open the feed"),
+    (["add friend", "friend request", "find friends", "find people", "search people", "search for"],
+     "Use the search bar up top to find people by name — or by job, city, or hometown on their profiles. Open their profile and tap Add Friend. When they accept, you're friends: you see each other's friends-only posts and can call each other.",
+     "/search", "Search people"),
+    (["message", "inbox", "dm", "send a message", "chat with"],
+     "Tap the messages icon up top to open your Inbox. Pick a friend and write — you can send text, photos, and voice. The Sent box keeps what you've sent, and you can delete a conversation for yourself anytime.",
+     "/messages", "Open messages"),
+    (["go live", "start a live", "start live", "livestream", "stream"],
+     "Tap the red Platforms button up top, then Go Live. Give your Platform a title, pick a category, and you're on air. People can watch, comment live, gift you tickets, and apply for a spot on your stage.",
+     "/lives", "Open Platforms"),
+    (["platform", "platforms", "lobby"],
+     "Platforms are HERE's live rooms — every live is a Platform with its own stage. The Lobby is the always-open one: walk in anytime, day or night. Hosts run their room; guests apply for a spot and the host lets them in.",
+     "/lives", "See what's live"),
+    (["spot", "apply", "join the stage", "join a live", "get on stage", "panel"],
+     "Watching a Platform? Tap 'Apply for a spot'. The host sees your name (and what spot you want, if the spots are named) and taps Let in. Once you're on stage, everybody can see and hear you — mute and camera buttons are yours to control.",
+     "/lives", "See what's live"),
+    (["ticket", "tickets", "buy tickets", "ticket packs", "how much are tickets"],
+     "Live Tickets are HERE's gift money. Packs: 100 tickets for $0.99, 500 for $4.99, 1,500 for $13.99. Buy them on the Tickets page — payment runs through Stripe, and your balance shows the second it clears.",
+     "/tickets", "Open Tickets"),
+    (["gift", "send a gift", "gifting", "send tickets"],
+     "See the gift button on a live, a post, a Peep, or a music track? Pick a gift and send it — the tickets leave your balance and land in the creator's EARNED balance. Earned tickets are the ones that turn into real money at cash-out.",
+     "/tickets", "Open Tickets"),
+    (["cash out", "cashout", "get paid", "withdraw", "my money", "payout"],
+     "When your EARNED tickets reach 2,000, that's $10 — the cash-out door opens on the Tickets page. Every earned ticket is worth half a cent, guaranteed: the $13.99 pack, gifted in full, pays the creator $7.50. Bank-ready cash-outs send themselves; there's no follower minimum and no approval line for your own money.",
+     "/tickets", "Open Tickets"),
+    (["bank", "stripe", "connect bank", "bank account", "get my money to my bank"],
+     "On the Tickets page tap 'Set up bank payouts'. That takes you to Stripe (the same company the big apps use) for a one-time, five-minute setup — ID and bank details go to Stripe, never to HERE. After that, cash-outs land in your bank in about two business days.",
+     "/tickets", "Open Tickets"),
+    (["market", "sell something", "selling", "list an item", "buy something", "buying"],
+     "The Market is HERE's buy-and-sell board. Tap Market, then 'Sell something': add photos (up to 4), a price (0 means FREE), and a category. Buyers message you right here in your Inbox. HERE doesn't take payments — meet in a public place and pay the seller directly, like any good marketplace.",
+     "/market", "Open the Market"),
+    (["boost", "boost my listing", "promote my listing"],
+     "A Market boost costs 100 tickets and pushes your listing up where buyers see it first. Open your listing and tap Boost.",
+     "/market", "Open the Market"),
+    (["verified vendor", "vendor badge", "vendor sticker", "trusted seller"],
+     "The gold VERIFIED VENDOR sticker means the owner has stood this seller up as a real, trusted seller on HERE — it shows beside their name and on their Market listings. Sellers can request it in Settings (it's tucked deep, near the very bottom — the quiet door), and the owner reviews every request by hand. The owner can also stamp it directly from his panel.",
+     "/market", "Open the Market"),
+    (["verified user", "user badge", "user sticker"],
+     "The red VERIFIED USER sticker means the owner has stood this person up as a real member of HERE — it rides beside their name on profiles and posts. You can request yours in Settings, tucked deep near the very bottom (most people never find it — now you know). The owner reviews every request himself.",
+     "/settings/profile", "Open Settings"),
+    (["verified star", "gold star", "get verified", "verification", "verify me"],
+     "The golden ★ star is HERE's 'important page' mark. Apply from your profile or the Verification section in Settings — the owner reviews your page and your posts himself, and the bar is high: very interesting, very eye-catching, attention-grabbing. Make your page worth staring at first, then apply.",
+     "/settings/profile", "Open Settings"),
+    (["artist", "verified artist", "label", "record deal", "contract"],
+     "HERE has its own record label. Switch on Artist mode in Settings and walk the artist door: watch the films, read the Playbook, sign that you understand the money comes from your fans and your work. Verified Artists get the gold plaque badge, track gifts and likes, and a scoreboard — 40,000 plays flags you CONTRACT-READY for a real deal where you keep 100% of your music rights.",
+     "/artists", "See the artists"),
+    (["upload music", "upload a song", "upload track", "my music", "profile music"],
+     "Turn on Media HERE in Settings, pick Profile Music or Artist mode, and upload your tracks (MP3, M4A, OGG or WAV, up to 20 MB). Every upload asks whose music it is: yours (fans can gift it if you're a Verified Artist) or not yours (listening only — respect the artists). 10 tracks free, 50 with HERE Plus.",
+     "/settings/profile", "Open Settings"),
+    (["plus", "here plus", "membership", "subscription"],
+     "HERE Plus is $4.99 a month: the ⭐ PLUS badge beside your name, 50 music tracks instead of 10, and more room to shine. Manage it on the Plus page.",
+     "/plus", "See HERE Plus"),
+    (["invite race", "100 dollars", "$100", "race", "prize"],
+     "The $100 Invite Race runs October 30 to November 15, 2026. First place: $100 cash. Second: 1,000 tickets. Third: 500. But a join only counts when your invited person actually USES HERE — posts, joins a live, or uses tickets. Ghost signups don't count, and the winner is verified by the owner before anybody gets paid. Minimum 20 real joins for the money to pay out.",
+     "/invite-race", "See the race board"),
+    (["invite", "invite link", "referral", "invite friends"],
+     "Your personal invite link is on the Invite page — share it anywhere. When somebody joins from your link, HERE knows they came through you (that's how the Invite Race counts you). Invited friends also earn you milestone rewards.",
+     "/invite", "Get my invite link"),
+    (["private", "privacy", "who can see", "only me", "friends only"],
+     "Every post picks its own audience: Public, Friends, or Only me. Want the whole profile locked down? Settings → Privacy makes your profile friends-only — strangers see the door, not the room. The owner can always see his own house.",
+     "/settings/profile", "Open Settings"),
+    (["block", "silence", "mute someone", "report", "flag"],
+     "Somebody bothering you? On their profile: 🚫 Block ends it completely — no friendship, no seeing each other, either way. 🔇 Silence just quiets them for you. And any post or comment can be flagged — flags go straight to the owner's desk; he alone decides remove, keep, or warn.",
+     "/settings/profile", "Open Settings"),
+    (["password", "forgot", "locked out", "reset", "cant log in", "can't log in", "login help"],
+     "Locked out? Use the forgot-password door on the login page — a one-time reset link goes to the email on your account (check spam, links last one hour). Never got it? The support inbox is wearehereyouarehere@gmail.com — a human house, run by the owner himself.",
+     None, None),
+    (["background", "your spot", "profile background", "customize", "my look", "colors"],
+     "Your Spot is your corner of HERE: Settings lets you set a full profile background, your own colors that follow you around the app, and how clear the glass over it sits. Make it yours — your background shows through the glass on your profile.",
+     "/settings/profile", "Open Settings"),
+    (["games", "showdown", "fortnite", "tournament"],
+     "The Games corner runs showdowns and events — including Fortnite for Baddies, Friday October 30 at 11 PM. Games ride on Platforms: watch, join the room, and get in where you fit in.",
+     "/games", "Open Games"),
+    (["ads", "advertise", "run an ad", "promote my page", "promote"],
+     "Ads on HERE cost $10 for 7 days and ride the feed where real people scroll. Pages can also run ads from their page menu. Your ad, your audience — no auction games.",
+     None, None),
+    (["earnings", "how much have i made", "how much did i earn", "scoreboard", "top earners"],
+     "Your Earnings page shows every ticket you've earned, gift by gift, and where you stand. The scoreboard ranks creators by plays, likes, and gifts earned.",
+     "/earnings", "See my earnings"),
+    (["hearley", "who are you", "your name", "help bot", "robot"],
+     "I'm Hearley — HERE's house helper. I live in the Help corner and I answer questions about how HERE works: posting, lives, tickets, cashing out, the Market, badges, all of it. Ask me anything about HERE and I'll give you the straight answer. For account trouble I can't fix, the support inbox is wearehereyouarehere@gmail.com.",
+     "/faq", "Read the FAQ"),
+    (["hello", "hi", "hey", "yo"],
+     "Hey! 👋 I'm Hearley. Ask me how anything on HERE works — try 'how do I cash out?', 'how do I go live?', or 'what is a Verified Vendor?'",
+     None, None),
+    (["support", "contact", "email", "human", "real person", "owner", "help me"],
+     "For anything I can't answer, the house support inbox is wearehereyouarehere@gmail.com — run by the owner himself. Tell him your HERE name and what's wrong, plain and simple, and he'll take it from there.",
+     None, None),
+]
+
+HEARLEY_FALLBACK = (
+    "That one's outside my map of HERE — and I won't guess at you. "
+    "Try asking about posting, going live, tickets, cashing out, the Market, "
+    "badges, or the Invite Race. Still stuck? The support inbox is "
+    "wearehereyouarehere@gmail.com — the owner runs it himself.")
+
+
+def hearley_answer(q):
+    """Score the question against the knowledge base: a phrase hit
+    weighs 3, a single-word hit weighs 1; best entry at score >= 2
+    wins. Returns (answer, link, link_label)."""
+    import re as _re
+    ql = " " + _re.sub(r"[^a-z0-9$ ]", " ", (q or "").lower()) + " "
+    ql = " " + " ".join(ql.split()) + " "
+    best, best_score = None, 0
+    for keys, ans, link, label in HEARLEY_KB:
+        score = 0
+        for k in keys:
+            if " " in k or "$" in k:
+                if k in ql:
+                    score += 3
+            elif f" {k} " in ql:
+                score += 1
+        if score > best_score:
+            best, best_score = (ans, link, label), score
+    if best and best_score >= 2:
+        return best
+    return (HEARLEY_FALLBACK, "/faq", "Read the FAQ")
+
+
+@app.post("/api/hearley/ask")
+async def hearley_ask(request: Request):
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    q = (data.get("q") or "").strip()[:500]
+    if not q:
+        return JSONResponse({"ok": False, "error": "empty"}, status_code=400)
+    ans, link, label = hearley_answer(q)
+    return JSONResponse({"ok": True, "answer": ans, "link": link,
+                         "link_label": label})
 
 
 def _payout_attempt(pid):
@@ -21848,23 +22228,44 @@ async def owner_payout_send(request: Request, pid: int):
     if err:
         return err
     outcome, info = _payout_attempt(pid)
+    ajax = _oa(request)
     if outcome == "gone":
+        if ajax:
+            return _oa_fail("That cash-out was already decided.")
         return redir("/owner", "That cash-out was already decided.")
     if outcome == "notready":
+        if ajax:
+            return _oa_fail("That streamer hasn't finished bank "
+                            "setup — pay this one by hand instead.")
         return redir("/owner",
                      "That streamer hasn't finished bank setup — "
                      "pay this one by hand instead.")
     if outcome == "refused":
+        if ajax:
+            return _oa_fail(f"Stripe refused the send: "
+                            f"{info.get('cls')} — request {pid} is "
+                            "still pending; you can pay by hand "
+                            "instead.")
         return redir("/owner",
                      f"Stripe refused the send: {info.get('cls')} "
                      f"— request {pid} is still pending; you can "
                      "pay by hand instead.")
     if outcome == "unknown":
+        if ajax:
+            return _oa_fail(f"The send for request {pid} was "
+                            "attempted but Stripe didn't answer — "
+                            "check Stripe before doing anything "
+                            "else. It's marked 'sending' now.")
         return redir("/owner",
                      f"The send for request {pid} was attempted but "
                      "Stripe didn't answer — check Stripe before "
                      "doing anything else. The request is marked "
                      "'sending' and can't be sent twice.")
+    if ajax:
+        return _oa_json(
+            f"💸 Sent {_money(info['dollars_cents'])} to the "
+            f"streamer's bank (request {pid}).",
+            status="paid", note="💸 Stripe → bank")
     return redir("/owner",
                  f"💸 Sent {_money(info['dollars_cents'])} to the "
                  f"streamer's bank (request {pid}).")
@@ -21893,9 +22294,17 @@ async def owner_payout_hand_note(request: Request, pid: int):
     conn.commit()
     conn.close()
     if cur.rowcount != 1:
+        if _oa(request):
+            return _oa_fail("That cash-out isn't waiting anymore "
+                            "— no note added.")
         return redir("/owner",
                      "That cash-out isn't waiting anymore — "
                      "no note added.")
+    if _oa(request):
+        return _oa_json(
+            f"💵 Noted on request {pid} — it shows as paid by "
+            "hand, and its bank send still goes through.",
+            note=note)
     return redir("/owner",
                  f"💵 Noted on request {pid} — it shows as paid "
                  "by hand, and its bank send still goes through.")
@@ -21912,7 +22321,8 @@ async def owner_payout_paid(request: Request, pid: int):
     conn = db()
     pr = conn.execute(
         "SELECT * FROM payout_requests WHERE id=?", (pid,)).fetchone()
-    if pr and pr["status"] == "pending":
+    flipped = bool(pr and pr["status"] == "pending")
+    if flipped:
         stamp = now_iso()
         conn.execute(
             "UPDATE payout_requests SET status='paid', "
@@ -21924,6 +22334,11 @@ async def owner_payout_paid(request: Request, pid: int):
              _money(pr["dollars_cents"]), stamp))
         conn.commit()
     conn.close()
+    if _oa(request):
+        if not flipped:
+            return _oa_fail("That cash-out was already decided.")
+        return _oa_json("Marked paid — by hand.",
+                        status="paid", note="✋ paid by hand")
     return redir("/owner")
 
 
@@ -21937,7 +22352,8 @@ async def owner_payout_declined(request: Request, pid: int):
     conn = db()
     pr = conn.execute(
         "SELECT * FROM payout_requests WHERE id=?", (pid,)).fetchone()
-    if pr and pr["status"] == "pending":
+    flipped = bool(pr and pr["status"] == "pending")
+    if flipped:
         stamp = now_iso()
         conn.execute(
             "UPDATE payout_requests SET status='declined', "
@@ -21963,6 +22379,11 @@ async def owner_payout_declined(request: Request, pid: int):
                     "payout_request_id=?", (pid,))
         conn.commit()
     conn.close()
+    if _oa(request):
+        if not flipped:
+            return _oa_fail("That cash-out was already decided.")
+        return _oa_json("Declined — the tickets went back to "
+                        "their earnings.", status="declined")
     return redir("/owner")
 
 
@@ -21983,10 +22404,22 @@ async def owner_pwreset_link(request: Request, rid: int):
     conn.close()
     if (not r or r["delivery"] != "queued" or r["used_at"]
             or not r["token_plain"]):
+        if _oa(request):
+            return _oa_fail("Nothing to show — that reset link is "
+                            "gone (already sent, used, or expired).")
         return redir("/owner")
     exp = _parse_ts(r["expires_at"])
     if not exp or exp <= datetime.now(timezone.utc):
+        if _oa(request):
+            return _oa_fail("That reset link has expired.")
         return redir("/owner")
+    if _oa(request):
+        return _oa_json(
+            "Reset link ready — email it to the address on the "
+            "account, then tap Mark hand-sent.",
+            link=_abs_url(request, f"/reset/{r['token_plain']}"),
+            email=r["user_email"] or "",
+            expires=fancy_time(r["expires_at"]))
     return render(request, "owner/pwreset_link.html", {
         "link": _abs_url(request, f"/reset/{r['token_plain']}"),
         "user_email": r["user_email"] or "",
@@ -22009,6 +22442,8 @@ async def owner_pwreset_hand_sent(request: Request, rid: int):
         "AND used_at IS NULL", (now_iso(), rid))
     conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Marked hand-sent.", status="hand-sent")
     return redir("/owner")
 
 
