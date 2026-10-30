@@ -1270,6 +1270,9 @@ def init_db():
     if "backdrop" not in _ls_cols:
         c.execute("ALTER TABLE live_sessions ADD COLUMN "
                   "backdrop TEXT DEFAULT ''")
+    if "backdrop_fit" not in _ls_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "backdrop_fit TEXT DEFAULT 'auto'")
     if "spot_names" not in _ls_cols:
         c.execute("ALTER TABLE live_sessions ADD COLUMN "
                   "spot_names TEXT DEFAULT ''")
@@ -13390,6 +13393,7 @@ async def live_page(request: Request, lid: int):
             "shout_cost": SHOUT_COST_TICKETS,
             # Platforms branding: the host's backdrop + shelf.
             "backdrop": avatar_url(live.get("backdrop") or ""),
+            "backdrop_fit": live.get("backdrop_fit") or "auto",
             "category": live.get("category") or "",
             "tags": _live_tags(live)}
     # Browse mode (fullscreen-live rework): the watch page renders a
@@ -14005,6 +14009,7 @@ async def live_state(request: Request, lid: int):
         "spotlight_id": live.get("spotlight_id"),
         "is_lobby": bool(live.get("is_lobby")),
         "backdrop": avatar_url(live.get("backdrop") or ""),
+        "backdrop_fit": live.get("backdrop_fit") or "auto",
         "category": live.get("category") or "",
         "entry_tickets": live["entry_tickets"] or 0,
         "captain_id": captain_id,
@@ -17249,6 +17254,38 @@ async def live_backdrop(request: Request, lid: int):
     if old and old != key:
         _delete_upload(old)
     return JSONResponse({"ok": True, "url": avatar_url(key)})
+
+
+@app.post("/live/{lid}/backdrop-fit")
+async def live_backdrop_fit(request: Request, lid: int):
+    """Backdrop fit (host only, Ken Oct 30): his backdrop art
+    is portrait while his capture-card stream runs landscape,
+    so 'cover' chops the art. 'fit' shows the whole picture
+    (blur-filled sides); 'auto' picks per screen shape on
+    every client; 'cover' is the original full-bleed."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host brands their platform."},
+            status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    fit = str(_live_parse_body(data).get("fit") or "").strip()
+    if fit not in ("auto", "cover", "fit"):
+        return JSONResponse(
+            {"ok": False, "error": "Pick Auto, Fill or Fit."},
+            status_code=400)
+    conn = db()
+    conn.execute("UPDATE live_sessions SET backdrop_fit=? "
+                 "WHERE id=?", (fit, lid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "fit": fit})
 
 
 @app.post("/live/{lid}/seat-label")

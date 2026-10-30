@@ -93,6 +93,11 @@
 #live-stage-slot{position:absolute;inset:0}
 .live-stage{position:absolute;inset:0;height:100%;background:#000;overflow:hidden}
 #stage-bg{position:absolute;inset:0;background-size:cover;background-position:center;background-repeat:no-repeat;opacity:.55;z-index:0;pointer-events:none}
+#stage-bg-blur{position:absolute;inset:-30px;background-size:cover;background-position:center;filter:blur(24px) brightness(.55);display:none}
+#stage-bg-fit{position:absolute;inset:0;background-size:contain;background-position:center;background-repeat:no-repeat;display:none}
+.live-stage.bd-fit #stage-bg-blur{display:block}
+.live-stage.bd-fit #stage-bg-fit{display:block}
+.bd-fit-btn.on{background:#e8b33c;color:#111;border-color:#e8b33c}
 #live-grid{z-index:1}
 .live-platchips{display:flex;gap:5px;flex-wrap:wrap;margin-top:4px}
 .live-platchips .kind-tag{background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35)}
@@ -783,7 +788,7 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
 <div class="live-fs" id="live-fs">
  <div id="live-stage-slot">
 <div class="live-stage" id="live-stage">
-  <div id="stage-bg"></div>
+  <div id="stage-bg"><div id="stage-bg-blur"></div><div id="stage-bg-fit"></div></div>
   <div class="live-grid cols-1" id="live-grid"></div>
   <button type="button" id="focus-exit" class="mini-btn" hidden>✖ Exit focus</button>
   <button type="button" id="spots-pill" class="mini-btn" hidden></button>
@@ -796,6 +801,11 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
       {% if role == "host" %}<div style="margin-top:5px;display:flex;gap:6px;align-items:center">
         <button type="button" class="mini-btn" id="bd-btn">🖼 Backdrop</button>
         <button type="button" class="mini-btn" id="bd-clear"{% if not live.backdrop %} hidden{% endif %}>✖ Clear</button>
+        <span id="bd-fit" style="display:none;gap:4px;align-items:center">
+          <button type="button" class="mini-btn bd-fit-btn" data-fit="auto">Auto</button>
+          <button type="button" class="mini-btn bd-fit-btn" data-fit="cover">Fill</button>
+          <button type="button" class="mini-btn bd-fit-btn" data-fit="fit">Fit</button>
+        </span>
         <input type="file" id="bd-file" accept="image/*" hidden>
       </div>{% endif %}
       <div id="live-prompt" hidden></div>
@@ -7874,18 +7884,87 @@ function renderTopGifters(list){
       openApplySheet();
     });
   var curBackdrop = null;
+  var curBackdropFit = B.backdrop_fit || 'auto';
+  var bdImgAspect = 0;
+  function bdEffectiveFit(){
+    if (curBackdropFit !== 'auto') return curBackdropFit;
+    var stage = document.getElementById('live-stage');
+    if (!stage || !bdImgAspect) return 'cover';
+    var sa = stage.clientWidth /
+             Math.max(1, stage.clientHeight);
+    var imgLand = bdImgAspect >= 1, stLand = sa >= 1;
+    return imgLand === stLand ? 'cover' : 'fit';
+  }
+  function paintBackdrop(){
+    var el = document.getElementById('stage-bg'),
+        blur = document.getElementById('stage-bg-blur'),
+        fitL = document.getElementById('stage-bg-fit'),
+        stage = document.getElementById('live-stage');
+    if (!el || !stage) return;
+    var url = curBackdrop || '';
+    stage.classList.toggle('has-backdrop', !!url);
+    var mode = url ? bdEffectiveFit() : 'cover';
+    stage.classList.toggle('bd-fit', !!url && mode === 'fit');
+    el.style.backgroundImage =
+      (url && mode === 'cover') ? 'url("' + url + '")' : '';
+    if (blur) blur.style.backgroundImage =
+      (url && mode === 'fit') ? 'url("' + url + '")' : '';
+    if (fitL) fitL.style.backgroundImage =
+      (url && mode === 'fit') ? 'url("' + url + '")' : '';
+    var clr = document.getElementById('bd-clear');
+    if (clr) clr.hidden = !url;
+    var fctl = document.getElementById('bd-fit');
+    if (fctl) fctl.style.display =
+      (isHost && url) ? 'inline-flex' : 'none';
+    var btns = document.querySelectorAll('.bd-fit-btn');
+    for (var i = 0; i < btns.length; i++)
+      btns[i].classList.toggle('on',
+        btns[i].getAttribute('data-fit') === curBackdropFit);
+  }
   function applyBackdrop(url){
     curBackdrop = url || '';
-    var el = document.getElementById('stage-bg');
-    if (el) el.style.backgroundImage =
-      curBackdrop ? 'url("' + curBackdrop + '")' : '';
-    var stage = document.getElementById('live-stage');
-    if (stage) stage.classList.toggle('has-backdrop',
-                                      !!curBackdrop);
-    var clr = document.getElementById('bd-clear');
-    if (clr) clr.hidden = !curBackdrop;
+    bdImgAspect = 0;
+    paintBackdrop();
+    if (curBackdrop){
+      var probe = new Image();
+      probe.onload = function(){
+        if (probe.naturalHeight)
+          bdImgAspect =
+            probe.naturalWidth / probe.naturalHeight;
+        paintBackdrop();
+      };
+      probe.src = curBackdrop;
+    }
   }
   applyBackdrop(B.backdrop || '');
+  window.addEventListener('resize', function(){
+    if (curBackdropFit === 'auto') paintBackdrop();
+  });
+  (function(){
+    var btns = document.querySelectorAll('.bd-fit-btn');
+    for (var i = 0; i < btns.length; i++){
+      btns[i].addEventListener('click', function(){
+        var fit = this.getAttribute('data-fit');
+        fetch('/live/' + B.id + '/backdrop-fit', {
+          method: 'POST', credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({fit: fit})})
+          .then(function(r){ return r.json(); })
+          .then(function(d){
+            if (d && d.ok){
+              curBackdropFit = d.fit || fit;
+              paintBackdrop();
+              toast(fit === 'fit'
+                ? 'Backdrop: whole picture, blur-filled sides.'
+                : fit === 'cover'
+                ? 'Backdrop: full-bleed fill.'
+                : 'Backdrop: auto - fits itself to the screen.');
+            } else toast((d && d.error) || 'That did not work.');
+          })
+          .catch(function(){ toast('That did not work.'); });
+      });
+    }
+  })();
   (function(){
     var btn = document.getElementById('bd-btn'),
         file = document.getElementById('bd-file'),
