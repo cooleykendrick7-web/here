@@ -1038,16 +1038,27 @@ $('se-form').addEventListener('submit', function(ev){
   if (S.source === 'multi' && S.multi.length){
     ev.preventDefault();
     var chain = Promise.resolve();
+    var total = S.multi.length, doneCount = 0;
+    if (window.hereUploadProgress) hereUploadProgress.start('Posting ' + total + ' stories… 0%');
     S.multi.forEach(function(path){
       chain = chain.then(function(){
         var fd = new FormData($('se-form'));
         fd.set('existing_media', path);
         fd.delete('media');
-        return fetch('/stories/new', {method: 'POST', body: fd});
+        return fetch('/stories/new', {method: 'POST', body: fd}).then(function(){
+          doneCount++;
+          var pct = Math.round(doneCount / total * 100);
+          if (window.hereUploadProgress) hereUploadProgress.set(pct, 'Posting your stories… ' + pct + '%');
+        });
       });
     });
-    chain.then(function(){ location.href = '/home'; })
-         .catch(function(){ toast('One of those did not post — check your stories'); });
+    chain.then(function(){
+      if (window.hereUploadProgress) hereUploadProgress.done('✅ Posted!');
+      setTimeout(function(){ location.href = '/home'; }, 700);
+    }).catch(function(){
+      if (window.hereUploadProgress) hereUploadProgress.fail('One of those did not post — check your stories');
+      toast('One of those did not post — check your stories');
+    });
     toast('Posting ' + S.multi.length + ' stories…');
   }
 });

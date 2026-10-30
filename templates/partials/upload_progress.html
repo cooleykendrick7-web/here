@@ -1,0 +1,127 @@
+{# Upload progress (Ken's order Oct 30, 2026): "when people are
+   posting their stories and making posts they need to see the
+   progression — put a loading bar so they can see it load all
+   the way up to 100% and then it say posted."
+   Post forms (/posts, /page/N/post) and the story form
+   (/stories/new) are sent by XHR so the bar shows the REAL
+   upload percentage; at 100% it holds "Posting…" until the
+   server answers, then flips to "✅ Posted!" and lands where
+   the classic submit would have landed. Any failure hands the
+   form back untouched so the person can retry. The story
+   editor's multi-post chain drives the same bar through
+   window.hereUploadProgress. #}
+<style>
+#hup{position:fixed;top:14px;left:50%;transform:translateX(-50%) translateY(-8px);width:min(430px,92vw);background:rgba(16,16,20,.96);border:1px solid rgba(255,212,0,.55);border-radius:14px;padding:12px 16px 13px;z-index:10001;box-shadow:0 12px 40px rgba(0,0,0,.65);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s}
+#hup.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#hup-label{font-size:14.5px;font-weight:800;color:#fff;margin-bottom:8px;text-align:center}
+#hup-track{height:10px;background:#2a2a2e;border-radius:99px;overflow:hidden}
+#hup-fill{height:100%;width:0%;background:linear-gradient(90deg,#d41f2e,#ff5a3c);border-radius:99px;transition:width .18s ease}
+#hup.done #hup-fill{background:linear-gradient(90deg,#1d9e50,#37c978)}
+#hup.bad{border-color:#d41f2e}
+#hup.bad #hup-fill{background:#d41f2e}
+form.hup-busy button{opacity:.55;pointer-events:none}
+</style>
+<div id="hup" hidden>
+  <div id="hup-label">Uploading… 0%</div>
+  <div id="hup-track"><div id="hup-fill"></div></div>
+</div>
+<script>
+(function () {
+  var box = document.getElementById('hup');
+  var label = document.getElementById('hup-label');
+  var fill = document.getElementById('hup-fill');
+  var hideTimer = null;
+  function show(cls) {
+    box.hidden = false;
+    box.className = 'show' + (cls ? ' ' + cls : '');
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+  }
+  function hideLater(ms) {
+    if (hideTimer) { clearTimeout(hideTimer); }
+    hideTimer = setTimeout(function () {
+      box.className = '';
+      setTimeout(function () { box.hidden = true; }, 280);
+    }, ms);
+  }
+  window.hereUploadProgress = {
+    start: function (text) {
+      fill.style.width = '0%';
+      label.textContent = text || 'Uploading… 0%';
+      show('');
+    },
+    set: function (pct, text) {
+      fill.style.width = pct + '%';
+      if (text) { label.textContent = text; }
+      show('');
+    },
+    done: function (text) {
+      fill.style.width = '100%';
+      label.textContent = text || '✅ Posted!';
+      show('done');
+      hideLater(4000);
+    },
+    fail: function (text) {
+      label.textContent = text || '⚠️ That did not post — try again.';
+      show('bad');
+      hideLater(5200);
+    }
+  };
+  function matches(path) {
+    return path === '/posts' || path === '/stories/new' ||
+           /^\/page\/\d+\/post$/.test(path);
+  }
+  document.addEventListener('submit', function (e) {
+    if (e.defaultPrevented) { return; }
+    var f = e.target;
+    if (!f || !f.action) { return; }
+    var path = new URL(f.action).pathname;
+    if (!matches(path)) { return; }
+    if (f.target && f.target !== '_self') { return; }
+    e.preventDefault();
+    var P = window.hereUploadProgress;
+    var started = Date.now();
+    P.start('Uploading… 0%');
+    f.classList.add('hup-busy');
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', f.action, true);
+    xhr.upload.onprogress = function (ev) {
+      if (ev.lengthComputable && ev.total > 0) {
+        var pct = Math.round(ev.loaded / ev.total * 100);
+        if (pct >= 100) {
+          P.set(100, 'Posting… 100%');
+        } else {
+          P.set(pct, 'Uploading… ' + pct + '%');
+        }
+      }
+    };
+    xhr.upload.onload = function () { P.set(100, 'Posting… 100%'); };
+    function unbusy() { f.classList.remove('hup-busy'); }
+    xhr.onload = function () {
+      unbusy();
+      if (xhr.status >= 200 && xhr.status < 400) {
+        P.done('✅ Posted!');
+        var wait = Math.max(0, 750 - (Date.now() - started));
+        var dest = xhr.responseURL || '/home';
+        setTimeout(function () { location.href = dest; }, wait);
+      } else {
+        P.fail('⚠️ That did not post — please try again.');
+      }
+    };
+    xhr.onerror = function () {
+      unbusy();
+      P.fail('⚠️ That did not post — check your connection and try again.');
+    };
+    xhr.ontimeout = function () {
+      unbusy();
+      P.fail('⚠️ That took too long — please try again.');
+    };
+    xhr.timeout = 600000;
+    try {
+      xhr.send(new FormData(f));
+    } catch (err) {
+      unbusy();
+      f.submit();
+    }
+  });
+})();
+</script>

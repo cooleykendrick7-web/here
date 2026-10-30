@@ -840,3 +840,40 @@ Ken's order: (1) a Help spot — a FAQ tab that teaches people how to run HERE, 
 - **Hearley.** `HEARLEY_KB` + `hearley_answer(q)` in app.py: a curated knowledge base of how HERE actually works (posts, lives/Platforms, tickets, gifts, cash-out, bank setup, Market, all four badges, Invite Race terms, privacy, password door). Phrase hits weigh 3, word hits 1, best entry at score ≥ 2 wins; below that she answers honestly with the topic list + the support inbox (wearehereyouarehere@gmail.com). No external AI call — answers are accurate by construction. Menu spot: "❓ Help & FAQ" + "🤖 Ask Hearley" links in BOTH base.html menus.
 - **Rendering.** `templates/partials/badges.html` (vars: bv_user, bv_vendor, bv_size, bv_full) renders mini seals beside names and the big worded sticker (VERIFIED USER / VERIFIED VENDOR · ON HERE, slight -2° tilt, glossy gradient) at bv_full=1; styles are the `.bv-*` block in base.html. Surfaces: profile header (mini seals ×2 name spots + full sticker row), post cards (post.author_vuser / author_vvendor from post_card's author SELECT), search people rows (users.vuser / vvendor), Market listing cards + detail + public listing (seller_vvendor via the `u.is_verified_vendor AS svvendor` join alias on all 7 market SELECTs; detail via get_user). The ⭐ star and the Verified Artist plaque are untouched.
 - **Tests:** tests/test_help_badges.py NEW (29 checks — FAQ/Hearley pages + login gates; ask API specifics incl. cash-out numbers, vendor answer, honest fallback with support door; buried settings door present; request → pending → single-row discipline; owner queue label + approve ON; owner toggles ON/OFF; decline path; full stickers on profile; mini seals on post cards + search; gold seal on Market card/detail/public listing; nav links). Full relevant sweep green; test_glass_live + test_glass_mini keep their one pre-existing baseline failure each (verified identical on the pristine tree).
+
+## Addendum — owner in-place actions + upload progress (Oct 30, 2026, Ken's orders)
+
+**Owner panel no-jump rule (Ken: "let me make the change and be
+able to make that change again on someone else"):** the owner
+pages (dashboard, suggestions, artists) include
+`templates/owner/_ajax.html`, which sends recognized owner forms
+in the background with header `X-Owner-Ajax: 1`; the row updates
+in place (status pill / toggle label / row removal / link box)
+with a toast, scroll never moves. The routes answer
+`{ok, msg, ...}` JSON to those calls and keep the classic 303
+redirect (or page render, for the pwreset link) for plain
+submits — both modes are contract. Dual-mode POSTs:
+`/owner/ads/{id}/status|delete`, `/owner/flag/{id}/dismiss|remove`,
+`/owner/user/{id}/remove`, `/owner/verify/{id}/approve|decline`,
+`/owner/users/{id}/badge/{kind}`, `/owner/live/{id}/end`,
+`/owner/payouts/{id}/send|paid|declined|hand-note`,
+`/owner/pwreset/{id}/link|hand-sent`,
+`/owner/suggestions/{id}/status`,
+`/owner/artists/app/{id}/approve|pass`. A JSON `ok:false`
+carries the same words the flash would have shown and changes
+nothing on the page. Artist verify/revoke/offer/contract-end/
+fund-grant remain classic submits (deliberate money/contract
+moves). If the background call fails or answers non-JSON, the
+panel falls back to the classic submit.
+
+**Upload progress (Ken: "see it load all the way up to 100% and
+then it say posted"):** `templates/partials/upload_progress.html`
+(ships in base.html) intercepts the post forms (`/posts`,
+`/page/{id}/post`) and the story form (`/stories/new`), sends
+them by XHR with REAL upload percentage, holds 100% as
+"Posting…" until the server answers, then shows "✅ Posted!"
+and navigates to the response URL — the same landing the
+classic submit produced. All `/posts` and `/stories/new` exits
+stay redirects. The story editor's multi-post chain drives the
+same bar via `window.hereUploadProgress`. A failed send hands
+the form back untouched for a retry.

@@ -1,0 +1,217 @@
+{# Owner-panel in-place actions (Ken's order Oct 30, 2026): every
+   owner form this script recognizes is sent in the background and
+   the row updates right where it sits — no page jump, no lost
+   scroll spot, so the owner can work down a list making the same
+   change again and again. If anything goes wrong (or the answer
+   isn't JSON), the form falls back to the classic full submit. #}
+<style>
+#oa-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:#161616;border:1px solid #ffd400;color:#fff;padding:11px 18px;border-radius:999px;font-size:14.5px;font-weight:700;box-shadow:0 8px 30px rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:9999;max-width:92vw;text-align:center}
+#oa-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#oa-toast.bad{border-color:#d41f2e}
+.oa-linkrow td{background:#1c1c10;border-bottom:1px solid #2a2a2a;padding:12px}
+.oa-linkbox{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.oa-linkbox input{flex:1;min-width:220px;background:#0d0d0d;border:1px solid #444;border-radius:6px;color:#ffd400;padding:8px 10px;font-size:13px}
+.oa-note{font-size:11.5px;color:#7ee2a0}
+form.oa-busy button{opacity:.55;pointer-events:none}
+</style>
+<div id="oa-toast" role="status" aria-live="polite"></div>
+<script>
+(function () {
+  var toastEl = document.getElementById('oa-toast');
+  var toastTimer = null;
+  function toast(msg, bad) {
+    toastEl.textContent = msg;
+    toastEl.className = bad ? 'show bad' : 'show';
+    if (toastTimer) { clearTimeout(toastTimer); }
+    toastTimer = setTimeout(function () { toastEl.className = ''; }, 3600);
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
+              "'": '&#39;'}[c];
+    });
+  }
+  function pill(row, txt) {
+    var p = row ? row.querySelector('.status-pill') : null;
+    if (p) { p.textContent = txt; p.className = 'status-pill ' + txt; }
+  }
+  function statusCell(row) {
+    var p = row ? row.querySelector('.status-pill') : null;
+    return p ? p.parentNode : null;
+  }
+  function setNote(row, note) {
+    var cell = statusCell(row);
+    if (!cell) { return; }
+    var d = cell.querySelector('.oa-note');
+    if (!d) {
+      d = document.createElement('div');
+      d.className = 'oa-note';
+      cell.appendChild(d);
+    }
+    d.textContent = note;
+  }
+  function adForm(id, status, label) {
+    return '<form class="inline-form" action="/owner/ads/' + id +
+      '/status" method="post"><input type="hidden" name="status" value="' +
+      esc(status) + '"><button class="btn-ghost" type="submit">' +
+      label + '</button></form>';
+  }
+  function rebuildAdActions(row, id, status) {
+    var cell = null;
+    var forms = row.querySelectorAll('form');
+    for (var i = 0; i < forms.length; i++) {
+      if (forms[i].action.indexOf('/owner/ads/') !== -1) {
+        cell = forms[i].parentNode; break;
+      }
+    }
+    if (!cell) { return; }
+    var links = '';
+    var as = cell.querySelectorAll('a');
+    for (var j = 0; j < as.length; j++) { links += as[j].outerHTML + ' '; }
+    var h = links;
+    if (status === 'active') { h += adForm(id, 'paused', '⏸ Pause'); }
+    if (status === 'paused') { h += adForm(id, 'active', '▶ Resume'); }
+    if (status !== 'ended') { h += ' ' + adForm(id, 'ended', '⏹ End'); }
+    h += ' <form class="inline-form" action="/owner/ads/' + id +
+      '/delete" method="post" onsubmit="return confirm(\'Remove this ad completely? This cannot be undone.\');">' +
+      '<button class="btn-ghost" type="submit">🗑 Remove</button></form>';
+    cell.innerHTML = h;
+  }
+  var SUGGEST_ALL = ['approved', 'built', 'passed', 'new'];
+  function rebuildSuggestActions(row, id, current, labels) {
+    var cell = null;
+    var forms = row.querySelectorAll('form');
+    for (var i = 0; i < forms.length; i++) {
+      if (forms[i].action.indexOf('/owner/suggestions/') !== -1) {
+        cell = forms[i].parentNode; break;
+      }
+    }
+    if (!cell) { return; }
+    var h = '';
+    SUGGEST_ALL.forEach(function (st) {
+      if (st === current || !labels[st]) { return; }
+      h += '<form class="inline-form" action="/owner/suggestions/' +
+        id + '/status" method="post"><input type="hidden" name="status" value="' +
+        st + '"><button class="btn-ghost" type="submit">' +
+        esc(labels[st]) + '</button></form> ';
+    });
+    cell.innerHTML = h;
+  }
+  function kindFor(path) {
+    if (/^\/owner\/users\/\d+\/badge\//.test(path)) { return 'badge'; }
+    if (/^\/owner\/user\/\d+\/remove$/.test(path)) { return 'row'; }
+    if (/^\/owner\/ads\/\d+\/delete$/.test(path)) { return 'row'; }
+    if (/^\/owner\/live\/\d+\/end$/.test(path)) { return 'row'; }
+    if (/^\/owner\/ads\/\d+\/status$/.test(path)) { return 'adstatus'; }
+    if (/^\/owner\/verify\/\d+\/(approve|decline)$/.test(path)) { return 'settle'; }
+    if (/^\/owner\/flag\/\d+\/(remove|dismiss)$/.test(path)) { return 'settle'; }
+    if (/^\/owner\/payouts\/\d+\/(paid|declined|send)$/.test(path)) { return 'settle'; }
+    if (/^\/owner\/payouts\/\d+\/hand-note$/.test(path)) { return 'note'; }
+    if (/^\/owner\/pwreset\/\d+\/link$/.test(path)) { return 'link'; }
+    if (/^\/owner\/pwreset\/\d+\/hand-sent$/.test(path)) { return 'settle'; }
+    if (/^\/owner\/artists\/app\/\d+\/(approve|pass)$/.test(path)) { return 'settle'; }
+    if (/^\/owner\/suggestions\/\d+\/status$/.test(path)) { return 'suggest'; }
+    return null;
+  }
+  document.addEventListener('submit', function (e) {
+    if (e.defaultPrevented) { return; }  // a confirm() said no
+    var f = e.target;
+    if (!f || !f.action) { return; }
+    var path = new URL(f.action).pathname;
+    var kind = kindFor(path);
+    if (!kind) { return; }  // not ours: classic submit
+    e.preventDefault();
+    var row = f.closest ? f.closest('tr') : null;
+    var idMatch = path.match(/\/(\d+)\//);
+    var rowId = idMatch ? idMatch[1] : '';
+    var suggLabels = null, suggFrom = null;
+    if (kind === 'suggest' && row) {
+      suggLabels = {};
+      suggFrom = f.querySelector('input[name="status"]').value;
+      row.querySelectorAll('form').forEach(function (of) {
+        var inp = of.querySelector('input[name="status"]');
+        var btn = of.querySelector('button');
+        if (inp && btn) { suggLabels[inp.value] = btn.textContent; }
+      });
+      var p0 = row.querySelector('.status-pill');
+      SUGGEST_ALL.forEach(function (st) {
+        if (!suggLabels[st] && st !== suggFrom && p0) {
+          suggLabels[st] = p0.textContent;
+        }
+      });
+    }
+    f.classList.add('oa-busy');
+    fetch(f.action, {
+      method: 'POST',
+      body: new FormData(f),
+      headers: {'X-Owner-Ajax': '1'},
+      credentials: 'same-origin'
+    }).then(function (r) {
+      return r.json().catch(function () { throw new Error('not json'); });
+    }).then(function (j) {
+      f.classList.remove('oa-busy');
+      if (!j.ok) { toast(j.msg || 'That did not work.', true); return; }
+      toast(j.msg || 'Done.');
+      if (kind === 'row' && row) {
+        row.style.transition = 'opacity .3s';
+        row.style.opacity = '0';
+        setTimeout(function () { row.remove(); }, 320);
+      } else if (kind === 'badge') {
+        var b = f.querySelector('button');
+        if (b && typeof j.on === 'boolean') {
+          b.textContent = b.textContent.replace(/ON|OFF/,
+                                                j.on ? 'ON' : 'OFF');
+        }
+      } else if (kind === 'adstatus' && row) {
+        pill(row, j.status);
+        rebuildAdActions(row, rowId, j.status);
+      } else if (kind === 'settle' && row) {
+        if (j.status) { pill(row, j.status); }
+        if (j.note) { setNote(row, j.note); }
+        var cell = f.closest('td');
+        if (cell) { cell.innerHTML = '—'; }
+      } else if (kind === 'note' && row) {
+        if (j.note !== undefined) { setNote(row, '💵 ' + j.note); }
+        var inp = f.querySelector('input[name="note"]');
+        if (inp) { inp.value = ''; }
+      } else if (kind === 'link' && row) {
+        var old = document.querySelector('.oa-linkrow');
+        if (old) { old.remove(); }
+        var cols = row.cells ? row.cells.length : 7;
+        row.insertAdjacentHTML('afterend',
+          '<tr class="oa-linkrow"><td colspan="' + cols + '">' +
+          '<div class="oa-linkbox"><input readonly value="' +
+          esc(j.link) + '" onclick="this.select()">' +
+          '<button type="button" class="btn-ghost oa-copy">📋 Copy link</button>' +
+          '<span style="font-size:12.5px;color:#9a9a9a">Email it to <strong>' +
+          esc(j.email) + '</strong> only · dies ' + esc(j.expires) +
+          ' · then tap Mark hand-sent.</span></div></td></tr>');
+        var cp = document.querySelector('.oa-copy');
+        if (cp) {
+          cp.addEventListener('click', function () {
+            var inp = cp.parentNode.querySelector('input');
+            inp.select();
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(inp.value);
+            } else { document.execCommand('copy'); }
+            toast('Link copied.');
+          });
+        }
+      } else if (kind === 'suggest' && row) {
+        var p = row.querySelector('.status-pill');
+        if (p) {
+          p.textContent = j.label || j.status;
+          p.className = 'status-pill' + (j.status === 'new' ? ' pending' : '');
+        }
+        if (suggLabels) {
+          suggLabels[suggFrom] = j.label;
+          rebuildSuggestActions(row, rowId, j.status, suggLabels);
+        }
+      }
+    }).catch(function () {
+      f.classList.remove('oa-busy');
+      f.submit();  // fall back to the classic full-page way
+    });
+  });
+})();
+</script>

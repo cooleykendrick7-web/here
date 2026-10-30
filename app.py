@@ -1949,6 +1949,27 @@ def redir(url, flash=""):
     return RedirectResponse(url, status_code=303)
 
 
+# ---- owner-panel in-place actions (Ken's order Oct 30, 2026) ----
+# "I hate when I click on something and make a change it jumps to
+# another page — let me make the change and be able to make that
+# change again on someone else." Every owner POST route below
+# answers JSON when the panel's script asks (X-Owner-Ajax: 1) and
+# keeps the classic redirect for a plain form submit, so the panel
+# updates the row where it sits — no reload, no lost scroll spot.
+def _oa(request):
+    return request.headers.get("x-owner-ajax") == "1"
+
+
+def _oa_json(msg, **extra):
+    body = {"ok": True, "msg": msg}
+    body.update(extra)
+    return JSONResponse(body)
+
+
+def _oa_fail(msg):
+    return JSONResponse({"ok": False, "msg": msg})
+
+
 def back(request: Request, fallback="/home"):
     ref = request.headers.get("referer", "")
     # only allow same-origin relative redirects
@@ -12819,6 +12840,8 @@ async def owner_suggestion_status(request: Request, sid: int):
     form = await request.form()
     status = str(form.get("status") or "")
     if status not in SUGGESTION_STATUS_LABELS:
+        if _oa(request):
+            return _oa_fail("That suggestion status isn't valid.")
         return RedirectResponse("/owner/suggestions",
                                 status_code=303)
     conn = db()
@@ -12837,6 +12860,11 @@ async def owner_suggestion_status(request: Request, sid: int):
                    "this place. Thank you!",
                    "/settings/profile#ideas")
     conn.close()
+    if _oa(request):
+        return _oa_json(
+            "Suggestion marked: "
+            + SUGGESTION_STATUS_LABELS[status],
+            status=status, label=SUGGESTION_STATUS_LABELS[status])
     return RedirectResponse("/owner/suggestions", status_code=303)
 
 
@@ -13439,6 +13467,8 @@ async def owner_live_end(request: Request, lid: int):
         _end_live_row(conn, live)
         conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Live ended for everyone.")
     return redir("/owner")
 
 
@@ -15741,6 +15771,14 @@ async def owner_artist_app(request: Request, aid: int,
                    "now gift your tracks.",
                    f"/user/{app_row['user_id']}")
     conn.close()
+    if _oa(request):
+        if not app_row:
+            return _oa_fail("That application is gone.")
+        return _oa_json(
+            "🎤 Artist approved — the plaque is live."
+            if decision == "approve" else "Application passed.",
+            status="approved" if decision == "approve"
+            else "passed")
     return redir("/owner/artists?msg=done")
 
 
@@ -21170,6 +21208,13 @@ async def owner_ad_status(request: Request, aid: int):
         conn.execute("UPDATE ads SET status=? WHERE id=?", (status, aid))
         conn.commit()
         conn.close()
+        if _oa(request):
+            label = {"active": "▶ Ad is running.",
+                     "paused": "⏸ Ad paused.",
+                     "ended": "⏹ Ad ended."}[status]
+            return _oa_json(label, status=status)
+    elif _oa(request):
+        return _oa_fail("That ad status isn't one I can set.")
     return redir("/owner")
 
 
@@ -21202,6 +21247,9 @@ async def owner_ad_delete(request: Request, aid: int):
     conn.close()
     if media_path:
         _delete_upload(media_path)
+    if _oa(request):
+        return (_oa_json("🗑 Ad removed completely.") if ad
+                else _oa_fail("Ad not found."))
     return redir("/owner", "🗑 Ad removed completely."
                  if ad else "Ad not found.")
 
@@ -21596,6 +21644,9 @@ async def owner_flag_dismiss(request: Request, fid: int):
     conn.execute("UPDATE moderation_flags SET status='dismissed' WHERE id=?", (fid,))
     conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Flag dismissed — the content stays.",
+                        status="dismissed")
     return redir("/owner")
 
 
@@ -21636,6 +21687,8 @@ async def owner_flag_remove(request: Request, fid: int):
         conn.execute("UPDATE moderation_flags SET status='removed' WHERE id=?", (fid,))
         conn.commit()
         conn.close()
+    if _oa(request):
+        return _oa_json("Content removed.", status="removed")
     return redir("/owner")
 
 
@@ -21674,6 +21727,8 @@ async def owner_user_remove(request: Request, uid: int):
     conn.execute("DELETE FROM users WHERE id=?", (uid,))
     conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("User removed, with all their content.")
     return redir("/owner")
 
 
@@ -21745,6 +21800,9 @@ async def owner_verify_approve(request: Request, rid: int):
                      (now_iso(), rid))
         conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Approved — the badge is live.",
+                        status="approved")
     return redir("/owner")
 
 
@@ -21770,6 +21828,8 @@ async def owner_verify_decline(request: Request, rid: int):
                      (now_iso(), rid))
         conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Declined.", status="declined")
     return redir("/owner")
 
 
@@ -21847,6 +21907,14 @@ async def owner_user_badge_toggle(request: Request, uid: int, kind: str):
                 (now_iso(), kind, uid))
         conn.commit()
     conn.close()
+    if _oa(request):
+        label = ("Verified User" if kind == "vuser"
+                 else "Verified Vendor")
+        if not row:
+            return _oa_fail("That user is gone.")
+        return _oa_json(
+            f"{label} turned {'ON' if newv else 'OFF'}.",
+            on=bool(newv))
     return redir("/owner")
 
 
@@ -22159,23 +22227,44 @@ async def owner_payout_send(request: Request, pid: int):
     if err:
         return err
     outcome, info = _payout_attempt(pid)
+    ajax = _oa(request)
     if outcome == "gone":
+        if ajax:
+            return _oa_fail("That cash-out was already decided.")
         return redir("/owner", "That cash-out was already decided.")
     if outcome == "notready":
+        if ajax:
+            return _oa_fail("That streamer hasn't finished bank "
+                            "setup — pay this one by hand instead.")
         return redir("/owner",
                      "That streamer hasn't finished bank setup — "
                      "pay this one by hand instead.")
     if outcome == "refused":
+        if ajax:
+            return _oa_fail(f"Stripe refused the send: "
+                            f"{info.get('cls')} — request {pid} is "
+                            "still pending; you can pay by hand "
+                            "instead.")
         return redir("/owner",
                      f"Stripe refused the send: {info.get('cls')} "
                      f"— request {pid} is still pending; you can "
                      "pay by hand instead.")
     if outcome == "unknown":
+        if ajax:
+            return _oa_fail(f"The send for request {pid} was "
+                            "attempted but Stripe didn't answer — "
+                            "check Stripe before doing anything "
+                            "else. It's marked 'sending' now.")
         return redir("/owner",
                      f"The send for request {pid} was attempted but "
                      "Stripe didn't answer — check Stripe before "
                      "doing anything else. The request is marked "
                      "'sending' and can't be sent twice.")
+    if ajax:
+        return _oa_json(
+            f"💸 Sent {_money(info['dollars_cents'])} to the "
+            f"streamer's bank (request {pid}).",
+            status="paid", note="💸 Stripe → bank")
     return redir("/owner",
                  f"💸 Sent {_money(info['dollars_cents'])} to the "
                  f"streamer's bank (request {pid}).")
@@ -22204,9 +22293,17 @@ async def owner_payout_hand_note(request: Request, pid: int):
     conn.commit()
     conn.close()
     if cur.rowcount != 1:
+        if _oa(request):
+            return _oa_fail("That cash-out isn't waiting anymore "
+                            "— no note added.")
         return redir("/owner",
                      "That cash-out isn't waiting anymore — "
                      "no note added.")
+    if _oa(request):
+        return _oa_json(
+            f"💵 Noted on request {pid} — it shows as paid by "
+            "hand, and its bank send still goes through.",
+            note=note)
     return redir("/owner",
                  f"💵 Noted on request {pid} — it shows as paid "
                  "by hand, and its bank send still goes through.")
@@ -22223,7 +22320,8 @@ async def owner_payout_paid(request: Request, pid: int):
     conn = db()
     pr = conn.execute(
         "SELECT * FROM payout_requests WHERE id=?", (pid,)).fetchone()
-    if pr and pr["status"] == "pending":
+    flipped = bool(pr and pr["status"] == "pending")
+    if flipped:
         stamp = now_iso()
         conn.execute(
             "UPDATE payout_requests SET status='paid', "
@@ -22235,6 +22333,11 @@ async def owner_payout_paid(request: Request, pid: int):
              _money(pr["dollars_cents"]), stamp))
         conn.commit()
     conn.close()
+    if _oa(request):
+        if not flipped:
+            return _oa_fail("That cash-out was already decided.")
+        return _oa_json("Marked paid — by hand.",
+                        status="paid", note="✋ paid by hand")
     return redir("/owner")
 
 
@@ -22248,7 +22351,8 @@ async def owner_payout_declined(request: Request, pid: int):
     conn = db()
     pr = conn.execute(
         "SELECT * FROM payout_requests WHERE id=?", (pid,)).fetchone()
-    if pr and pr["status"] == "pending":
+    flipped = bool(pr and pr["status"] == "pending")
+    if flipped:
         stamp = now_iso()
         conn.execute(
             "UPDATE payout_requests SET status='declined', "
@@ -22274,6 +22378,11 @@ async def owner_payout_declined(request: Request, pid: int):
                     "payout_request_id=?", (pid,))
         conn.commit()
     conn.close()
+    if _oa(request):
+        if not flipped:
+            return _oa_fail("That cash-out was already decided.")
+        return _oa_json("Declined — the tickets went back to "
+                        "their earnings.", status="declined")
     return redir("/owner")
 
 
@@ -22294,10 +22403,22 @@ async def owner_pwreset_link(request: Request, rid: int):
     conn.close()
     if (not r or r["delivery"] != "queued" or r["used_at"]
             or not r["token_plain"]):
+        if _oa(request):
+            return _oa_fail("Nothing to show — that reset link is "
+                            "gone (already sent, used, or expired).")
         return redir("/owner")
     exp = _parse_ts(r["expires_at"])
     if not exp or exp <= datetime.now(timezone.utc):
+        if _oa(request):
+            return _oa_fail("That reset link has expired.")
         return redir("/owner")
+    if _oa(request):
+        return _oa_json(
+            "Reset link ready — email it to the address on the "
+            "account, then tap Mark hand-sent.",
+            link=_abs_url(request, f"/reset/{r['token_plain']}"),
+            email=r["user_email"] or "",
+            expires=fancy_time(r["expires_at"]))
     return render(request, "owner/pwreset_link.html", {
         "link": _abs_url(request, f"/reset/{r['token_plain']}"),
         "user_email": r["user_email"] or "",
@@ -22320,6 +22441,8 @@ async def owner_pwreset_hand_sent(request: Request, rid: int):
         "AND used_at IS NULL", (now_iso(), rid))
     conn.commit()
     conn.close()
+    if _oa(request):
+        return _oa_json("Marked hand-sent.", status="hand-sent")
     return redir("/owner")
 
 
