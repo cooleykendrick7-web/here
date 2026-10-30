@@ -7156,7 +7156,7 @@ function openAuctionSheet(){
   if(box.dataset.k===key) return; box.dataset.k=key;
   if (!items.length){ box.innerHTML=''; return; }
   var myId = B.me;
-  var html = '<div class="shop-head">🛍 Live shop · ' + (stats.watching||0)
+  var html = '<div class="shop-head">\U0001F6CD Live shop · ' + (stats.watching||0)
     + ' watching · ' + (stats.sold||0) + ' sold</div>';
   html += items.map(function(s){
     var mine = s.seller_id === myId;
@@ -8093,6 +8093,20 @@ function renderTopGifters(list){
     eachRemoteVideo(function(v){ guardPlayVideo(v); });
     updateSoundButton();
   });
+
+  /* No play button, ever (Ken, Oct 30): a live is ALIVE the
+     moment it's opened — moving, silently. A standing guard
+     retries any paused remote tile every couple of seconds,
+     and the first tap anywhere on the page is harvested as
+     the gesture that unlocks the tiles a browser was
+     holding hostage — nobody hunts for a play button. */
+  setInterval(function(){
+    if (ended) return;
+    eachRemoteVideo(function(v){ guardPlayVideo(v); });
+  }, 2000);
+  document.addEventListener('pointerdown', function(){
+    eachRemoteVideo(function(v){ guardPlayVideo(v); });
+  }, true);
 
   /* ---------------- lifecycle ---------------- */
   function teardownEnded(){

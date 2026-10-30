@@ -36,7 +36,8 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 .intro-h{font-size:24px;line-height:1.25;margin-bottom:8px}
 .intro-sub{color:#c9c9c9;font-size:14.5px;line-height:1.45;margin-bottom:16px}
 .intro-vids{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.intro-vids figure{margin:0}
+.intro-vids figure{margin:0;position:relative}
+.intro-snd{position:absolute;right:8px;bottom:36px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer;user-select:none}
 .intro-vids video{width:100%;aspect-ratio:9/16;max-height:400px;object-fit:cover;border-radius:10px;background:#000;display:block}
 .intro-vids figcaption{margin-top:6px;font-size:13px;font-weight:800;color:#ffd400;text-transform:uppercase;letter-spacing:.4px}
 .intro-money{margin-top:14px;font-size:14px;color:#fff;font-weight:700}
@@ -82,11 +83,11 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
   <p class="intro-sub">HERE isn't another feed. Whatever you're into, there's a platform here with your name on it — watch, pull up a seat, or start your own and build your regulars.</p>
   <div class="intro-vids">
     <figure>
-      <video controls playsinline preload="none" poster="/static/intro-belonging.jpg" src="/static/intro-belonging.mp4"></video>
+      <video class="intro-video" autoplay muted loop playsinline preload="auto" poster="/static/intro-belonging.jpg" src="/static/intro-belonging.mp4"></video><span class="intro-snd">🔊 tap for sound</span>
       <figcaption>🎙 Find your people</figcaption>
     </figure>
     <figure>
-      <video controls playsinline preload="none" poster="/static/intro-money.jpg" src="/static/intro-money.mp4"></video>
+      <video class="intro-video" autoplay muted loop playsinline preload="auto" poster="/static/intro-money.jpg" src="/static/intro-money.mp4"></video><span class="intro-snd">🔊 tap for sound</span>
       <figcaption>💸 Creators eat here</figcaption>
     </figure>
   </div>
@@ -178,6 +179,24 @@ if ("serviceWorker" in navigator) {
     document.getElementById("ios-steps").classList.toggle("open");
   });
 })();
+</script>
+<script>
+document.querySelectorAll('.intro-video').forEach(function(v){
+  v.muted = true;
+  var p = v.play(); if (p && p.catch) p.catch(function(){});
+  var chip = v.parentNode.querySelector('.intro-snd');
+  function toggle(){
+    if (v.muted){
+      v.muted = false; v.currentTime = 0; v.play();
+      if (chip) chip.textContent = '🔇 tap to mute';
+    } else {
+      v.muted = true;
+      if (chip) chip.textContent = '🔊 tap for sound';
+    }
+  }
+  v.addEventListener('click', toggle);
+  if (chip) chip.addEventListener('click', toggle);
+});
 </script>
 </body>
 </html>
