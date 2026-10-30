@@ -85,6 +85,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script type="application/json" id="platform-cats">{{ cats_json|safe }}</script>
 <script>
 (function(){
   function buildCard(live){
@@ -193,7 +194,7 @@
     card.appendChild(actions);
     return card;
   }
-  var PLATFORM_CATS = {{ cats_json|safe }};
+  var PLATFORM_CATS = JSON.parse(document.getElementById('platform-cats').textContent);
   var PLATFORM_KEYS = {};
   PLATFORM_CATS.forEach(function(c){ PLATFORM_KEYS[c[0]] = true; });
   var SECTIONS = PLATFORM_CATS.map(function(c){

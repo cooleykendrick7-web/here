@@ -782,6 +782,16 @@ def init_db():
         # inviter rides here; NULL on plain join requests.
         c.execute("ALTER TABLE live_join_requests ADD COLUMN "
                   "inviter_id INTEGER")
+    if "spot_idx" not in _jr_cols:
+        # Spots (Oct 30): the cast spot an applicant applied
+        # for (index into the live's spot_names), NULL = any.
+        c.execute("ALTER TABLE live_join_requests ADD COLUMN "
+                  "spot_idx INTEGER")
+    if "suggested_by" not in _jr_cols:
+        # An admin's ⭐ suggestion on this application — the
+        # host still decides; this just carries the advice.
+        c.execute("ALTER TABLE live_join_requests ADD COLUMN "
+                  "suggested_by INTEGER")
     c.execute("""CREATE TABLE IF NOT EXISTS live_members (
         live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
         muted INTEGER DEFAULT 0,
@@ -1240,6 +1250,9 @@ def init_db():
     if "backdrop" not in _ls_cols:
         c.execute("ALTER TABLE live_sessions ADD COLUMN "
                   "backdrop TEXT DEFAULT ''")
+    if "spot_names" not in _ls_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "spot_names TEXT DEFAULT ''")
     _lm_cols = [r["name"] for r in c.execute(
         "PRAGMA table_info(live_members)").fetchall()]
     if "seat_label" not in _lm_cols:
@@ -11127,12 +11140,54 @@ def _live_panel_size(conn, lid):
 def _live_panel_boxes(live):
     """Build X: the host's guest-square allowance for this live
     (live_sessions.panel_boxes), clamped to 1..8; legacy rows with
-    no value read as the default 5."""
+    no value read as the default 5. (Platforms rename: this is
+    the host's CAST SIZE — how many spots the platform has.)"""
     try:
         n = int(live.get("panel_boxes") or 5)
     except (TypeError, ValueError):
         n = 5
     return max(1, min(8, n))
+
+
+def _live_spot_names(live):
+    """The host's names for the cast spots, in order (guest
+    spot 1 first); '' entries are unnamed spots. Stored as a
+    JSON list on the live row (spot-names endpoint)."""
+    try:
+        names = json.loads(live.get("spot_names") or "[]")
+    except Exception:
+        return []
+    if not isinstance(names, list):
+        return []
+    return [" ".join(str(n).split())[:24] for n in names[:8]]
+
+
+def _apply_spot_name(conn, live, uid, spot_idx=None):
+    """Fill a freshly seated panelist's seat_label from the
+    platform's spot names: the spot they applied for when they
+    picked one, else the spot matching their seat position.
+    Only fills an EMPTY label — a name already set (by the
+    host, an admin, or the person) is never overridden."""
+    names = _live_spot_names(live)
+    if not names:
+        return
+    name = ""
+    if spot_idx is not None and 0 <= spot_idx < len(names):
+        name = names[spot_idx]
+    if not name:
+        ids = _live_panel_ids(conn, live)
+        if uid in ids:
+            gi = ids.index(uid) - 1
+            if 0 <= gi < len(names):
+                name = names[gi]
+    if not name:
+        return
+    row = _live_member_row(conn, live["id"], uid)
+    if row and not (row.get("seat_label") or ""):
+        conn.execute(
+            "UPDATE live_members SET seat_label=? "
+            "WHERE live_id=? AND user_id=?",
+            (name, live["id"], uid))
 
 
 def _live_add_member(conn, live, uid):
@@ -13901,6 +13956,7 @@ async def live_state(request: Request, lid: int):
         # and the host's guest-square allowance (1..8).
         "panel_open": bool(live.get("panel_open")),
         "panel_boxes": _live_panel_boxes(live),
+        "spot_names": _live_spot_names(live),
         "like_count": live.get("like_count") or 0,
         "new_likes": min(new_like_count, 20),
         "like_cursor": like_cursor,
@@ -13925,11 +13981,23 @@ async def live_state(request: Request, lid: int):
             "LEFT JOIN users u ON u.id=jr.user_id WHERE jr.live_id=? "
             "AND jr.status='pending' ORDER BY jr.id ASC",
             (lid,)).fetchall()
+        _spot_names = _live_spot_names(live)
         out["pending_requests"] = [
             {"id": r["id"], "user_id": r["user_id"],
              "name": r["name"] or "Deleted user",
              "avatar": avatar_url(r["avatar"] or ""),
              "created_at": r["created_at"],
+             "spot_idx": dict(r).get("spot_idx"),
+             "spot_name": (
+                 _spot_names[dict(r)["spot_idx"]]
+                 if dict(r).get("spot_idx") is not None
+                 and 0 <= dict(r)["spot_idx"] < len(_spot_names)
+                 else ""),
+             "suggested_by": dict(r).get("suggested_by"),
+             "suggested_by_name": (
+                 (get_user(dict(r)["suggested_by"]) or {}).get(
+                     "name", "")
+                 if dict(r).get("suggested_by") else ""),
              "kind": dict(r).get("kind") or "request"} for r in prows]
         # The full room roster, moderators only: who is watching,
         # and which of them are on the panel / admins / muted.
@@ -16670,6 +16738,17 @@ async def live_join_request(request: Request, lid: int):
         return JSONResponse(
             {"ok": False, "error": "You're the host of this live."},
             status_code=400)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    _body = _live_parse_body(data)
+    # _live_body_int defaults a MISSING key to 0 — but "no pick"
+    # must stay None (any spot), distinct from picking spot 0.
+    spot = _live_body_int(_body, "spot") if "spot" in _body \
+        else None
+    if spot is not None and not (0 <= spot < 8):
+        spot = None
     conn = db()
     guest_req = _live_guest_req(conn, lid)
     if _live_member_row(conn, lid, user["id"]) or (
@@ -16682,6 +16761,11 @@ async def live_join_request(request: Request, lid: int):
         "ORDER BY id DESC LIMIT 1",
         (lid, user["id"])).fetchone()
     if pending:
+        if spot is not None:
+            conn.execute(
+                "UPDATE live_join_requests SET spot_idx=? "
+                "WHERE id=?", (spot, pending["id"]))
+            conn.commit()
         conn.close()
         return JSONResponse({"ok": True, "request": {
             "id": pending["id"], "status": "pending"}})
@@ -16698,19 +16782,20 @@ async def live_join_request(request: Request, lid: int):
                 conn.close()
                 return JSONResponse(
                     {"ok": False, "cooldown": True,
-                     "error": f"Take a breather — you can ask again "
-                              f"in {left}s."}, status_code=429)
+                     "error": f"Take a breather — you can apply "
+                              f"again in {left}s."}, status_code=429)
     if live.get("is_lobby"):
         # The Lobby's door is open: a join request seats you on
         # the spot while the panel has room. A full panel falls
         # back to the normal pending request below.
         cur = conn.execute(
             "INSERT INTO live_join_requests(live_id, user_id, "
-            "status, created_at, kind, decided_at) "
-            "VALUES(?,?,'approved',?,'request',?)",
-            (lid, user["id"], now_iso(), now_iso()))
+            "status, created_at, kind, decided_at, spot_idx) "
+            "VALUES(?,?,'approved',?,'request',?,?)",
+            (lid, user["id"], now_iso(), now_iso(), spot))
         rid = cur.lastrowid
         if _live_add_member(conn, live, user["id"]):
+            _apply_spot_name(conn, live, user["id"], spot)
             conn.commit()
             conn.close()
             return JSONResponse({"ok": True, "auto": True,
@@ -16725,8 +16810,9 @@ async def live_join_request(request: Request, lid: int):
             "id": rid, "status": "pending"}})
     cur = conn.execute(
         "INSERT INTO live_join_requests(live_id, user_id, status, "
-        "created_at, kind) VALUES(?,?,'pending',?,'request')",
-        (lid, user["id"], now_iso()))
+        "created_at, kind, spot_idx) "
+        "VALUES(?,?,'pending',?,'request',?)",
+        (lid, user["id"], now_iso(), spot))
     rid = cur.lastrowid
     conn.commit()
     conn.close()
@@ -16734,21 +16820,105 @@ async def live_join_request(request: Request, lid: int):
                                                  "status": "pending"}})
 
 
+@app.post("/live/{lid}/spot-names")
+async def live_spot_names(request: Request, lid: int):
+    """Host only: name the cast spots in order ('DJ, Co-Host,
+    ...'). The names wait on the spots — applicants apply for
+    them by name, and whoever the host seats there wears the
+    name on their box."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] != user["id"]:
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host names the spots on their "
+                      "platform."},
+            status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    raw = _live_parse_body(data).get("names")
+    if isinstance(raw, str):
+        parts = raw.split(",")
+    elif isinstance(raw, list):
+        parts = raw
+    else:
+        parts = []
+    names = [" ".join(str(p).split())[:24] for p in parts][:8]
+    while names and names[-1] == "":
+        names.pop()
+    conn = db()
+    conn.execute("UPDATE live_sessions SET spot_names=? "
+                 "WHERE id=?", (json.dumps(names), lid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "names": names})
+
+
+@app.post("/live/{lid}/join-suggest")
+async def live_join_suggest(request: Request, lid: int):
+    """⭐ Suggest an applicant to the host (Ken's panel rule:
+    accepting is the HOST's alone — admins advise). Allowed
+    for the live's admins and the Lobby's captain. The
+    suggestion rides the request row into the host's queue."""
+    user, live, err = _live_access(request, lid, need_live=True)
+    if err:
+        return err
+    if live["host_id"] == user["id"]:
+        return JSONResponse(
+            {"ok": False,
+             "error": "You're the host — just let them in."},
+            status_code=400)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    rid = _live_body_int(_live_parse_body(data), "request_id")
+    conn = db()
+    captain = bool(live.get("is_lobby")) and \
+        _lobby_captain_id(conn, live) == user["id"]
+    if not _live_is_admin(conn, lid, user["id"]) and not captain:
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "Only the host's admins can suggest."},
+            status_code=403)
+    req = conn.execute(
+        "SELECT * FROM live_join_requests WHERE id=? AND live_id=?",
+        (rid, lid)).fetchone()
+    if not req or req["status"] != "pending" \
+            or (dict(req).get("kind") or "request") != "request":
+        conn.close()
+        return JSONResponse(
+            {"ok": False,
+             "error": "That application isn't waiting anymore."},
+            status_code=400)
+    conn.execute("UPDATE live_join_requests SET suggested_by=? "
+                 "WHERE id=?", (user["id"], rid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
 @app.post("/live/{lid}/join-decide")
 async def live_join_decide(request: Request, lid: int):
-    """Host OR an admin of this live settles a kind='request' join
-    request. Approving puts the requester on the panel (live_members
-    + panel_order) unless the panel already has 8 guests."""
+    """The HOST alone settles a kind='request' application
+    (Ken's panel rule, Oct 30: admins ⭐ suggest, they don't
+    accept). Approving puts the applicant on the panel
+    (live_members + panel_order) unless the cast is full, and
+    seats them under their spot's name."""
     user, live, err = _live_access(request, lid, need_live=True)
     if err:
         return err
     conn = db()
-    if live["host_id"] != user["id"] \
-            and not _live_is_admin(conn, lid, user["id"]):
+    if live["host_id"] != user["id"]:
         conn.close()
         return JSONResponse(
             {"ok": False,
-             "error": "Only the host or an admin can decide."},
+             "error": "Only the host accepts applications — "
+                      "admins can ⭐ suggest instead."},
             status_code=403)
     try:
         data = await request.json()
@@ -16786,8 +16956,8 @@ async def live_join_decide(request: Request, lid: int):
             conn.close()
             return JSONResponse(
                 {"ok": False,
-                 "error": "Panel is full — raise the boxes or "
-                          "remove someone."},
+                 "error": "All spots are full — raise your "
+                          "cast size or remove someone."},
                 status_code=409)
         if not _live_add_member(conn, live, req["user_id"]):
             conn.close()
@@ -16795,6 +16965,8 @@ async def live_join_decide(request: Request, lid: int):
                 {"ok": False,
                  "error": "Panel is full (8 guests max)."},
                 status_code=409)
+        _apply_spot_name(conn, live, req["user_id"],
+                         dict(req).get("spot_idx"))
     conn.execute(
         "UPDATE live_join_requests SET status=?, decided_at=? "
         "WHERE id=?",
