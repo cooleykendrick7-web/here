@@ -32,6 +32,15 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 .tagline{color:#9a9a9a;margin:6px 0 28px;font-size:16px}
 .auth-card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:28px;width:100%;max-width:400px;box-shadow:0 8px 32px rgba(212,31,46,.15)}
 .auth-card h2{margin-bottom:18px;font-size:22px}
+.intro-card{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:22px;width:100%;max-width:560px;box-shadow:0 8px 32px rgba(212,31,46,.15);margin-bottom:20px;text-align:center}
+.intro-h{font-size:24px;line-height:1.25;margin-bottom:8px}
+.intro-sub{color:#c9c9c9;font-size:14.5px;line-height:1.45;margin-bottom:16px}
+.intro-vids{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.intro-vids figure{margin:0}
+.intro-vids video{width:100%;aspect-ratio:9/16;max-height:400px;object-fit:cover;border-radius:10px;background:#000;display:block}
+.intro-vids figcaption{margin-top:6px;font-size:13px;font-weight:800;color:#ffd400;text-transform:uppercase;letter-spacing:.4px}
+.intro-money{margin-top:14px;font-size:14px;color:#fff;font-weight:700}
+
 .err{background:rgba(212,31,46,.15);border:1px solid #d41f2e;color:#ff8f98;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:14px}
 .field{margin-bottom:14px}
 .field label{display:block;font-size:13px;font-weight:600;color:#bbb;margin-bottom:5px}
@@ -49,6 +58,21 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 <body>
 <div class="brand">HERE</div>
 <div class="tagline">Your people. Your pages. Your world.</div>
+<div class="intro-card">
+  <h2 class="intro-h">Everybody gets their own platform.</h2>
+  <p class="intro-sub">HERE isn't another feed. Whatever you're into, there's a platform here with your name on it — watch, pull up a seat, or start your own and build your regulars.</p>
+  <div class="intro-vids">
+    <figure>
+      <video controls playsinline preload="none" poster="/static/intro-belonging.jpg" src="/static/intro-belonging.mp4"></video>
+      <figcaption>🎙 Find your people</figcaption>
+    </figure>
+    <figure>
+      <video controls playsinline preload="none" poster="/static/intro-money.jpg" src="/static/intro-money.mp4"></video>
+      <figcaption>💸 Creators eat here</figcaption>
+    </figure>
+  </div>
+  <p class="intro-money">Hosts cash out real money — from 2,000 tickets ($10), straight to their bank. No follower minimum.</p>
+</div>
 <div class="auth-card">
   <h2>Sign Up — it's free</h2>
   {% if seats_left %}
