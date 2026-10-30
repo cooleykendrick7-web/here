@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Lives · HERE{% endblock %}
+{% block title %}Platforms · HERE{% endblock %}
 {% block content %}
 
 <style>
@@ -18,8 +18,13 @@
 </style>
 
 <div class="card">
-  <h2 style="font-size:24px">{{ ic('lives') }} Lives</h2>
-  <p style="color:var(--muted);margin-top:6px">Watch people who are live right now — friends and people you follow come first.</p>
+  <h2 style="font-size:24px">{{ ic('lives') }} Platforms</h2>
+  <p style="color:var(--muted);margin-top:6px">Everybody's got their own platform — find the ones that fit you. Friends and people you follow come first.</p>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+    <a class="kind-tag" href="/lives" style="text-decoration:none{% if not active_cat and not active_tag %};background:var(--red);color:#fff{% endif %}">🌐 All platforms</a>
+    {% for k, label in cats %}<a class="kind-tag" href="/lives?cat={{ k }}" style="text-decoration:none{% if active_cat == k %};background:var(--red);color:#fff{% endif %}">{{ label|e }}</a>{% endfor %}
+  </div>
+  {% if active_tag %}<p style="margin-top:8px">Showing platforms tagged <strong>#{{ active_tag|e }}</strong> — <a href="/lives">clear</a></p>{% endif %}
   <div id="lives-random-slot" style="margin-top:12px">
     {% if lives %}<button type="button" class="btn" id="lives-random">{{ ic('die') }} Random live</button>{% endif %}
   </div>
@@ -47,6 +52,7 @@
       <span class="live-badge" style="animation:livepulse 1.2s infinite">🔴 LIVE</span>
     </div>
     <div class="live-title">{{ l.title|e if l.title else 'Live now' }}</div>
+    {% if l.category_label or l.tags %}<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">{% if l.category_label %}<a class="kind-tag" href="/lives?cat={{ l.category|e }}" style="text-decoration:none">{{ l.category_label|e }}</a>{% endif %}{% for t in l.tags %}<a class="kind-tag" href="/lives?tag={{ t|e }}" style="text-decoration:none">#{{ t|e }}</a>{% endfor %}</div>{% endif %}
     <div class="live-meta">👁 {{ l.viewers }} watching · 👥 {{ l.panel_count }} on panel{% if l.host_level_label %} · <span class="lvl-tag">{{ l.host_level_label|e }}</span>{% endif %}</div>
     <div class="live-actions">
       <a class="btn" href="/live/{{ l.id }}">▶ Watch</a>
@@ -113,6 +119,27 @@
     title.className = 'live-title';
     title.textContent = live.title || 'Live now';
     card.appendChild(title);
+    if (live.category_label || (live.tags && live.tags.length)){
+      var chips = document.createElement('div');
+      chips.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px';
+      if (live.category_label){
+        var ca = document.createElement('a');
+        ca.className = 'kind-tag';
+        ca.href = '/lives?cat=' + encodeURIComponent(live.category || '');
+        ca.style.textDecoration = 'none';
+        ca.textContent = live.category_label;
+        chips.appendChild(ca);
+      }
+      (live.tags || []).forEach(function(t){
+        var ta = document.createElement('a');
+        ta.className = 'kind-tag';
+        ta.href = '/lives?tag=' + encodeURIComponent(t);
+        ta.style.textDecoration = 'none';
+        ta.textContent = '#' + t;
+        chips.appendChild(ta);
+      });
+      card.appendChild(chips);
+    }
     var meta = document.createElement('div');
     meta.className = 'live-meta';
     meta.textContent = '👁 ' + live.viewers + ' watching · 👥 ' + live.panel_count + ' on panel';
@@ -166,11 +193,12 @@
     card.appendChild(actions);
     return card;
   }
-  var SECTIONS = [
-    ['vip', '👑 VIP Lives', function(l){ return (l.host_level || 1) >= 5; }],
-    ['star', '🔥 Star Lives', function(l){ var n = l.host_level || 1; return n >= 3 && n <= 4; }],
-    ['new', '🌱 New & Rising', function(l){ return (l.host_level || 1) <= 2; }]
-  ];
+  var PLATFORM_CATS = {{ cats_json|safe }};
+  var PLATFORM_KEYS = {};
+  PLATFORM_CATS.forEach(function(c){ PLATFORM_KEYS[c[0]] = true; });
+  var SECTIONS = PLATFORM_CATS.map(function(c){
+    return ['cat-' + c[0], c[1], function(l){ return (l.category || '') === c[0]; }];
+  }).concat([['cat-general', '🌐 Just Chilling', function(l){ return !PLATFORM_KEYS[l.category || '']; }]]);
   function renderLives(list){
     var wrap = document.getElementById('lives-sections');
     if (!wrap) return;
@@ -266,7 +294,7 @@
     if (b) askJoin(b);
   });
   function pollLives(){
-    fetch('/lives.json', {credentials: 'same-origin'})
+    fetch('/lives.json' + window.location.search, {credentials: 'same-origin'})
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (d && d.ok && Array.isArray(d.lives)) renderLives(d.lives);

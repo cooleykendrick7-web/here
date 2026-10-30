@@ -1332,7 +1332,7 @@ body .bolt .hic{fill:currentColor;stroke:none;filter:none}
   </form>
   <nav class="topnav">
     {% if user %}<button class="nav-ic create-btn" id="create-btn" title="Create" aria-label="Create">{{ ic('create') }}</button>{% endif %}
-    <a class="nav-ic nav-live" href="/lives" title="Lives">{{ ic('lives') }}</a>
+    <a class="nav-ic nav-live" href="/lives" title="Platforms">{{ ic('lives') }}</a>
     <a class="nav-ic" href="/market" title="Market">{{ ic('market') }}</a>
     <a class="nav-ic" href="/messages" title="Messages">{{ ic('messages') }}{% if unread_msgs %}<span class="badge">{{ unread_msgs }}</span>{% endif %}</a>
     <a class="nav-ic" href="/notifications" title="Notifications">{{ ic('alerts') }}{% if unread_count %}<span class="badge">{{ unread_count }}</span>{% endif %}</a>
@@ -1380,7 +1380,7 @@ body .bolt .hic{fill:currentColor;stroke:none;filter:none}
   <a href="/search"><span>{{ ic('search') }}</span> Find Friends</a>
   <a href="/pages"><span>{{ ic('page') }}</span> Pages</a>
   <a href="/messages"><span>{{ ic('messages') }}</span> Messages</a>
-  <a href="/lives"><span>{{ ic('lives') }}</span> Lives</a>
+  <a href="/lives"><span>{{ ic('lives') }}</span> Platforms</a>
   <a href="/market"><span>{{ ic('market') }}</span> Market</a>
   <a href="/hidden"><span>{{ ic('hide') }}</span> Hidden</a>
   <a href="/invite"><span>{{ ic('invite') }}</span> Invite</a>
@@ -1423,7 +1423,7 @@ body .bolt .hic{fill:currentColor;stroke:none;filter:none}
     <a class="menu-item" href="/search"><span class="menu-ic">{{ ic('search') }}</span> Find Friends</a>
     <a class="menu-item" href="/pages"><span class="menu-ic">{{ ic('page') }}</span> Pages</a>
     <a class="menu-item" href="/messages"><span class="menu-ic">{{ ic('messages') }}</span> Messages</a>
-    <a class="menu-item" href="/lives"><span class="menu-ic">{{ ic('lives') }}</span> Lives</a>
+    <a class="menu-item" href="/lives"><span class="menu-ic">{{ ic('lives') }}</span> Platforms</a>
     <a class="menu-item" href="/market"><span class="menu-ic">{{ ic('market') }}</span> Market</a>
     <a class="menu-item" href="/hidden"><span class="menu-ic">{{ ic('hide') }}</span> Hidden</a>
     <a class="menu-item" href="/invite"><span class="menu-ic">{{ ic('invite') }}</span> Invite</a>
@@ -1626,9 +1626,26 @@ body .bolt .hic{fill:currentColor;stroke:none;filter:none}
 <button type="button" id="golive-btn">{{ ic('lives') }} Go Live</button>
 <div id="golive-backdrop" hidden></div>
 <div id="golive-sheet" hidden>
-  <div class="aud-title">🔴 Go Live</div>
-  <p style="font-size:14px;color:var(--muted)">Stream right from your phone. Friends get told the moment you start, and one of them can join you on camera.</p>
-  <input id="golive-title" maxlength="80" placeholder="What's this live about? (optional)" autocomplete="off">
+  <div class="aud-title">🔴 Start your platform</div>
+  <p style="font-size:14px;color:var(--muted)">This is YOUR platform — stream right from your phone. Friends get told the moment you start, and your regulars can pull up a seat.</p>
+  <input id="golive-title" maxlength="80" placeholder="Name your platform — what's it about? (optional)" autocomplete="off">
+  <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;margin:8px 0 2px">🏷 Category
+    <select id="golive-category" style="flex:1;min-width:0">
+      <option value="">🌐 Just Chilling (no category)</option>
+      <option value="games">🎮 Games</option>
+      <option value="talk">🎙️ Talk &amp; Podcasts</option>
+      <option value="music">🎵 Music</option>
+      <option value="money">💰 Money &amp; Business</option>
+      <option value="cars">🚗 Cars</option>
+      <option value="beauty">💇 Hair &amp; Beauty</option>
+      <option value="sports">⚽ Sports</option>
+      <option value="food">🍳 Food</option>
+      <option value="comedy">😂 Comedy</option>
+      <option value="learning">📚 Learning</option>
+      <option value="faith">🙏 Faith &amp; Life</option>
+      <option value="news">🌍 World &amp; News</option>
+    </select></label>
+  <input id="golive-tags" maxlength="80" placeholder="Hashtags — #cars #nightdrive (optional)" autocomplete="off" style="margin-top:6px">
   <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;margin:8px 0 2px">🎟 Entry price
     <input id="golive-entry" type="number" min="0" max="100000" step="1" value="0" style="width:96px"> tickets <span style="color:var(--muted);font-weight:600">(0 = free · needs Creator Mode)</span></label>
   <div id="golive-error"></div>
@@ -1791,6 +1808,8 @@ document.addEventListener('click', function(ev){
     fetch('/live/start', {method: 'POST', credentials: 'same-origin',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({title: title.value || '',
+        category: (document.getElementById('golive-category') || {}).value || '',
+        tags: (document.getElementById('golive-tags') || {}).value || '',
         entry_tickets: parseInt((document.getElementById('golive-entry') || {}).value || '0', 10) || 0})})
       .then(function(r){ return r.json(); })
       .then(function(d){

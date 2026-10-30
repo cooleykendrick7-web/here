@@ -1228,6 +1228,23 @@ def init_db():
     if "entry_tickets" not in _ls_cols:
         c.execute("ALTER TABLE live_sessions ADD COLUMN "
                   "entry_tickets INTEGER DEFAULT 0")
+    # Platforms (Oct 30): a live is the host's own platform —
+    # a category shelf + hashtags for discovery, a backdrop
+    # image that brands the room, and per-seat custom names.
+    if "category" not in _ls_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "category TEXT DEFAULT ''")
+    if "tags" not in _ls_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "tags TEXT DEFAULT ''")
+    if "backdrop" not in _ls_cols:
+        c.execute("ALTER TABLE live_sessions ADD COLUMN "
+                  "backdrop TEXT DEFAULT ''")
+    _lm_cols = [r["name"] for r in c.execute(
+        "PRAGMA table_info(live_members)").fetchall()]
+    if "seat_label" not in _lm_cols:
+        c.execute("ALTER TABLE live_members ADD COLUMN "
+                  "seat_label TEXT DEFAULT ''")
     _ml_cols = [r["name"] for r in c.execute(
         "PRAGMA table_info(market_listings)").fetchall()]
     if "boost_until" not in _ml_cols:
@@ -11315,9 +11332,16 @@ def live_now_for(viewer_id, owner_on=False):
         host = _live_person(live["host_id"])
         host_user = get_user(live["host_id"]) or {}
         lvl = _streamer_level(host_user.get("gift_lifetime"))
+        _cat = live.get("category") or (
+            "talk" if live.get("is_lobby") else "")
         out.append({"id": live["id"], "host_id": live["host_id"],
                     "name": host["name"], "avatar": host["avatar"],
                     "title": live["title"],
+                    "category": _cat,
+                    "category_label": PLATFORM_CAT_LABELS.get(
+                        _cat, ""),
+                    "tags": _live_tags(live),
+                    "backdrop": live.get("backdrop") or "",
                     "viewers": _live_viewer_count(conn, live["id"]),
                     "panel_count": 1 + len(_live_active_members(conn, live["id"])),
                     "created_at": live["created_at"],
@@ -11505,19 +11529,22 @@ async def ice_json(request: Request):
 
 
 def _lives_sections(rows):
-    """Group /lives rows by host streamer level (Build P-GIFTS):
-    👑 VIP Lives (L5), 🔥 Star Lives (L3–L4), 🌱 New & Rising
-    (L1–L2). Rows keep their _lives_page_list order inside each
-    section; every live lands in exactly one section; empty
-    sections are omitted."""
+    """Group /lives rows by PLATFORM CATEGORY (Ken's Platforms
+    order Oct 30): one shelf per category present, in shelf
+    order, uncategorized platforms last under '🌐 Just
+    Chilling'. Rows keep their _lives_page_list order inside a
+    shelf; every live lands in exactly one section; empty
+    sections are omitted. (Streamer levels still ride the
+    cards as chips — they stopped being the organizer.)"""
     groups = [
-        ("vip", "👑 VIP Lives",
-         [r for r in rows if (r.get("host_level") or 1) >= 5]),
-        ("star", "🔥 Star Lives",
-         [r for r in rows if 3 <= (r.get("host_level") or 1) <= 4]),
-        ("new", "🌱 New & Rising",
-         [r for r in rows if (r.get("host_level") or 1) <= 2]),
+        (f"cat-{k}", label,
+         [r for r in rows if (r.get("category") or "") == k])
+        for k, label in PLATFORM_CATEGORIES
     ]
+    groups.append(
+        ("cat-general", "🌐 Just Chilling",
+         [r for r in rows
+          if (r.get("category") or "") not in PLATFORM_CAT_LABELS]))
     return [{"key": k, "title": t, "lives": rs}
             for k, t, rs in groups if rs]
 
@@ -11528,12 +11555,24 @@ async def lives_page(request: Request):
     # live; watching itself still passes the live gate.
     user = current_user(request)
     rows = _lives_page_list(user, is_owner(request))
+    cat = (request.query_params.get("cat") or "").strip().lower()
+    tag = (request.query_params.get("tag") or "").strip().lower()
+    if cat in PLATFORM_CAT_LABELS:
+        rows = [r for r in rows
+                if (r.get("category") or "") == cat]
+    else:
+        cat = ""
+    if tag:
+        rows = [r for r in rows if tag in (r.get("tags") or [])]
     _bconn = db()
     _recent = _recent_showdowns(_bconn)
     _bconn.close()
     return render(request, "lives.html",
                   {"lives": rows, "sections": _lives_sections(rows),
-                   "recent_showdowns": _recent})
+                   "recent_showdowns": _recent,
+                   "cats": PLATFORM_CATEGORIES,
+                   "cats_json": json.dumps(PLATFORM_CATEGORIES),
+                   "active_cat": cat, "active_tag": tag})
 
 
 @app.get("/lives.json")
@@ -11543,10 +11582,20 @@ async def lives_json(request: Request):
         return JSONResponse({"ok": False, "error": "login"},
                             status_code=401)
     rows = _lives_page_list(user, is_owner(request))
+    cat = (request.query_params.get("cat") or "").strip().lower()
+    tag = (request.query_params.get("tag") or "").strip().lower()
+    if cat in PLATFORM_CAT_LABELS:
+        rows = [r for r in rows
+                if (r.get("category") or "") == cat]
+    if tag:
+        rows = [r for r in rows if tag in (r.get("tags") or [])]
     return JSONResponse({"ok": True, "lives": [
         {"id": r["id"], "host_id": r["host_id"],
          "host_name": r["name"], "host_avatar": r["avatar"],
          "title": r["title"], "viewers": r["viewers"],
+         "category": r.get("category") or "",
+         "category_label": r.get("category_label") or "",
+         "tags": r.get("tags") or [],
          "panel_count": r["panel_count"], "following": r["following"],
          "my_join_pending": bool(r.get("my_join_pending")),
          "host_level": r.get("host_level") or 1,
@@ -12742,7 +12791,53 @@ async def lobby_page(request: Request):
     return redir(f"/live/{live['id']}")
 
 
-def _create_live(conn, user, title, entry_tickets=0):
+# ---------------- platforms (Ken's order Oct 30, 2026) -------
+# A live is the host's own PLATFORM: it carries a category and
+# hashtags so people find where they fit, and a backdrop image
+# that brands the room. Categories are a fixed shelf; '' is
+# the uncategorized "Just Chilling" shelf.
+PLATFORM_CATEGORIES = [
+    ("games", "🎮 Games"),
+    ("talk", "🎙️ Talk & Podcasts"),
+    ("music", "🎵 Music"),
+    ("money", "💰 Money & Business"),
+    ("cars", "🚗 Cars"),
+    ("beauty", "💇 Hair & Beauty"),
+    ("sports", "⚽ Sports"),
+    ("food", "🍳 Food"),
+    ("comedy", "😂 Comedy"),
+    ("learning", "📚 Learning"),
+    ("faith", "🙏 Faith & Life"),
+    ("news", "🌍 World & News"),
+]
+PLATFORM_CAT_LABELS = dict(PLATFORM_CATEGORIES)
+
+
+def _platform_tags(raw):
+    """Normalize host-typed platform tags: split on spaces and
+    commas, strip '#', lowercase, keep [a-z0-9_], dedupe,
+    max 5 tags of max 24 chars."""
+    out = []
+    for piece in re.split(r"[\s,]+", str(raw or "")):
+        t = re.sub(r"[^a-z0-9_]", "", piece.strip().lstrip("#").lower())
+        if t and t not in out:
+            out.append(t[:24])
+        if len(out) >= 5:
+            break
+    return out
+
+
+def _live_tags(live):
+    """A live row's stored tags (a JSON list) as a clean list."""
+    try:
+        tags = json.loads(live.get("tags") or "[]")
+    except Exception:
+        return []
+    return [str(t) for t in tags if t] if isinstance(tags, list) else []
+
+
+def _create_live(conn, user, title, entry_tickets=0,
+                 category="", tags=None):
     """Create a live for user (commits, returns the new id).
     Carries the platform's two standing rules: starting your own
     live pulls you off everybody else's panel (Ken, Oct 27), and
@@ -12766,10 +12861,11 @@ def _create_live(conn, user, title, entry_tickets=0):
     cur = conn.execute(
         "INSERT INTO live_sessions(host_id, title, status, "
         "created_at, host_seen_at, like_count, panel_order, "
-        "entry_tickets) "
-        "VALUES(?,?,'live',?,?,0,?,?)",
+        "entry_tickets, category, tags) "
+        "VALUES(?,?,'live',?,?,0,?,?,?,?)",
         (user["id"], title, stamp, stamp, json.dumps([user["id"]]),
-         int(entry_tickets or 0)))
+         int(entry_tickets or 0), category or "",
+         json.dumps(list(tags or []))))
     lid = cur.lastrowid
     conn.commit()
     return lid
@@ -12897,9 +12993,17 @@ async def live_start(request: Request):
              "error": "Turn on Creator Mode (Settings) to charge "
                       "a ticket door — that's what lets you earn."},
             status_code=400)
+    category = ""
+    tags = []
+    if isinstance(data, dict):
+        category = str(data.get("category") or "").strip().lower()
+        if category not in PLATFORM_CAT_LABELS:
+            category = ""
+        tags = _platform_tags(data.get("tags"))
     conn = db()
     _sweep_lives(conn)
-    lid = _create_live(conn, user, title, entry_tickets=entry)
+    lid = _create_live(conn, user, title, entry_tickets=entry,
+                       category=category, tags=tags)
     conn.close()
     _link_schedule_for_live(user, lid)
     if title:
