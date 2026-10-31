@@ -162,13 +162,13 @@
   <form method="post" action="/payouts/setup" style="margin-top:10px">
     <button type="submit" class="btn">Continue setup</button>
   </form>
-  <p style="color:var(--muted);font-size:13px;margin-top:8px">Hand payouts still work meanwhile — cash out above and the owner sends it by hand.</p>
+  <p style="color:var(--muted);font-size:13px;margin-top:8px">Finish the link and your cash-outs pay straight to your bank — Stripe is the one way money leaves HERE.</p>
   {% else %}
   <p style="font-size:14.5px;margin-top:8px">Get paid straight to your bank — one 5-minute setup with Stripe. HERE never sees your bank numbers.</p>
   <form method="post" action="/payouts/setup" style="margin-top:10px">
     <button type="submit" class="btn">Set up bank payouts</button>
   </form>
-  <p style="color:var(--muted);font-size:13px;margin-top:8px">Prefer the old way? Cash out above and the owner sends it by hand.</p>
+  <p style="color:var(--muted);font-size:13px;margin-top:8px">Stripe is the one way money leaves HERE — link your bank once and every cash-out lands there.</p>
   {% endif %}
 </div>
 
