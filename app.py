@@ -19548,14 +19548,15 @@ async def tickets_cashout(request: Request):
     user, err = require_login(request)
     if err:
         return err
+    # Stripe ONLY (Ken's ruling, Oct 30): a cash-out pays
+    # the bank the streamer linked through Stripe — there is
+    # no destination to type and no other rail. A legacy note
+    # field is still accepted and stored, never required.
     try:
         form = await request.form()
         note = (form.get("payout_note") or "").strip()[:300]
     except Exception:
         note = ""
-    if not note:
-        return redir("/tickets",
-                     "Tell us where to send it (Cash App, bank, etc.).")
     conn = db()
     me = conn.execute(
         "SELECT gift_earned FROM users WHERE id=?",

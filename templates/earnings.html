@@ -110,10 +110,8 @@
   <p class="cashout-status" style="font-size:14.5px;margin-top:8px">Cash-out status: on its way — {{ pending.dollars|e }} sends automatically; nothing is waiting on anybody's approval.</p>
   {% elif can_cashout %}
   <p class="cashout-status" style="font-size:15px;margin-top:8px;font-weight:800">✅ You're ready — you can cash out {{ cashout_dollars|e }} now</p>
-  <p style="font-size:14.5px;margin-top:8px">You can cash out <strong>all {{ earned }} earned tickets = {{ cashout_dollars|e }}</strong>. Tell us exactly where to send it — the owner sends payouts by hand and marks them paid.</p>
-  <form method="post" action="/tickets/cashout" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-    <input type="text" name="payout_note" required maxlength="300" placeholder="e.g. Cash App $YourHandle, or bank name"
-      style="flex:1;min-width:220px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:14px">
+  <p style="font-size:14.5px;margin-top:8px">You can cash out <strong>all {{ earned }} earned tickets = {{ cashout_dollars|e }}</strong>. Cash-outs pay <strong>only</strong> to the bank you link through Stripe — that is the one way money leaves HERE. Once your bank is linked, your cash-out sends itself automatically.</p>
+  <form method="post" action="/tickets/cashout" style="margin-top:10px">
     <button type="submit" class="btn">Cash out {{ cashout_dollars|e }}</button>
   </form>
   {% else %}
@@ -146,13 +144,13 @@
   <form method="post" action="/payouts/setup" style="margin-top:10px">
     <button type="submit" class="btn">Continue setup</button>
   </form>
-  <p style="color:var(--muted);font-size:13px;margin-top:8px">Hand payouts still work meanwhile — cash out above and the owner sends it by hand.</p>
+  <p style="color:var(--muted);font-size:13px;margin-top:8px">Finish the link and your cash-outs pay straight to your bank — Stripe is the one way money leaves HERE.</p>
   {% else %}
   <p style="font-size:14.5px;margin-top:8px">Get paid straight to your bank — one 5-minute setup with Stripe. HERE never sees your bank numbers.</p>
   <form method="post" action="/payouts/setup" style="margin-top:10px">
     <button type="submit" class="btn">Set up bank payouts</button>
   </form>
-  <p style="color:var(--muted);font-size:13px;margin-top:8px">Prefer the old way? Cash out above and the owner sends it by hand.</p>
+  <p style="color:var(--muted);font-size:13px;margin-top:8px">Stripe is the one way money leaves HERE — link your bank once and every cash-out lands there.</p>
   {% endif %}
 </div>
 

@@ -247,12 +247,12 @@ check("below the 2000 min: no request, tickets unmoved",
       and dbq("SELECT gift_earned g FROM users WHERE id=?",
               (NID,))[0]["g"] == 100)
 dbx("UPDATE users SET gift_earned=2500 WHERE id=?", (AID,))
-r = A.post("/tickets/cashout", data={"payout_note": ""})
-check("empty payout note: no request, tickets unmoved",
+r = A.post("/tickets/cashout", data={})
+check("no note asked anymore (Stripe only): request created",
       dbq("SELECT COUNT(*) c FROM payout_requests WHERE user_id=?",
-          (AID,))[0]["c"] == 0
+          (AID,))[0]["c"] == 1
       and dbq("SELECT gift_earned g FROM users WHERE id=?",
-              (AID,))[0]["g"] == 2500)
+              (AID,))[0]["g"] == 0)
 
 # owner marks it paid (existing owner flow) -> paid totals move
 r = OWN.post(f"/owner/payouts/{PRID}/paid")
