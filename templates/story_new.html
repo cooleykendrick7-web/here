@@ -405,7 +405,7 @@ function openEditor(cfg){
   $('se-textstage').style.display = 'none';
   if (cfg.kind === 'video'){
     img.hidden = true; vid.hidden = false; vid.src = cfg.url;
-    vid.addEventListener('loadedmetadata', function(){ S.duration = vid.duration || 0; }, {once:true});
+    vid.addEventListener('loadedmetadata', function(){ S.duration = vid.duration || 0; if (window.__seTrimRefit) window.__seTrimRefit(); }, {once:true});
     vid.play().catch(function(){});
   } else {
     vid.hidden = true; vid.removeAttribute('src');
@@ -844,69 +844,71 @@ function setMusicPick(info){
   if (info) $('se-song-label').textContent = (info.title || 'Song') +
     (info.artist ? ' — ' + info.artist : '');
 }
+/* What the picked song rides on, for the auto-matched window:
+   video story = the video's own duration; picture = 10s;
+   words-only = 15s. */
+function seMusicMedia(){
+  if (S.mode === 'text') return { kind: 'text' };
+  if (S.mediaKind === 'video') return { kind: 'video', dur: S.duration || 0 };
+  return { kind: 'picture' };
+}
+var seTrim = null;   // hereTrimUI instance for the open sheet
 function openMusic(){
   openSheet('<h3>🎧 Playbox — add music</h3>' +
     '<div class="music-picker" id="se-music-picker">' +
     '<input type="hidden" class="mp-vid" value="">' +
     '<input type="hidden" class="mp-urlhidden" value="">' +
-    '<p style="color:rgba(255,255,255,.6);font-size:13px;margin:0 0 8px">Songs stream from YouTube — the artist’s official upload, played right on your story.</p>' +
-    '<input type="text" class="mp-search se-inp" style="margin:0" placeholder="🔎 Search songs on HERE — song or artist" autocomplete="off">' +
+    '<p style="color:rgba(255,255,255,.6);font-size:13px;margin:0 0 8px">Type a song and Playbox finds it — no links to paste. Songs stream from YouTube, the artist’s official upload.</p>' +
+    '<input type="text" class="mp-search se-inp" style="margin:0" placeholder="🔎 Type a song — name + artist" autocomplete="off">' +
     '<div class="mp-results" style="margin-top:6px"></div>' +
     '<label class="fld">⭐ Your songs</label><div class="mp-mine"></div>' +
-    '<label class="fld">New song? Paste its YouTube link</label>' +
-    '<div style="display:flex;gap:8px"><input type="text" class="mp-url se-inp" style="margin:0" placeholder="Paste a YouTube link" autocomplete="off">' +
-    '<button type="button" class="se-go mp-check" style="width:auto;margin:0;padding:11px 16px">Check</button></div>' +
     '<p class="mp-msg"></p>' +
-    '<p style="margin:6px 0 2px"><a class="mp-find" href="https://www.youtube.com/results?search_query=" target="_blank" rel="noopener" style="font-weight:700;color:#ff5b5b">🔎 Find a song on YouTube ↗</a></p>' +
     '<div class="mp-card" hidden><img class="mp-thumb" alt=""><div style="flex:1;min-width:0"><div class="mp-title" style="font-weight:700"></div><div class="mp-artist" style="color:rgba(255,255,255,.6);font-size:13px"></div></div>' +
     '<button type="button" class="chip mp-remove">Remove</button></div>' +
     '<label class="fld">🔥 Popular on HERE</label><div class="mp-popular chiprow"></div></div>' +
     '<div id="se-mus-ctl" hidden>' +
-    '<label class="fld" for="se-mus-start">Start the song at (seconds in)</label>' +
-    '<input type="number" name="music_start" id="se-mus-start" min="0" max="3600" step="1" value="0" class="se-inp" style="width:130px">' +
-    '<label class="fld">Clip length</label><div class="chiprow" id="se-mus-lens">' +
-    '<button type="button" class="chip" data-len="5">5s</button><button type="button" class="chip" data-len="10">10s</button>' +
-    '<button type="button" class="chip on" data-len="15">15s</button><button type="button" class="chip" data-len="30">30s</button></div>' +
-    '<input type="hidden" name="music_len" id="se-mus-len" value="15">' +
+    '<div class="mp-trim" id="se-mus-trim">' +
+    '<label class="fld">Slide across the song to find your part</label>' +
+    '<div class="mp-wave"><div class="mp-wave-bars"></div><div class="mp-wave-win"></div></div>' +
+    '<input type="range" class="mp-range se-range" min="0" max="0" step="1" value="0">' +
+    '<div class="mp-tread"></div><div class="mp-tnote"></div>' +
+    '<button type="button" class="se-go mp-pbtn" style="width:auto;margin-top:10px;padding:10px 18px">▶ Preview this part</button>' +
+    '<div class="mp-pslot"></div></div>' +
     '<label class="fld" for="se-mus-vol">Music volume</label>' +
-    '<input type="range" name="music_volume" id="se-mus-vol" class="se-range" min="0" max="100" step="1" value="80">' +
-    '<label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px"><input type="checkbox" name="music_mute_orig" value="1" id="se-mus-mute"> Mute my video’s own sound</label>' +
+    '<input type="range" id="se-mus-vol" class="se-range" min="0" max="100" step="1" value="80">' +
+    '<label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px"><input type="checkbox" value="1" id="se-mus-mute"> Mute my video’s own sound</label>' +
     '<button type="button" class="se-go" id="se-mus-done" style="margin-top:12px">Done</button></div>');
+  seTrim = null;
+  if (window.hereTrimUI){
+    seTrim = window.hereTrimUI({
+      root: $('se-mus-trim'), startEl: $('se-mus-startF'),
+      lenEl: $('se-mus-lenF'), getMedia: seMusicMedia,
+      volEl: $('se-mus-vol') });
+    window.__seTrimRefit = function(){ if (seTrim) seTrim.refit(); };
+  }
   var picker = null;
   if (window.hereMusicPicker){
     picker = window.hereMusicPicker($('se-music-picker'), { onSelect: function(info){
       setMusicPick(info);
       $('se-mus-ctl').hidden = !info;
+      if (seTrim) seTrim.setSong(info);
     }});
-    if (picker && musPick) picker.select(musPick, '');
     if (picker && musPick){
-      $('se-mus-start').value = $('se-mus-startF').value || '0';
-      $('se-mus-len').value = $('se-mus-lenF').value || '15';
-      sheetBody.querySelectorAll('#se-mus-lens .chip').forEach(function(x){
-        x.classList.toggle('on', x.dataset.len === $('se-mus-len').value);
-      });
+      picker.select(musPick, '');
       $('se-mus-vol').value = $('se-mus-volF').value || '80';
       $('se-mus-mute').checked = $('se-mus-muteF').checked;
+      if (seTrim) seTrim.setStart($('se-mus-startF').value || '0');
     }
   }
-  function syncTrim(){
-    $('se-mus-startF').value = $('se-mus-start').value || '0';
-    $('se-mus-lenF').value = $('se-mus-len').value || '15';
+  function syncVol(){
     $('se-mus-volF').value = $('se-mus-vol').value || '80';
     $('se-mus-muteF').checked = $('se-mus-mute').checked;
   }
-  ['se-mus-start','se-mus-vol'].forEach(function(id){
-    var el = $(id); if (el) el.addEventListener('input', syncTrim);
-  });
-  var muteEl = $('se-mus-mute'); if (muteEl) muteEl.addEventListener('change', syncTrim);
-  sheetBody.querySelectorAll('#se-mus-lens .chip').forEach(function(ch){
-    ch.addEventListener('click', function(){
-      sheetBody.querySelectorAll('#se-mus-lens .chip').forEach(function(x){ x.classList.remove('on'); });
-      ch.classList.add('on'); $('se-mus-len').value = ch.dataset.len; syncTrim();
-    });
-  });
+  var volEl = $('se-mus-vol'); if (volEl) volEl.addEventListener('input', syncVol);
+  var muteEl = $('se-mus-mute'); if (muteEl) muteEl.addEventListener('change', syncVol);
+  syncVol();
   var doneBtn = $('se-mus-done');
-  if (doneBtn) doneBtn.addEventListener('click', function(){ syncTrim(); closeSheet(); });
+  if (doneBtn) doneBtn.addEventListener('click', function(){ syncVol(); closeSheet(); });
 }
 /* song pill: drag to move, tap to reopen the Playbox sheet */
 (function(){

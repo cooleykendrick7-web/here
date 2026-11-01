@@ -487,6 +487,11 @@ def init_db():
             c.execute(f"ALTER TABLE posts ADD COLUMN {_mc} TEXT DEFAULT ''")
     if "music_start" not in _post_cols:
         c.execute("ALTER TABLE posts ADD COLUMN music_start INTEGER DEFAULT 0")
+    if "music_len" not in _post_cols:
+        # Playbox auto-match window for post music (2026-11-01): the
+        # clip length that rides with music_start. 0 = legacy post,
+        # play the song without a window (from music_start to the end).
+        c.execute("ALTER TABLE posts ADD COLUMN music_len INTEGER DEFAULT 0")
     # --- story replies/reactions ride the messages table (safe) ---
     # A message linked to a story carries the story's id plus the
     # uploads-relative path of a SHARED clip copy (uploads/story_replies/)
@@ -3216,7 +3221,8 @@ def post_card(p, viewer, owner_on=False):
                    "title": p.get("music_title") or "",
                    "artist": p.get("music_artist") or "",
                    "thumb": p.get("music_thumb") or "",
-                   "start": p.get("music_start") or 0}
+                   "start": p.get("music_start") or 0,
+                   "len": p.get("music_len") or 0}
                   if p.get("music_video_id") else None),
         "created_at": fancy_time(p["created_at"]),
         "likes": likes, "liked": liked, "comments_count": cc,
@@ -3989,6 +3995,12 @@ async def public_post(request: Request, post_id: int):
     if p.get("music_video_id"):
         music_embed = ("https://www.youtube.com/embed/"
                        + str(p["music_video_id"]))
+        _ms = p.get("music_start") or 0
+        _ml = p.get("music_len") or 0
+        if _ms or _ml:
+            music_embed += f"?start={int(_ms)}"
+            if _ml:
+                music_embed += f"&end={int(_ms) + int(_ml)}"
     author_ctx = {"id": author["id"], "name": author["name"],
                   "avatar": avatar_url(author.get("avatar", ""))}
     og_image = ""
@@ -5037,6 +5049,13 @@ def create_post_from_form(user, form, page_id=None):
         music_start = max(0, min(3600, int(form.get("music_start") or 0)))
     except (TypeError, ValueError):
         music_start = 0
+    # Playbox window (2026-11-01): the client auto-matches the clip
+    # length to the post's media (video = its duration, picture = 10s,
+    # words-only = 15s); the server just clamps. 0/absent = no window.
+    try:
+        music_len = max(0, min(600, int(form.get("music_len") or 0)))
+    except (TypeError, ValueError):
+        music_len = 0
 
     media_file = form.get("media")
     # Audio files are no longer accepted on ANY new post (the MP3 post
@@ -5085,9 +5104,9 @@ def create_post_from_form(user, form, page_id=None):
     cur = conn.execute(
         "INSERT INTO posts(user_id, page_id, kind, body, feeling, link_url, "
         "video_url, media, privacy, music_video_id, music_title, "
-        "music_artist, music_thumb, music_start, created_at, "
+        "music_artist, music_thumb, music_start, music_len, created_at, "
         "wall_user_id, wall_pending, lock_price, lock_adult) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], page_id, kind, body, feeling, link_url, video_url,
          media, privacy,
          music["video_id"] if music else "",
@@ -5095,6 +5114,7 @@ def create_post_from_form(user, form, page_id=None):
          music["artist"] if music else "",
          music["thumb"] if music else "",
          music_start if music else 0,
+         music_len if music else 0,
          now_iso(), wall_user_id, wall_pending, lock_price, lock_adult))
     pid = cur.lastrowid
     # Hashtags: parsed from the body of EVERY new post (any kind) into
@@ -7077,6 +7097,249 @@ def youtube_oembed(video_id):
             "thumb": str(d.get("thumbnail_url") or "")[:300]}
 
 
+# ---- Playbox type-to-find (Ken's change order, 2026-11-01) ----
+# No paste-a-link, no personal API key: the user types a song name +
+# artist and HERE finds the song on YouTube itself. Three no-key
+# methods are tried in order until one answers: (a) parsing the
+# public results page's ytInitialData (proven fastest from this
+# stack), (b) YouTube's own Innertube web-client search (the same
+# endpoint youtube.com's pages call, with the web client's public
+# key that ships in every youtube.com page — not a personal
+# credential), (c) public Invidious / Piped search instances. Every row carries duration_seconds, which the
+# trim slider needs to span the whole song. Results are cached for a
+# few minutes so the sheet never hammers YouTube.
+_YT_WEB_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW"
+_FIND_CACHE = {}
+_FIND_TTL = 300
+_FIND_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36")
+_INVIDIOUS_HOSTS = ("https://inv.nadeko.net", "https://yewtu.be",
+                    "https://invidious.nerdvpn.de")
+_PIPED_HOSTS = ("https://pipedapi.kavin.rocks",
+                "https://pipedapi.adminforge.de")
+
+
+def _http_get_text(url, timeout=6):
+    req = urllib.request.Request(url, headers={"User-Agent": _FIND_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def _http_json(url, payload=None, timeout=6):
+    data = None
+    headers = {"User-Agent": _FIND_UA, "Content-Type": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _len_text_secs(text):
+    """'4:24' / '1:02:03' -> seconds, or 0 for anything else (LIVE…)."""
+    parts = str(text or "").strip().split(":")
+    if not parts or not all(p.isdigit() for p in parts):
+        return 0
+    secs = 0
+    for p in parts:
+        secs = secs * 60 + int(p)
+    return secs
+
+
+def _runs_text(node):
+    if not isinstance(node, dict):
+        return ""
+    if node.get("simpleText"):
+        return str(node["simpleText"])
+    return "".join(str(r.get("text") or "")
+                   for r in node.get("runs") or [])
+
+
+def _walk_renderers(node, out):
+    """Collect every videoRenderer dict in an Innertube/ytInitialData
+    tree, depth-first, in page order."""
+    if isinstance(node, dict):
+        vr = node.get("videoRenderer")
+        if isinstance(vr, dict) and vr.get("videoId"):
+            out.append(vr)
+        for v in node.values():
+            _walk_renderers(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_renderers(v, out)
+
+
+def _rows_from_renderers(renderers):
+    rows, seen = [], set()
+    for vr in renderers:
+        vid = str(vr.get("videoId") or "")
+        if not _YT_ID_RE.match(vid) or vid in seen:
+            continue
+        seen.add(vid)
+        thumbs = ((vr.get("thumbnail") or {}).get("thumbnails") or [])
+        thumb = (str(thumbs[-1].get("url")) if thumbs else
+                 f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg")
+        rows.append({
+            "video_id": vid,
+            "title": _runs_text(vr.get("title"))[:120],
+            "artist": (_runs_text(vr.get("ownerText")) or
+                       _runs_text(vr.get("shortBylineText")))[:80],
+            "thumb": thumb[:300],
+            "duration": _len_text_secs(_runs_text(vr.get("lengthText"))),
+        })
+    return rows
+
+
+def _find_innertube(q):
+    d = _http_json(
+        "https://www.youtube.com/youtubei/v1/search?key=" + _YT_WEB_KEY,
+        {"context": {"client": {"clientName": "WEB",
+                                "clientVersion": "2.20240111.09.00",
+                                "hl": "en", "gl": "US"}},
+         "query": q})
+    out = []
+    _walk_renderers(d, out)
+    return _rows_from_renderers(out)
+
+
+def _find_results_page(q):
+    html = _http_get_text(
+        "https://www.youtube.com/results?search_query=" +
+        quote(q, safe=""))
+    m = re.search(r"var ytInitialData = (\{.*?\});</script>", html, re.S)
+    if not m:
+        m = re.search(r"ytInitialData\s*=\s*(\{.*?\});", html, re.S)
+    if not m:
+        return []
+    out = []
+    _walk_renderers(json.loads(m.group(1)), out)
+    return _rows_from_renderers(out)
+
+
+def _find_invidious(q):
+    last = None
+    for host in _INVIDIOUS_HOSTS:
+        try:
+            d = _http_json(host + "/api/v1/search?type=video&q=" +
+                           quote(q, safe=""), timeout=4)
+        except Exception as e:  # instances die; try the next one
+            last = e
+            continue
+        rows, seen = [], set()
+        for it in d if isinstance(d, list) else []:
+            vid = str(it.get("videoId") or "")
+            if not _YT_ID_RE.match(vid) or vid in seen:
+                continue
+            seen.add(vid)
+            th = it.get("videoThumbnails") or []
+            thumb = (str(th[-1].get("url")) if th else
+                     f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg")
+            rows.append({"video_id": vid,
+                         "title": str(it.get("title") or "")[:120],
+                         "artist": str(it.get("author") or "")[:80],
+                         "thumb": thumb[:300],
+                         "duration": int(it.get("lengthSeconds") or 0)})
+        if rows:
+            return rows
+    if last:
+        raise last
+    return []
+
+
+def _find_piped(q):
+    last = None
+    for host in _PIPED_HOSTS:
+        try:
+            d = _http_json(host + "/search?filter=videos&q=" +
+                           quote(q, safe=""), timeout=4)
+        except Exception as e:
+            last = e
+            continue
+        rows, seen = [], set()
+        for it in (d or {}).get("items") or []:
+            url = str(it.get("url") or "")
+            vid = url.split("v=")[-1].split("&")[0] if "v=" in url else ""
+            if not _YT_ID_RE.match(vid) or vid in seen:
+                continue
+            seen.add(vid)
+            rows.append({"video_id": vid,
+                         "title": str(it.get("title") or "")[:120],
+                         "artist": str(it.get("uploaderName") or "")[:80],
+                         "thumb": str(it.get("thumbnail") or
+                                      f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg")[:300],
+                         "duration": int(it.get("duration") or 0)})
+        if rows:
+            return rows
+    if last:
+        raise last
+    return []
+
+
+_FIND_METHODS = (("results-page", _find_results_page),
+                 ("innertube", _find_innertube),
+                 ("invidious", _find_invidious),
+                 ("piped", _find_piped))
+
+
+def _find_rank(rows, q):
+    """Official uploads first: 'Official Audio' > Topic channel >
+    official video; versions the user didn't ask for sink."""
+    ql = q.lower()
+    qtok = set(re.findall(r"[a-z0-9]+", ql))
+
+    def score(r):
+        t = (r["title"] or "").lower()
+        a = (r["artist"] or "").lower()
+        s = 0
+        if "official audio" in t:
+            s += 100
+        if a.endswith("- topic") or a.endswith("– topic"):
+            s += 80
+        if "official music video" in t or "official video" in t:
+            s += 60
+        if qtok:
+            s += 6 * len(qtok & set(re.findall(r"[a-z0-9]+", t)))
+            s += 6 * len(qtok & set(re.findall(r"[a-z0-9]+", a)))
+        for word in ("live", "cover", "karaoke", "remix", "sped up",
+                     "slowed", "nightcore", "instrumental", "lyrics"):
+            if word in t and word not in ql:
+                s -= 45
+        if 60 <= (r["duration"] or 0) <= 600:
+            s += 10
+        return -s
+
+    return sorted(rows, key=score)
+
+
+def youtube_find(query, limit=10):
+    """Type-to-find: (rows, method_name). Rows carry duration (may be
+    0 when a source didn't report one). ([], None) when every method
+    failed or genuinely found nothing — the caller must say so
+    honestly, never invent results."""
+    q = " ".join(str(query or "").split())[:120]
+    if len(q) < 2:
+        return [], None
+    key = q.lower()
+    hit = _FIND_CACHE.get(key)
+    if hit and hit[0] > time.time():
+        return list(hit[1]), hit[2]
+    rows, method = [], None
+    for name, fn in _FIND_METHODS:
+        try:
+            got = fn(q)
+        except Exception:
+            got = []
+        if got:
+            rows, method = got, name
+            break
+    rows = _find_rank(rows, q)[:limit]
+    _FIND_CACHE[key] = (time.time() + _FIND_TTL, rows, method)
+    if len(_FIND_CACHE) > 200:
+        _FIND_CACHE.clear()
+    return list(rows), method
+
+
 def _music_snapshot(video_id):
     """Title/artist/thumb snapshot from an existing attachment of this
     video (a story or a post), or None. 'Popular on HERE' picks reuse
@@ -7298,11 +7561,11 @@ async def music_popular(request: Request):
          "uses": r["uses"]} for r in rows]})
 
 
-# Playbox (2026-11-01): the music picker's finder reads HERE's own
-# attachment snapshots only — no new catalog, no downloads. "Your
-# songs" = songs this user has attached to their own stories/posts;
-# search covers every song already attached anywhere on HERE. A song
-# not on HERE yet still enters through the paste-a-link oEmbed gate.
+# Playbox (2026-11-01): "Your songs" = songs this user has attached
+# to their own stories/posts; /music/search covers every song already
+# attached anywhere on HERE; /music/find (the sheet's one search box)
+# merges those with live web results from youtube_find() — typing a
+# name + artist is the whole flow, no link to paste, no downloads.
 _MUSIC_UNION = (
     "SELECT music_ref AS video_id, music_title AS title, "
     "       music_artist AS artist, music_thumb AS thumb, "
@@ -7359,6 +7622,56 @@ async def music_search(request: Request):
         {"video_id": r["video_id"], "title": r["title"] or "",
          "artist": r["artist"] or "", "thumb": r["thumb"] or "",
          "uses": r["uses"]} for r in rows]})
+
+
+@app.get("/music/find")
+async def music_find(request: Request):
+    """Playbox type-to-find (Ken's change order, 2026-11-01): type a
+    song name + artist, HERE finds the song on the web — no link to
+    paste. The user's own matching songs come first, then any song
+    already on HERE, then fresh web results (deduped). An empty list
+    is an honest 'not found', never padded with fakes."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    q = " ".join((request.query_params.get("q") or "").split())[:120]
+    if len(q) < 2:
+        return JSONResponse({"ok": True, "songs": []})
+    like = ("%" + q.replace("\\", "\\\\").replace("%", "\\%")
+            .replace("_", "\\_") + "%")
+    conn = db()
+    rows = conn.execute(
+        "SELECT video_id, MAX(title) AS title, MAX(artist) AS artist, "
+        "MAX(thumb) AS thumb, COUNT(*) AS uses, "
+        "MAX(CASE WHEN uid=? THEN 1 ELSE 0 END) AS yours FROM (" +
+        _MUSIC_UNION +
+        ") WHERE title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' "
+        "GROUP BY video_id ORDER BY yours DESC, uses DESC, title ASC "
+        "LIMIT 12", (user["id"], like, like)).fetchall()
+    conn.close()
+    songs, seen = [], set()
+    for r in rows:
+        seen.add(r["video_id"])
+        songs.append({"video_id": r["video_id"], "title": r["title"] or "",
+                      "artist": r["artist"] or "", "thumb": r["thumb"] or "",
+                      "duration": 0, "uses": r["uses"],
+                      "yours": bool(r["yours"]), "here": True})
+    web, method = youtube_find(q)
+    by_id = {w["video_id"]: w for w in web}
+    for s in songs:  # a web twin can lend its duration to a HERE row
+        w = by_id.get(s["video_id"])
+        if w:
+            s["duration"] = w["duration"] or 0
+    for w in web:
+        if w["video_id"] in seen:
+            continue
+        seen.add(w["video_id"])
+        songs.append({"video_id": w["video_id"], "title": w["title"],
+                      "artist": w["artist"], "thumb": w["thumb"],
+                      "duration": w["duration"] or 0, "uses": 0,
+                      "yours": False, "here": False})
+    return JSONResponse({"ok": True, "songs": songs[:12],
+                         "source": method})
 
 
 def _own_media_path(uid, path):
@@ -7528,7 +7841,11 @@ async def story_create(request: Request):
             return default
         return max(lo, min(hi, v))
     music_start = _int_field("music_start", 0, 3600, 0)
-    music_len = _int_field("music_len", 5, 30, 15)
+    # Playbox auto-match (2026-11-01): the window now mirrors the
+    # story's media — a video story's window is the video's own
+    # duration, which can exceed the old 30s chip cap, so the ceiling
+    # rises to 600s. The 5s floor stays for legacy/chip-era clients.
+    music_len = _int_field("music_len", 5, 600, 15)
     music_volume = _int_field("music_volume", 0, 100, 80)
     music_mute_orig = 1 if (form.get("music_mute_orig") or "") == "1" else 0
     # --- games pack: story poll + AMA (validated BEFORE anything is

@@ -74,7 +74,7 @@
   {% endif %}
 
   {% if post.music %}
-  <div class="post-music" data-vid="{{ post.music.video_id|e }}" data-start="{{ post.music.start }}">
+  <div class="post-music" data-vid="{{ post.music.video_id|e }}" data-start="{{ post.music.start }}" data-len="{{ post.music.len or 0 }}">
     <div class="post-music-bar">
       {% if post.music.thumb %}<img class="post-music-thumb" src="{{ post.music.thumb|e }}" alt="">{% endif %}
       <div class="post-music-info">

@@ -314,26 +314,25 @@
         <input type="hidden" name="music_url" class="mp-urlhidden" value="">
         <p style="color:var(--muted);font-size:13px;margin:0 0 8px">Songs stream from YouTube — the artist's official upload, played right on your post.</p>
         <label class="fld">🎧 Playbox — find a song</label>
-        <input type="text" class="mp-search" placeholder="Search songs on HERE — song or artist" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;box-sizing:border-box">
+        <input type="text" class="mp-search" placeholder="Type a song — name + artist" autocomplete="off" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;box-sizing:border-box">
         <div class="mp-results"></div>
         <label class="fld" style="margin-top:12px">⭐ Your songs</label>
         <div class="mp-mine"></div>
-        <label class="fld" style="margin-top:12px">New song? Paste its YouTube link</label>
-        <div style="display:flex;gap:8px">
-          <input type="text" class="mp-url" placeholder="Paste a YouTube link to the song" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px">
-          <button type="button" class="btn-ghost mp-check" style="font-weight:700">Check</button>
-        </div>
         <p class="mp-msg"></p>
-        <p style="margin:8px 0 2px"><a class="mp-find" href="https://www.youtube.com/results?search_query=" target="_blank" rel="noopener" style="font-weight:700">🔎 Find a song on YouTube ↗</a></p>
-        <p style="color:var(--muted);font-size:12.5px;margin:0">Find the official song, copy its link, paste it here.</p>
         <div class="mp-card" hidden>
           <img class="mp-thumb" alt="">
           <div style="flex:1;min-width:0"><div class="mp-title"></div><div class="mp-artist"></div></div>
           <button type="button" class="chip mp-remove">Remove</button>
         </div>
-        <div style="margin-top:10px">
-          <label class="fld" for="wall-music-start">Start the song at (seconds)</label>
-          <input type="number" name="music_start" id="wall-music-start" min="0" max="3600" step="1" value="0" style="width:110px;padding:7px 10px;border:1px solid var(--border);border-radius:8px">
+        <div class="mp-trim">
+          <input type="hidden" name="music_start" class="mp-startF" value="0">
+          <input type="hidden" name="music_len" class="mp-lenF" value="15">
+          <label class="fld">Slide across the song to find your part</label>
+          <div class="mp-wave"><div class="mp-wave-bars"></div><div class="mp-wave-win"></div></div>
+          <input type="range" class="mp-range" min="0" max="0" step="1" value="0">
+          <div class="mp-tread"></div><div class="mp-tnote"></div>
+          <button type="button" class="btn-ghost mp-pbtn" style="font-weight:700;margin-top:8px">▶ Preview this part</button>
+          <div class="mp-pslot"></div>
         </div>
         <label class="fld" style="margin-top:12px">🔥 Popular on HERE</label>
         <div class="mp-popular"></div>
@@ -438,13 +437,46 @@
   // 🎵 music picker (shared wiring lives in base.html)
   var mToggle = document.getElementById('wall-music-toggle');
   var mPicker = document.getElementById('wall-music-picker');
+  var mPickerObj = null, wallVidDur = 0;
+  function wallMusicMedia(){
+    var k = (document.getElementById('kind-input') || {}).value || 'text';
+    if (k === 'photo') return { kind: 'picture' };
+    if (k === 'video') return { kind: 'video', dur: wallVidDur };
+    return { kind: 'text' };
+  }
+  document.addEventListener('click', function(e){
+    if (e.target && e.target.closest &&
+        e.target.closest('.kind-tab') &&
+        mPickerObj && mPickerObj.trim) {
+      setTimeout(function(){ mPickerObj.trim.refit(); }, 0);
+    }
+  });
+  var mediaFileEl = document.getElementById('media-file');
+  if (mediaFileEl) mediaFileEl.addEventListener('change', function(){
+    wallVidDur = 0;
+    var f = mediaFileEl.files && mediaFileEl.files[0];
+    if (f && /^video\//.test(f.type || '')) {
+      var v = document.createElement('video');
+      v.preload = 'metadata';
+      v.onloadedmetadata = function(){
+        wallVidDur = v.duration || 0;
+        if (mPickerObj && mPickerObj.trim) mPickerObj.trim.refit();
+        try { URL.revokeObjectURL(v.src); } catch (e) {}
+      };
+      v.src = URL.createObjectURL(f);
+    }
+    if (mPickerObj && mPickerObj.trim) mPickerObj.trim.refit();
+  });
   if (mToggle && mPicker && window.hereMusicPicker) {
     var mWired = false;
     mToggle.addEventListener('click', function(){
       mPicker.hidden = !mPicker.hidden;
       if (!mPicker.hidden && !mWired) {
         mWired = true;
-        window.hereMusicPicker(mPicker, {});
+        mPickerObj = window.hereMusicPicker(mPicker,
+          { getMedia: wallMusicMedia });
+      } else if (!mPicker.hidden && mPickerObj && mPickerObj.trim) {
+        mPickerObj.trim.refit();
       }
     });
   }

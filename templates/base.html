@@ -754,6 +754,21 @@ button.post-opt-item.like-btn.liked{color:var(--look-accent,var(--red))}
   width:38px;height:38px;font-size:15px;cursor:pointer;flex-shrink:0}
 .post-music-player{background:#000}
 .post-music-player iframe{width:100%;height:200px;display:block;border:0}
+/* ===== Playbox trim slider (2026-11-01): a window dragged across
+   the whole song, over a stylized track wave ===== */
+.mp-dur{font-size:11.5px;color:var(--muted);font-weight:700;white-space:nowrap}
+.mp-trim{margin-top:12px}
+.mp-wave{position:relative;height:56px;border-radius:10px;background:rgba(127,127,127,.14);
+  overflow:hidden;cursor:pointer;touch-action:none}
+.mp-wave-bars{position:absolute;inset:0;display:flex;align-items:center;gap:2px;padding:0 4px}
+.mp-wave-bars i{flex:1;background:rgba(127,127,127,.45);border-radius:2px;min-width:2px}
+.mp-wave-win{position:absolute;top:0;bottom:0;background:rgba(229,9,20,.28);
+  border-left:2px solid var(--red);border-right:2px solid var(--red);box-sizing:border-box}
+.mp-range{width:100%;margin:8px 0 2px}
+.mp-tread{font-weight:800;font-size:15px}
+.mp-tnote{color:var(--muted);font-size:12.5px;margin-top:2px}
+.mp-pslot{margin-top:8px}
+.mp-pslot iframe{width:100%;height:200px;display:block;border:0;border-radius:10px}
 /* ===== reaction picker ===== */
 .react-wrap{position:relative;display:inline-block}
 .react-picker{position:absolute;bottom:135%;left:0;background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid var(--border);
@@ -2989,13 +3004,213 @@ document.addEventListener('click', function(ev){
     document.head.appendChild(tag);
   };
 
+  /* Playbox trim slider (2026-11-01): a window whose LENGTH is set
+     by what the music rides on — video = the video's own duration,
+     picture = 10s, words-only = 15s; a song shorter than the window
+     plays whole — dragged across a track spanning the whole song,
+     over a stylized wave (deterministic bars from the video id; no
+     audio is ever downloaded to draw it, this is find + trim only).
+     Start/length land in the hidden fields the form already posts.
+     Preview plays exactly the window through YouTube's player. */
+  window.hereTrimUI = function (cfg) {
+    var root = cfg.root;
+    if (!root) return null;
+    var wave = root.querySelector('.mp-wave'),
+        bars = root.querySelector('.mp-wave-bars'),
+        winEl = root.querySelector('.mp-wave-win'),
+        range = root.querySelector('.mp-range'),
+        tread = root.querySelector('.mp-tread'),
+        tnote = root.querySelector('.mp-tnote'),
+        pbtn = root.querySelector('.mp-pbtn'),
+        pslot = root.querySelector('.mp-pslot');
+    var song = null, songDur = 0, start = 0, winLen = 15;
+    var player = null, endTimer = null;
+    function fmt(s) {
+      s = Math.max(0, Math.round(s || 0));
+      var m = Math.floor(s / 60), r = s % 60;
+      return m + ':' + (r < 10 ? '0' : '') + r;
+    }
+    function media() {
+      try { return (cfg.getMedia && cfg.getMedia()) || { kind: 'text' }; }
+      catch (e) { return { kind: 'text' }; }
+    }
+    function wantLen() {
+      var md = media();
+      if (md.kind === 'video') {
+        var d = Math.round(md.dur || 0);
+        return d > 0 ? d : 30;
+      }
+      if (md.kind === 'picture') return 10;
+      return 15;
+    }
+    function effWin() {
+      var w = wantLen();
+      return songDur > 0 ? Math.min(w, songDur) : w;
+    }
+    function maxStart() {
+      return songDur > 0 ? Math.max(0, songDur - winLen) : 3600;
+    }
+    function drawWave() {
+      if (!bars) return;
+      bars.innerHTML = '';
+      var sd = 0, id = song ? song.video_id : '';
+      for (var i = 0; i < id.length; i++) sd += id.charCodeAt(i) * (i + 3);
+      for (var j = 0; j < 56; j++) {
+        var b = document.createElement('i');
+        b.style.height = (18 + ((sd + j * 37 + ((j * j) % 13) * 7) % 70)) + '%';
+        bars.appendChild(b);
+      }
+    }
+    function paint() {
+      winLen = effWin();
+      start = Math.max(0, Math.min(start, maxStart()));
+      if (range) {
+        range.max = String(maxStart());
+        range.value = String(start);
+        range.disabled = !song;
+      }
+      if (winEl) {
+        if (songDur > 0) {
+          winEl.style.left = (start / songDur * 100) + '%';
+          winEl.style.width = Math.max(2, winLen / songDur * 100) + '%';
+        } else { winEl.style.left = '0%'; winEl.style.width = '18%'; }
+      }
+      if (tread) tread.textContent = song ?
+        (fmt(start) + ' – ' + fmt(start + winLen) +
+         (songDur ? '   ·   song ' + fmt(songDur) : '')) : '';
+      if (tnote) {
+        var md = media(), why;
+        if (!song) why = 'Pick a song, then slide to the part you want.';
+        else if (songDur && winLen >= songDur)
+          why = 'The song is shorter than the clip — the whole song plays.';
+        else if (md.kind === 'video')
+          why = 'Clip length matches your video: ' + fmt(winLen) +
+                '. Slide to choose where it starts.';
+        else if (md.kind === 'picture')
+          why = 'Clip length for a picture: 10 seconds. Slide to choose where it starts.';
+        else
+          why = 'Clip length for words only: 15 seconds. Slide to choose where it starts.';
+        tnote.textContent = why;
+      }
+      if (cfg.startEl) cfg.startEl.value = String(start);
+      if (cfg.lenEl) cfg.lenEl.value = String(winLen);
+      if (cfg.onChange) cfg.onChange({ start: start, len: winLen });
+    }
+    function refit() { paint(); }
+    function killPlayer() {
+      if (endTimer) { clearInterval(endTimer); endTimer = null; }
+      if (player) { try { player.destroy(); } catch (e) {} player = null; }
+      if (pslot) pslot.innerHTML = '';
+    }
+    function armEnd() {
+      if (endTimer) clearInterval(endTimer);
+      endTimer = setInterval(function () {
+        if (!player) { clearInterval(endTimer); endTimer = null; return; }
+        try {
+          if (player.getCurrentTime() >= start + winLen) {
+            player.pauseVideo(); clearInterval(endTimer); endTimer = null;
+          }
+        } catch (e) {}
+      }, 250);
+    }
+    function buildPlayer(autoplay) {
+      if (!song || !pslot) return;
+      var slot = document.createElement('div');
+      pslot.innerHTML = ''; pslot.appendChild(slot);
+      window.hereLoadYT(function () {
+        if (!song) return;
+        player = new YT.Player(slot, {
+          width: '100%', height: '200', videoId: song.video_id,
+          playerVars: { start: Math.floor(start), rel: 0, playsinline: 1,
+                        modestbranding: 1 },
+          events: { onReady: function (ev) {
+            try {
+              var d = Math.round(ev.target.getDuration() || 0);
+              if (d > 0 && d !== songDur) { songDur = d; paint(); }
+            } catch (e) {}
+            if (cfg.volEl) {
+              try { ev.target.setVolume(parseInt(cfg.volEl.value || '80', 10)); }
+              catch (e) {}
+            }
+            if (autoplay) {
+              try { ev.target.playVideo(); armEnd(); } catch (e) {}
+            }
+          } }
+        });
+      });
+    }
+    function preview() {
+      if (!song) return;
+      if (player) {
+        try {
+          player.seekTo(start, true);
+          if (cfg.volEl) player.setVolume(parseInt(cfg.volEl.value || '80', 10));
+          player.playVideo(); armEnd(); return;
+        } catch (e) {}
+      }
+      buildPlayer(true);
+    }
+    function setSong(info) {
+      killPlayer();
+      song = info || null;
+      songDur = info ? (info.duration || 0) : 0;
+      start = 0;
+      drawWave(); paint();
+      /* Duration unknown (a Your-songs / Popular pick): cue the song
+         in the preview player and read its real length from YouTube
+         itself, so the track still spans the whole song. */
+      if (song && !songDur && pslot) buildPlayer(false);
+    }
+    function setStart(v) {
+      start = Math.max(0, parseInt(v || '0', 10) || 0);
+      paint();
+    }
+    if (range) range.addEventListener('input', function () {
+      start = parseInt(range.value || '0', 10) || 0;
+      paint();
+    });
+    if (wave) {
+      var dragOn = false;
+      function fromEvent(e) {
+        if (!songDur) return;
+        var r = wave.getBoundingClientRect();
+        var f = (e.clientX - r.left) / Math.max(1, r.width);
+        f = Math.max(0, Math.min(1, f));
+        start = Math.round(f * songDur - winLen / 2);
+        paint();
+      }
+      wave.addEventListener('pointerdown', function (e) {
+        if (!song) return;
+        dragOn = true;
+        try { wave.setPointerCapture(e.pointerId); } catch (err) {}
+        fromEvent(e);
+      });
+      wave.addEventListener('pointermove', function (e) {
+        if (dragOn) fromEvent(e);
+      });
+      wave.addEventListener('pointerup', function () { dragOn = false; });
+    }
+    if (pbtn) pbtn.addEventListener('click', preview);
+    paint();
+    return { setSong: setSong, refit: refit, setStart: setStart,
+             getState: function () {
+               return { start: start, len: winLen, dur: songDur }; } };
+  };
+
   /* Music picker used by the story composer and the wall composer.
      Markup contract (class hooks inside the root element):
-       .mp-url (paste box), .mp-check, .mp-find, .mp-msg, .mp-card,
-       .mp-thumb, .mp-title, .mp-artist, .mp-remove, .mp-popular,
-       .mp-search + .mp-results + .mp-mine (Playbox finder, optional),
-       .mp-vid + .mp-urlhidden (hidden form fields it maintains).
-     opts.onSelect(info|null) fires whenever the selection changes. */
+       .mp-msg, .mp-card, .mp-thumb, .mp-title, .mp-artist, .mp-remove,
+       .mp-popular, .mp-search + .mp-results + .mp-mine (Playbox
+       type-to-find), .mp-vid + .mp-urlhidden (hidden fields it
+       maintains), optional .mp-trim block (wave slider) with
+       .mp-startF + .mp-lenF hidden fields.
+     opts.onSelect(info|null) fires whenever the selection changes;
+     info carries duration (seconds, 0 = unknown) when the finder
+     reported one. opts.getMedia() (optional) tells the trim slider
+     what the music rides on: {kind:'video', dur} | {kind:'picture'}
+     | {kind:'text'}. (The old paste-a-link hooks are gone from the
+     markup per Ken's 2026-11-01 change order — typing is the flow;
+     /music/preview remains server-side for legacy clients.) */
   window.hereMusicPicker = function (root, opts) {
     if (!root) return null;
     opts = opts || {};
@@ -3024,8 +3239,10 @@ document.addEventListener('click', function(ev){
         vidIn.value = ''; urlHidden.value = '';
         if (card) card.hidden = true;
       }
+      if (trimUI) trimUI.setSong(info);
       if (opts.onSelect) opts.onSelect(info);
     }
+    var trimUI = null;
     function check() {
       var url = (urlIn.value || '').trim();
       if (!url) { setMsg('Paste a YouTube link first.', true); return; }
@@ -3066,11 +3283,17 @@ document.addEventListener('click', function(ev){
       if (urlIn) urlIn.value = '';
       select(null);
     });
-    /* Playbox finder (2026-11-01): 'Your songs' (this user's past
-       picks, /music/mine) render first; the search box looks over
-       every song already on HERE (/music/search). Picking a row is
-       the same select() as a Popular pick. New songs still enter by
-       pasting a YouTube link above (oEmbed-gated). */
+    /* Playbox type-to-find (2026-11-01): type a song name + artist
+       and /music/find returns the user's own matches first, then
+       songs already on HERE, then fresh web results — no link to
+       paste. 'Your songs' (/music/mine) still render below. Picking
+       a row is the same select() as a Popular pick, and the info
+       carries the song's full duration for the trim slider. */
+    function fmtDur(s) {
+      s = Math.max(0, Math.round(s || 0));
+      var m = Math.floor(s / 60), r = s % 60;
+      return m + ':' + (r < 10 ? '0' : '') + r;
+    }
     function songRow(sg, badge) {
       var row = document.createElement('div');
       row.className = 'mus-row';
@@ -3086,6 +3309,11 @@ document.addEventListener('click', function(ev){
       a.className = 'a'; a.textContent = sg.artist || '';
       mid.appendChild(t); mid.appendChild(a);
       row.appendChild(mid);
+      if (sg.duration) {
+        var d = document.createElement('span');
+        d.className = 'mp-dur'; d.textContent = fmtDur(sg.duration);
+        row.appendChild(d);
+      }
       if (badge) {
         var b = document.createElement('span');
         b.className = 'mp-uses'; b.textContent = badge;
@@ -3093,7 +3321,8 @@ document.addEventListener('click', function(ev){
       }
       row.addEventListener('click', function () {
         select({ video_id: sg.video_id, title: sg.title,
-                 artist: sg.artist, thumb: sg.thumb }, '');
+                 artist: sg.artist, thumb: sg.thumb,
+                 duration: sg.duration || 0 }, '');
       });
       return row;
     }
@@ -3121,7 +3350,11 @@ document.addEventListener('click', function(ev){
       function runSearch() {
         var query = (searchIn.value || '').trim();
         if (query.length < 2) { resBox.innerHTML = ''; return; }
-        fetch('/music/search?q=' + encodeURIComponent(query))
+        resBox.innerHTML = '';
+        var wait = document.createElement('p');
+        wait.className = 'aud-hint'; wait.textContent = 'Finding it…';
+        resBox.appendChild(wait);
+        fetch('/music/find?q=' + encodeURIComponent(query))
           .then(function (r) { return r.json(); })
           .then(function (d) {
             if ((searchIn.value || '').trim() !== query) return;
@@ -3130,15 +3363,24 @@ document.addEventListener('click', function(ev){
             if (!songs.length) {
               var p = document.createElement('p');
               p.className = 'aud-hint';
-              p.textContent = 'Not on HERE yet — paste its YouTube link below and it joins the box.';
+              p.textContent = "Couldn't find that one — try typing it another way (song name + artist).";
               resBox.appendChild(p);
               return;
             }
             songs.forEach(function (sg) {
-              resBox.appendChild(songRow(sg, sg.uses ? '🎵 × ' + sg.uses : ''));
+              var badge = sg.yours ? '⭐ Yours' :
+                (sg.uses ? '🎵 × ' + sg.uses : '');
+              resBox.appendChild(songRow(sg, badge));
             });
           })
-          .catch(function () {});
+          .catch(function () {
+            if ((searchIn.value || '').trim() !== query) return;
+            resBox.innerHTML = '';
+            var p = document.createElement('p');
+            p.className = 'aud-hint';
+            p.textContent = "Couldn't find that one — try typing it another way (song name + artist).";
+            resBox.appendChild(p);
+          });
       }
       searchIn.addEventListener('input', function () {
         clearTimeout(searchTimer);
@@ -3182,14 +3424,25 @@ document.addEventListener('click', function(ev){
             row.appendChild(uses);
             row.addEventListener('click', function () {
               select({ video_id: sg.video_id, title: sg.title,
-                       artist: sg.artist, thumb: sg.thumb }, '');
+                       artist: sg.artist, thumb: sg.thumb,
+                       duration: sg.duration || 0 }, '');
             });
             popBox.appendChild(row);
           });
         })
         .catch(function () {});
     }
-    return { select: select,
+    /* Trim slider: when the root carries a .mp-trim block, wire it
+       to this picker's selection + the root's .mp-startF/.mp-lenF
+       hidden fields. Media kind comes from opts.getMedia. */
+    var trimBox = q('.mp-trim');
+    if (trimBox && window.hereTrimUI) {
+      trimUI = window.hereTrimUI({
+        root: trimBox, startEl: q('.mp-startF'), lenEl: q('.mp-lenF'),
+        getMedia: opts.getMedia || null, volEl: null });
+      if (selected) trimUI.setSong(selected);
+    }
+    return { select: select, trim: trimUI,
              getSelected: function () { return selected; } };
   };
 
@@ -3223,6 +3476,7 @@ document.addEventListener('click', function(ev){
     var box = wrap.querySelector('.post-music-player');
     var vid = wrap.getAttribute('data-vid');
     var start = parseInt(wrap.getAttribute('data-start') || '0', 10) || 0;
+    var mlen = parseInt(wrap.getAttribute('data-len') || '0', 10) || 0;
     if (!box || !vid) return;
     pmBtn = btn; pmBox = box;
     box.hidden = false;
@@ -3230,10 +3484,12 @@ document.addEventListener('click', function(ev){
     box.appendChild(slot);
     window.hereLoadYT(function () {
       if (pmBtn !== btn) return;  // superseded while the API loaded
+      var pvars = { start: start, rel: 0, playsinline: 1,
+                    modestbranding: 1 };
+      if (mlen > 0) pvars.end = start + mlen;
       pmPlayer = new YT.Player(slot, {
         width: '100%', height: '200', videoId: vid,
-        playerVars: { start: start, rel: 0, playsinline: 1,
-                      modestbranding: 1 },
+        playerVars: pvars,
         events: {
           onReady: function (ev) {
             ev.target.playVideo();
