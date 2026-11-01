@@ -3215,9 +3215,9 @@ document.addEventListener('click', function(ev){
     if (!root) return null;
     opts = opts || {};
     function q(sel) { return root.querySelector(sel); }
-    var urlIn = q('.mp-url'), msg = q('.mp-msg'), card = q('.mp-card'),
+    var msg = q('.mp-msg'), card = q('.mp-card'),
         vidIn = q('.mp-vid'), urlHidden = q('.mp-urlhidden'),
-        findLink = q('.mp-find'), popBox = q('.mp-popular');
+        popBox = q('.mp-popular');
     var selected = null;
 
     function setMsg(t, isErr) {
@@ -3243,44 +3243,8 @@ document.addEventListener('click', function(ev){
       if (opts.onSelect) opts.onSelect(info);
     }
     var trimUI = null;
-    function check() {
-      var url = (urlIn.value || '').trim();
-      if (!url) { setMsg('Paste a YouTube link first.', true); return; }
-      setMsg('Checking…');
-      fetch('/music/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url })
-      }).then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d && d.ok) {
-            select({ video_id: d.video_id, title: d.title,
-                     artist: d.artist, thumb: d.thumb }, url);
-          } else {
-            setMsg((d && d.error) || "That video can't be played inside HERE.", true);
-          }
-        })
-        .catch(function () { setMsg('Could not check that link — try again.', true); });
-    }
-    var checkBtn = q('.mp-check');
-    if (checkBtn) checkBtn.addEventListener('click', check);
-    if (urlIn) {
-      urlIn.addEventListener('input', function () {
-        if (findLink) {
-          findLink.href = 'https://www.youtube.com/results?search_query=' +
-            encodeURIComponent(urlIn.value.trim());
-        }
-        // Editing the link after a successful check drops the pick.
-        if (selected && urlHidden.value &&
-            urlIn.value.trim() !== urlHidden.value) select(null);
-      });
-      urlIn.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); check(); }
-      });
-    }
     var removeBtn = q('.mp-remove');
     if (removeBtn) removeBtn.addEventListener('click', function () {
-      if (urlIn) urlIn.value = '';
       select(null);
     });
     /* Playbox type-to-find (2026-11-01): type a song name + artist
