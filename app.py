@@ -13059,17 +13059,23 @@ def _match_origin(conn, user, prof, q, use_gps):
     return None
 
 
-def _match_deck(conn, user, prof, origin, radius):
+def _match_deck(conn, user, prof, origin, radius, nearby=False):
     """Candidate cards: face-verified, not paused, gender filters
-    honoured BOTH ways, never self / swiped / blocked / unmatched."""
+    honoured BOTH ways, never self / blocked / unmatched. The
+    DECK drops everyone already swiped; NEARBY (the browse grid)
+    only drops the people you PASSED — somebody you liked stays
+    findable there, like the reference apps' Discover grid."""
     my_gender = prof["gender"]
     want = MATCH_LOOKING.get(prof["looking_for"], MATCH_LOOKING["everyone"])
     blocked = blocked_id_set(user["id"])
+    swipe_sql = ("(SELECT target_id FROM match_swipes WHERE "
+                 "swiper_id=? AND action='pass')" if nearby else
+                 "(SELECT target_id FROM match_swipes WHERE swiper_id=?)")
     rows = conn.execute(
         "SELECT mp.* FROM match_profiles mp JOIN users u "
         "ON u.id=mp.user_id WHERE mp.face_status='verified' "
         "AND mp.paused=0 AND mp.user_id!=? AND mp.user_id NOT IN "
-        "(SELECT target_id FROM match_swipes WHERE swiper_id=?) "
+        + swipe_sql + " "
         "AND mp.user_id NOT IN (SELECT other_id FROM match_unmatches "
         "WHERE user_id=?) AND mp.user_id NOT IN (SELECT user_id FROM "
         "match_unmatches WHERE other_id=?) "
@@ -13642,7 +13648,8 @@ async def match_nearby(request: Request, tab: str = "everyone",
     conn = gate
     origin = _match_origin(conn, user, prof, q, gps)
     eff_radius = radius or (50 if (q or gps) else 0)
-    cards = _match_deck(conn, user, prof, origin, eff_radius)
+    cards = _match_deck(conn, user, prof, origin, eff_radius,
+                        nearby=True)
     if tab == "foryou":
         mine = {x.strip().lower()
                 for x in (prof["interests"] or "").split(",")

@@ -384,6 +384,19 @@ check("full profile view renders with the facts block",
 r = Nc.get(f"/match/view/{KID}")
 check("view refuses profiles that are not face-verified",
       r.status_code in (302, 303))
+Nc.post("/match/swipe", data={"target_id": str(NOAH),
+                              "action": "like"})
+r = Nc.get("/match/nearby")
+check("nearby still shows someone she liked",
+      "Noah North" in r.text)
+r = Nc.get("/match/nearby")
+check("nearby shows Victor before any decision",
+      "Victor Vibe" in r.text)
+Nc.post("/match/swipe", data={"target_id": str(VICTOR),
+                              "action": "pass"})
+r = Nc.get("/match/nearby")
+check("nearby hides someone she passed",
+      "Victor Vibe" not in r.text)
 
 # deck filters: age range + habits (all free)
 r = Oc.get("/match?agemin=40")
