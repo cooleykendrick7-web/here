@@ -965,6 +965,76 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS blocks (
         blocker_id INTEGER NOT NULL, blocked_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(blocker_id, blocked_id))""")
+    # --- Match Here (dating, Ken's order Nov 1, 2026) ---
+    # 18+ only, free. A dating profile is separate from the HERE
+    # profile; nobody enters the deck until the owner face-checks a
+    # code-word selfie against the profile's photos (anti-catfish).
+    c.execute("""CREATE TABLE IF NOT EXISTS match_profiles (
+        user_id INTEGER PRIMARY KEY,
+        dob TEXT NOT NULL DEFAULT '',
+        gender TEXT NOT NULL DEFAULT '',
+        looking_for TEXT NOT NULL DEFAULT 'everyone',
+        city TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT '',
+        zip TEXT NOT NULL DEFAULT '',
+        lat REAL, lon REAL,
+        gps_lat REAL, gps_lon REAL,
+        height_in INTEGER NOT NULL DEFAULT 0,
+        faith TEXT NOT NULL DEFAULT '',
+        smoke TEXT NOT NULL DEFAULT '',
+        drink TEXT NOT NULL DEFAULT '',
+        interests TEXT NOT NULL DEFAULT '',
+        about TEXT NOT NULL DEFAULT '',
+        photos TEXT NOT NULL DEFAULT '[]',
+        paused INTEGER NOT NULL DEFAULT 0,
+        face_status TEXT NOT NULL DEFAULT 'none',
+        face_code TEXT NOT NULL DEFAULT '',
+        face_selfie TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS match_swipes (
+        swiper_id INTEGER NOT NULL, target_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(swiper_id, target_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS match_unmatches (
+        user_id INTEGER NOT NULL, other_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, other_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS match_taps (
+        user_id INTEGER NOT NULL, target_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS zip_geo (
+        zip TEXT PRIMARY KEY, city TEXT DEFAULT '',
+        state TEXT DEFAULT '', lat REAL, lon REAL)""")
+    # US ZIP centroids (GeoNames public data, data/uszips.csv) load
+    # once; they power Match Here's city/ZIP search + distances.
+    try:
+        _zc = c.execute("SELECT COUNT(*) FROM zip_geo").fetchone()[0]
+        if not _zc:
+            _zpath = os.path.join(BASE, "data", "uszips.csv")
+            if os.path.exists(_zpath):
+                _rows = []
+                with open(_zpath, encoding="utf-8") as _zf:
+                    next(_zf, None)
+                    for _line in _zf:
+                        _line = _line.rstrip("\n")
+                        if not _line:
+                            continue
+                        _tail = _line.rsplit(",", 3)
+                        if len(_tail) != 4:
+                            continue
+                        _head, _st, _la, _lo = _tail
+                        _z, _, _ci = _head.partition(",")
+                        try:
+                            _rows.append((_z.strip(), _ci.strip(),
+                                          _st.strip(), float(_la),
+                                          float(_lo)))
+                        except ValueError:
+                            continue
+                c.executemany(
+                    "INSERT OR IGNORE INTO zip_geo(zip, city, state, "
+                    "lat, lon) VALUES(?,?,?,?,?)", _rows)
+    except Exception:
+        pass
     _user_cols_now = [r["name"] for r in
                       c.execute("PRAGMA table_info(users)").fetchall()]
     if "private_profile" not in _user_cols_now:
@@ -12750,6 +12820,712 @@ def _race_invitees(conn, inviter_id):
             "qualified": bool(posts["c"] or lv["c"] or tx["c"]),
             "last_active": max(stamps) if stamps else ""})
     return out
+
+
+
+
+# ---------------- Match Here (dating) ----------------
+# Ken's order Nov 1, 2026: a free dating wing inside HERE, 18+ only.
+# Swipe left = pass, swipe right / heart = a like (secret until it's
+# mutual), Tap = the loud knock. Nobody enters the deck until the
+# owner face-checks their code-word selfie against their profile
+# photos — no catfish. Discovery by typed city/ZIP or GPS distance;
+# only a distance is ever shown, never a location. Mute/Block/Unmatch/
+# Report ride the platform's existing privacy + flag rails.
+MATCH_TAP_DAILY = 20
+MATCH_GENDERS = {"woman": "Woman", "man": "Man", "other": "Other"}
+MATCH_LOOKING = {"women": ("woman",), "men": ("man",),
+                 "everyone": ("woman", "man", "other")}
+MATCH_FAITHS = ["Christian", "Other faith", "Not religious",
+                "Prefer not to say"]
+MATCH_HABITS = ["No", "Occasionally", "Yes"]
+
+
+def _match_age(dob_str):
+    try:
+        d = date.fromisoformat((dob_str or "")[:10])
+    except ValueError:
+        return None
+    t = date.today()
+    return t.year - d.year - ((t.month, t.day) < (d.month, d.day))
+
+
+def _match_profile(conn, uid):
+    return conn.execute(
+        "SELECT * FROM match_profiles WHERE user_id=?",
+        (uid,)).fetchone()
+
+
+def _match_photos(prof):
+    try:
+        out = json.loads(prof["photos"] or "[]")
+        return [p for p in out if p]
+    except Exception:
+        return []
+
+
+def _match_miles(lat1, lon1, lat2, lon2):
+    if None in (lat1, lon1, lat2, lon2):
+        return None
+    import math
+    r = 3958.8
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = (math.sin(dp / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _match_is_match(conn, a, b):
+    """A live match: mutual likes, no unmatch, no block either way."""
+    if blocked_either_way(a, b):
+        return False
+    u = conn.execute(
+        "SELECT 1 FROM match_unmatches WHERE (user_id=? AND other_id=?) "
+        "OR (user_id=? AND other_id=?)", (a, b, b, a)).fetchone()
+    if u:
+        return False
+    rows = conn.execute(
+        "SELECT swiper_id FROM match_swipes WHERE action='like' AND "
+        "((swiper_id=? AND target_id=?) OR (swiper_id=? AND target_id=?))",
+        (a, b, b, a)).fetchall()
+    return len(rows) == 2
+
+
+def _match_matches(conn, uid):
+    """User ids uid is currently matched with (newest match first)."""
+    liked = {r["target_id"] for r in conn.execute(
+        "SELECT target_id FROM match_swipes WHERE swiper_id=? "
+        "AND action='like'", (uid,)).fetchall()}
+    out = []
+    for tid in liked:
+        back = conn.execute(
+            "SELECT created_at FROM match_swipes WHERE swiper_id=? "
+            "AND target_id=? AND action='like'",
+            (tid, uid)).fetchone()
+        if back and _match_is_match(conn, uid, tid):
+            out.append((tid, back["created_at"]))
+    out.sort(key=lambda x: x[1], reverse=True)
+    return [t for t, _ in out]
+
+
+def _match_card(conn, prof, viewer_prof, origin):
+    """One deck/match card dict for a match_profiles row."""
+    u = get_user(prof["user_id"])
+    if not u:
+        return None
+    photos = ["/uploads/" + p for p in _match_photos(prof)]
+    dist = None
+    if origin and prof["lat"] is not None:
+        d = _match_miles(origin[0], origin[1], prof["lat"], prof["lon"])
+        if d is not None:
+            dist = max(1, round(d))
+    hin = prof["height_in"] or 0
+    interests = [s.strip() for s in (prof["interests"] or "").split(",")
+                 if s.strip()][:8]
+    return {
+        "user_id": prof["user_id"], "name": u["name"],
+        "avatar": avatar_url(u["avatar"]),
+        "is_verified": bool(u["is_verified"]),
+        "age": _match_age(prof["dob"]),
+        "city": prof["city"], "state": prof["state"],
+        "photos": photos, "photo": photos[0] if photos else "",
+        "distance": dist,
+        "gender_label": MATCH_GENDERS.get(prof["gender"], ""),
+        "height": (f"{hin // 12}'{hin % 12}\"" if hin else ""),
+        "faith": prof["faith"], "smoke": prof["smoke"],
+        "drink": prof["drink"], "interests": interests,
+        "about": prof["about"] or "",
+    }
+
+
+def _match_origin(conn, user, prof, q, use_gps):
+    """(lat, lon) the deck measures from: a typed city/ZIP first,
+    then the viewer's GPS point, then their own ZIP — or None."""
+    if q:
+        q = q.strip()
+        row = None
+        if q.isdigit() and len(q) == 5:
+            row = conn.execute("SELECT * FROM zip_geo WHERE zip=?",
+                               (q,)).fetchone()
+        if not row:
+            rows = conn.execute(
+                "SELECT * FROM zip_geo WHERE lower(city)=lower(?)",
+                (q,)).fetchall()
+            if rows:
+                # Many states have a Jackson: the city the viewer
+                # means is the one nearest THEM.
+                anchor = None
+                if prof and prof["gps_lat"] is not None:
+                    anchor = (prof["gps_lat"], prof["gps_lon"])
+                elif prof and prof["lat"] is not None:
+                    anchor = (prof["lat"], prof["lon"])
+                if anchor:
+                    row = min(rows, key=lambda r: _match_miles(
+                        anchor[0], anchor[1], r["lat"], r["lon"])
+                        or 1e9)
+                else:
+                    row = rows[0]
+        if row:
+            return (row["lat"], row["lon"])
+    if use_gps and prof and prof["gps_lat"] is not None:
+        return (prof["gps_lat"], prof["gps_lon"])
+    if prof and prof["lat"] is not None:
+        return (prof["lat"], prof["lon"])
+    return None
+
+
+def _match_deck(conn, user, prof, origin, radius):
+    """Candidate cards: face-verified, not paused, gender filters
+    honoured BOTH ways, never self / swiped / blocked / unmatched."""
+    my_gender = prof["gender"]
+    want = MATCH_LOOKING.get(prof["looking_for"], MATCH_LOOKING["everyone"])
+    blocked = blocked_id_set(user["id"])
+    rows = conn.execute(
+        "SELECT mp.* FROM match_profiles mp JOIN users u "
+        "ON u.id=mp.user_id WHERE mp.face_status='verified' "
+        "AND mp.paused=0 AND mp.user_id!=? AND mp.user_id NOT IN "
+        "(SELECT target_id FROM match_swipes WHERE swiper_id=?) "
+        "AND mp.user_id NOT IN (SELECT other_id FROM match_unmatches "
+        "WHERE user_id=?) AND mp.user_id NOT IN (SELECT user_id FROM "
+        "match_unmatches WHERE other_id=?) "
+        "ORDER BY u.last_seen_at DESC", (user["id"], user["id"],
+        user["id"], user["id"])).fetchall()
+    cards = []
+    for p in rows:
+        if p["user_id"] in blocked:
+            continue
+        if p["gender"] not in want:
+            continue
+        their_want = MATCH_LOOKING.get(
+            p["looking_for"], MATCH_LOOKING["everyone"])
+        if my_gender and my_gender not in their_want:
+            continue
+        card = _match_card(conn, p, prof, origin)
+        if not card:
+            continue
+        if radius and origin:
+            if card["distance"] is None or card["distance"] > radius:
+                continue
+        cards.append(card)
+    if origin:
+        cards.sort(key=lambda c: (c["distance"] is None,
+                                  c["distance"] or 0))
+    else:
+        my_state = (prof["state"] or "").upper()
+        cards.sort(key=lambda c: 0 if (c["state"] or "").upper()
+                   == my_state else 1)
+    return cards
+
+
+def _match_new_code():
+    return "MATCH-" + str(secrets.randbelow(9000) + 1000)
+
+
+@app.get("/match", response_class=HTMLResponse)
+async def match_home(request: Request, q: str = "", radius: int = 0,
+                     gps: int = 0):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    if not prof:
+        conn.close()
+        return render(request, "match.html", {"mode": "landing"})
+    if prof["face_status"] in ("none", "denied"):
+        mode = "needverify" if prof["face_status"] == "none" else "denied"
+        conn.close()
+        return render(request, "match.html", {"mode": mode})
+    if prof["face_status"] == "pending":
+        conn.close()
+        return render(request, "match.html", {"mode": "pending"})
+    matches = _match_matches(conn, user["id"])
+    if prof["paused"]:
+        conn.close()
+        return render(request, "match.html", {
+            "mode": "paused", "match_count": len(matches)})
+    origin = _match_origin(conn, user, prof, q, gps)
+    eff_radius = radius or (50 if (q or gps) else 0)
+    cards = _match_deck(conn, user, prof, origin, eff_radius)
+    conn.close()
+    return render(request, "match.html", {
+        "mode": "deck" if cards else "empty",
+        "card": cards[0] if cards else None,
+        "deck_count": len(cards), "match_count": len(matches),
+        "q": q, "radius": eff_radius, "gps": gps})
+
+
+@app.get("/match/setup", response_class=HTMLResponse)
+async def match_setup(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    conn.close()
+    p = dict(prof) if prof else {}
+    p.setdefault("looking_for", "everyone")
+    photos = ["/uploads/" + x for x in _match_photos(prof)] if prof else []
+    hin = p.get("height_in") or 0
+    return render(request, "match_setup.html", {
+        "p": p, "photos": photos,
+        "raw_photos": _match_photos(prof) if prof else [],
+        "height_ft": hin // 12 if hin else "",
+        "height_in": hin % 12 if hin else "",
+        "faiths": MATCH_FAITHS, "habits": MATCH_HABITS,
+        "genders": MATCH_GENDERS})
+
+
+@app.post("/match/setup")
+async def match_setup_save(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    dob = (form.get("dob") or "").strip()
+    age = _match_age(dob)
+    if age is None:
+        return redir("/match/setup", "Enter your date of birth.")
+    if age < 18:
+        return redir("/match/setup",
+                     "Match Here is 18+ only — come back when you're 18.")
+    if age > 100:
+        return redir("/match/setup", "That birthdate doesn't look right.")
+    gender = (form.get("gender") or "").strip()
+    if gender not in MATCH_GENDERS:
+        return redir("/match/setup", "Pick the option that fits you.")
+    looking = (form.get("looking_for") or "everyone").strip()
+    if looking not in MATCH_LOOKING:
+        looking = "everyone"
+    zipc = (form.get("zip") or "").strip()
+    conn = db()
+    zrow = conn.execute("SELECT * FROM zip_geo WHERE zip=?",
+                        (zipc,)).fetchone() if zipc else None
+    if not zrow:
+        conn.close()
+        return redir("/match/setup",
+                     "That ZIP code didn't come up — check it and "
+                     "try again.")
+    city = (form.get("city") or "").strip()[:60] or zrow["city"]
+    state = (form.get("state") or "").strip().upper()[:2] or zrow["state"]
+    try:
+        hft = int(form.get("height_ft") or 0)
+        hin = int(form.get("height_in") or 0)
+    except ValueError:
+        hft, hin = 0, 0
+    height_in = hft * 12 + hin if 3 <= hft <= 8 else 0
+    faith = (form.get("faith") or "").strip()
+    if faith not in MATCH_FAITHS:
+        faith = ""
+    smoke = (form.get("smoke") or "").strip()
+    drink = (form.get("drink") or "").strip()
+    if smoke not in MATCH_HABITS:
+        smoke = ""
+    if drink not in MATCH_HABITS:
+        drink = ""
+    interests = (form.get("interests") or "").strip()[:140]
+    about = (form.get("about") or "").strip()[:300]
+    prof = _match_profile(conn, user["id"])
+    photos = _match_photos(prof) if prof else []
+    drop = set(form.getlist("photo_del"))
+    photos = [p for p in photos if p not in drop]
+    for key in ("photo1", "photo2", "photo3", "photo4"):
+        up = form.get(key)
+        if up is not None and getattr(up, "filename", ""):
+            if len(photos) >= 4:
+                break
+            try:
+                path = save_upload(up, "match", {"jpg", "jpeg", "png",
+                                                 "webp"})
+            except ValueError as e:
+                conn.close()
+                return redir("/match/setup", str(e))
+            if path:
+                photos.append(path)
+    if not photos:
+        conn.close()
+        return redir("/match/setup",
+                     "Add at least one photo of you — real photos "
+                     "only, that's the rule of the room.")
+    now = now_iso()
+    if prof:
+        conn.execute(
+            "UPDATE match_profiles SET dob=?, gender=?, looking_for=?, "
+            "city=?, state=?, zip=?, lat=?, lon=?, height_in=?, "
+            "faith=?, smoke=?, drink=?, interests=?, about=?, "
+            "photos=?, updated_at=? WHERE user_id=?",
+            (dob, gender, looking, city, state, zipc, zrow["lat"],
+             zrow["lon"], height_in, faith, smoke, drink, interests,
+             about, json.dumps(photos), now, user["id"]))
+    else:
+        conn.execute(
+            "INSERT INTO match_profiles(user_id, dob, gender, "
+            "looking_for, city, state, zip, lat, lon, height_in, "
+            "faith, smoke, drink, interests, about, photos, "
+            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,"
+            "?,?,?,?,?,?)",
+            (user["id"], dob, gender, looking, city, state, zipc,
+             zrow["lat"], zrow["lon"], height_in, faith, smoke, drink,
+             interests, about, json.dumps(photos), now, now))
+    conn.commit()
+    conn.close()
+    prof2 = None
+    conn = db()
+    prof2 = _match_profile(conn, user["id"])
+    conn.close()
+    if prof2 and prof2["face_status"] == "verified":
+        return redir("/match", "Dating profile saved. 💘")
+    return redir("/match/verify",
+                 "Profile saved — one step left: verify your face.")
+
+
+@app.get("/match/verify", response_class=HTMLResponse)
+async def match_verify(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    if not prof:
+        conn.close()
+        return redir("/match/setup", "Set up your dating profile first.")
+    if prof["face_status"] == "verified":
+        conn.close()
+        return render(request, "match_verify.html", {"mode": "done"})
+    if prof["face_status"] == "pending":
+        conn.close()
+        return render(request, "match_verify.html", {"mode": "pending"})
+    code = prof["face_code"]
+    if not code:
+        code = _match_new_code()
+        conn.execute(
+            "UPDATE match_profiles SET face_code=? WHERE user_id=?",
+            (code, user["id"]))
+        conn.commit()
+    conn.close()
+    return render(request, "match_verify.html",
+                  {"mode": "form", "code": code})
+
+
+@app.post("/match/verify")
+async def match_verify_save(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    if not prof:
+        conn.close()
+        return redir("/match/setup", "Set up your dating profile first.")
+    if prof["face_status"] in ("verified", "pending"):
+        conn.close()
+        return redir("/match", "Your face check is already handled.")
+    up = form.get("selfie")
+    if up is None or not getattr(up, "filename", ""):
+        conn.close()
+        return redir("/match/verify", "Take the selfie to continue.")
+    try:
+        path = save_upload(up, "matchface", {"jpg", "jpeg", "png",
+                                             "webp"})
+    except ValueError as e:
+        conn.close()
+        return redir("/match/verify", str(e))
+    code = prof["face_code"] or _match_new_code()
+    conn.execute(
+        "UPDATE match_profiles SET face_status='pending', "
+        "face_selfie=?, face_code=?, updated_at=? WHERE user_id=?",
+        (path, code, now_iso(), user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/match",
+                 "Selfie sent — the owner checks every face by hand. "
+                 "You'll get a notification the moment you're in. 💘")
+
+
+@app.post("/match/swipe")
+async def match_swipe(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    try:
+        tid = int(form.get("target_id") or 0)
+    except ValueError:
+        tid = 0
+    action = (form.get("action") or "").strip()
+    q = (form.get("q") or "").strip()
+    try:
+        radius = int(form.get("radius") or 0)
+    except ValueError:
+        radius = 0
+    gps = 1 if (form.get("gps") or "") == "1" else 0
+    dest = "/match"
+    params = {}
+    if q:
+        params["q"] = q
+    if radius:
+        params["radius"] = radius
+    if gps:
+        params["gps"] = 1
+    if params:
+        dest = "/match?" + urlencode(params)
+    if not tid or tid == user["id"] or action not in ("like", "pass"):
+        return redir(dest)
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    target = _match_profile(conn, tid)
+    if (not prof or prof["face_status"] != "verified" or not target
+            or target["face_status"] != "verified"
+            or blocked_either_way(user["id"], tid)):
+        conn.close()
+        return redir(dest)
+    conn.execute(
+        "INSERT OR REPLACE INTO match_swipes(swiper_id, target_id, "
+        "action, created_at) VALUES(?,?,?,?)",
+        (user["id"], tid, action, now_iso()))
+    conn.commit()
+    is_match = action == "like" and _match_is_match(conn, user["id"], tid)
+    conn.close()
+    if is_match:
+        t = get_user(tid)
+        notify(tid, "match",
+               f"💘 It's a match! You and {user['name']} liked each "
+               "other on Match Here.", "/match/matches",
+               actor_id=user["id"])
+        return redir(dest, f"💘 It's a match with {t['name'] if t else 'them'}! "
+                           "Find them under My Matches.")
+    return redir(dest)
+
+
+@app.post("/match/tap/{uid}")
+async def match_tap(request: Request, uid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    if uid == user["id"]:
+        return back(request, "/match")
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    target = _match_profile(conn, uid)
+    if (not prof or prof["face_status"] != "verified" or not target
+            or target["face_status"] != "verified"
+            or blocked_either_way(user["id"], uid)):
+        conn.close()
+        return back(request, "/match")
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=24)).isoformat()
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM match_taps WHERE user_id=? "
+        "AND created_at>=?", (user["id"], cutoff)).fetchone()["c"]
+    if n >= MATCH_TAP_DAILY:
+        conn.close()
+        return redir("/match",
+                     "You've used your Taps for today — a Tap stays "
+                     "special because it's limited. 💘")
+    conn.execute(
+        "INSERT INTO match_taps(user_id, target_id, created_at) "
+        "VALUES(?,?,?)", (user["id"], uid, now_iso()))
+    conn.execute(
+        "INSERT INTO taps(tapper_id, tapped_id, created_at) "
+        "VALUES(?,?,?)", (user["id"], uid, now_iso()))
+    conn.commit()
+    conn.close()
+    notify(uid, "tap",
+           f"{user['name']} tapped you on Match Here — they're "
+           "interested. 💘", "/match", actor_id=user["id"])
+    return back(request, "/match")
+
+
+@app.get("/match/matches", response_class=HTMLResponse)
+async def match_matches_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    if not prof or prof["face_status"] != "verified":
+        conn.close()
+        return redir("/match")
+    origin = None
+    if prof["gps_lat"] is not None:
+        origin = (prof["gps_lat"], prof["gps_lon"])
+    elif prof["lat"] is not None:
+        origin = (prof["lat"], prof["lon"])
+    muted = muted_id_set(user["id"])
+    cards = []
+    for tid in _match_matches(conn, user["id"]):
+        tp = _match_profile(conn, tid)
+        if not tp:
+            continue
+        card = _match_card(conn, tp, prof, origin)
+        if card:
+            card["muted"] = tid in muted
+            cards.append(card)
+    conn.close()
+    return render(request, "match_matches.html", {"cards": cards})
+
+
+@app.post("/match/unmatch")
+async def match_unmatch(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    try:
+        tid = int(form.get("target_id") or 0)
+    except ValueError:
+        tid = 0
+    if tid and tid != user["id"]:
+        conn = db()
+        now = now_iso()
+        conn.execute(
+            "INSERT OR IGNORE INTO match_unmatches(user_id, other_id, "
+            "created_at) VALUES(?,?,?)", (user["id"], tid, now))
+        conn.execute(
+            "INSERT OR IGNORE INTO match_unmatches(user_id, other_id, "
+            "created_at) VALUES(?,?,?)", (tid, user["id"], now))
+        conn.commit()
+        conn.close()
+    return redir("/match/matches", "Unmatched. They won't see you "
+                                   "in Match Here again.")
+
+
+@app.post("/match/report")
+async def match_report(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    try:
+        tid = int(form.get("target_id") or 0)
+    except ValueError:
+        tid = 0
+    reason = (form.get("reason") or "").strip()[:200] or "No reason given"
+    if tid and tid != user["id"] and get_user(tid):
+        conn = db()
+        conn.execute(
+            "INSERT INTO moderation_flags(item_type, item_id, "
+            "author_id, reasons, excerpt, status, created_at) "
+            "VALUES('match_profile',?,?,?,?, 'pending',?)",
+            (tid, tid, "match report: " + reason,
+             f"Reported by {user['name']} (#{user['id']}) from "
+             f"Match Here", now_iso()))
+        conn.commit()
+        conn.close()
+    return back(request, "/match/matches")
+
+
+@app.post("/match/pause")
+async def match_pause(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    if prof:
+        conn.execute(
+            "UPDATE match_profiles SET paused=?, updated_at=? "
+            "WHERE user_id=?",
+            (0 if prof["paused"] else 1, now_iso(), user["id"]))
+        conn.commit()
+    conn.close()
+    return redir("/match")
+
+
+@app.post("/match/gps")
+async def match_gps(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    try:
+        data = await request.json()
+        lat = float(data.get("lat"))
+        lon = float(data.get("lon"))
+    except Exception:
+        return JSONResponse({"ok": False}, status_code=400)
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return JSONResponse({"ok": False}, status_code=400)
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    if prof:
+        conn.execute(
+            "UPDATE match_profiles SET gps_lat=?, gps_lon=?, "
+            "updated_at=? WHERE user_id=?",
+            (lat, lon, now_iso(), user["id"]))
+        conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/owner/match", response_class=HTMLResponse)
+async def owner_match(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    rows = conn.execute(
+        "SELECT mp.*, u.name, u.email, u.avatar FROM match_profiles mp "
+        "JOIN users u ON u.id=mp.user_id WHERE mp.face_status='pending' "
+        "ORDER BY mp.updated_at ASC").fetchall()
+    queue = []
+    for r in rows:
+        queue.append({
+            "user_id": r["user_id"], "name": r["name"],
+            "email": r["email"], "age": _match_age(r["dob"]),
+            "city": r["city"], "state": r["state"],
+            "code": r["face_code"],
+            "selfie": ("/uploads/" + r["face_selfie"])
+            if r["face_selfie"] else "",
+            "photos": ["/uploads/" + p for p in _match_photos(r)]})
+    flags = conn.execute(
+        "SELECT f.*, u.name AS target_name FROM moderation_flags f "
+        "LEFT JOIN users u ON u.id=f.item_id WHERE "
+        "f.item_type='match_profile' AND f.status='pending' "
+        "ORDER BY f.created_at DESC LIMIT 50").fetchall()
+    conn.close()
+    return render(request, "owner/match.html",
+                  {"queue": queue, "flags": flags})
+
+
+@app.post("/owner/match/{uid}/face")
+async def owner_match_face(request: Request, uid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    form = await request.form()
+    decision = (form.get("decision") or "").strip()
+    conn = db()
+    prof = _match_profile(conn, uid)
+    if prof and prof["face_status"] == "pending":
+        if decision == "approve":
+            conn.execute(
+                "UPDATE match_profiles SET face_status='verified', "
+                "updated_at=? WHERE user_id=?", (now_iso(), uid))
+            conn.commit()
+            conn.close()
+            notify(uid, "match",
+                   "💘 Your face is verified — welcome to Match Here! "
+                   "Your profile is in the deck now.", "/match")
+            return redir("/owner/match", "Face verified. 💘")
+        if decision == "deny":
+            conn.execute(
+                "UPDATE match_profiles SET face_status='denied', "
+                "face_selfie='', face_code=?, updated_at=? "
+                "WHERE user_id=?",
+                (_match_new_code(), now_iso(), uid))
+            conn.commit()
+            conn.close()
+            notify(uid, "match",
+                   "Your Match Here face check didn't pass — the "
+                   "selfie has to show YOU holding your code, matching "
+                   "your profile photos. Try again from Match Here.",
+                   "/match")
+            return redir("/owner/match", "Face check denied.")
+    conn.close()
+    return redir("/owner/match")
 
 
 @app.get("/invite-race", response_class=HTMLResponse)

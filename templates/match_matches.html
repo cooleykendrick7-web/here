@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}💘 My Matches — Match Here{% endblock %}
+{% block content %}
+<div style="max-width:560px;margin:0 auto;padding:8px 2px 34px">
+  <div style="text-align:center;padding:12px 8px 2px">
+    <img src="/static/match-here.png" alt="Match Here" style="width:66px;height:66px;border-radius:16px">
+    <h1 style="font-size:23px;margin:8px 0 2px">My Matches</h1>
+    <p style="opacity:.85;margin:0">You liked each other. The rest is up to you. 💘</p>
+  </div>
+  <p style="text-align:center;margin-top:10px"><a class="btn-ghost" href="/match">← Back to the deck</a></p>
+
+  {% if not cards %}
+  <div class="card" style="margin-top:16px;text-align:center">
+    <div style="font-size:40px">💌</div>
+    <div class="section-title">No matches yet</div>
+    <p style="margin-top:8px;line-height:1.55">When you and somebody else both tap the heart, they land here. Keep swiping — and remember the 🖐 Tap if you want somebody to know right now.</p>
+  </div>
+  {% endif %}
+
+  {% for c in cards %}
+  <div class="card" style="margin-top:14px">
+    <div style="display:flex;gap:14px;align-items:center">
+      {% if c.photo %}<img src="{{ c.photo|e }}" alt="" style="width:86px;height:86px;object-fit:cover;border-radius:16px">{% elif c.avatar %}<img src="{{ c.avatar|e }}" alt="" style="width:86px;height:86px;object-fit:cover;border-radius:16px">{% endif %}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:19px;font-weight:800">{{ c.name|e }}{% if c.age %}, {{ c.age }}{% endif %}{% if c.is_verified %} <span style="color:#ffd400">★</span>{% endif %}</div>
+        <div style="opacity:.85;font-size:14.5px">📍 {{ c.city|e }}{% if c.state %}, {{ c.state|e }}{% endif %}{% if c.distance %} · ~{{ c.distance }} mi away{% endif %}</div>
+        <div style="font-size:13.5px;color:#1db954;font-weight:700">✔ Face Verified</div>
+        {% if c.about %}<div style="font-size:14.5px;margin-top:4px;line-height:1.45">“{{ c.about|e }}”</div>{% endif %}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <a class="btn" href="/messages/{{ c.user_id }}">💬 Message</a>
+      <form method="post" action="/tap/{{ c.user_id }}" style="display:inline"><button class="btn-ghost" type="submit">🖐 Tap</button></form>
+      {% if c.muted %}
+      <form method="post" action="/unmute/{{ c.user_id }}" style="display:inline"><button class="btn-ghost" type="submit">🔔 Unmute</button></form>
+      {% else %}
+      <form method="post" action="/mute/{{ c.user_id }}" style="display:inline"><button class="btn-ghost" type="submit" title="Stop hearing from them — they're never told">🔇 Mute</button></form>
+      {% endif %}
+      <form method="post" action="/match/unmatch" style="display:inline" onsubmit="return confirm('Unmatch {{ c.name|e }}? This closes the match for good.')">
+        <input type="hidden" name="target_id" value="{{ c.user_id }}">
+        <button class="btn-ghost" type="submit">💔 Unmatch</button>
+      </form>
+      <form method="post" action="/block/{{ c.user_id }}" style="display:inline" onsubmit="return confirm('Block {{ c.name|e }}? You go invisible to each other everywhere on HERE.')">
+        <button class="btn-ghost" type="submit">🚫 Block</button>
+      </form>
+    </div>
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:14px;opacity:.85">⚠️ Report this person</summary>
+      <form method="post" action="/match/report" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <input type="hidden" name="target_id" value="{{ c.user_id }}">
+        <input type="text" name="reason" maxlength="200" placeholder="What's wrong? (goes to the owner)" style="flex:1;min-width:200px;padding:9px 11px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+        <button class="btn-ghost" type="submit">Send report</button>
+      </form>
+    </details>
+  </div>
+  {% endfor %}
+
+  <p style="text-align:center;opacity:.75;font-size:13.5px;margin-top:16px">First meet? Keep it public, tell a friend. 🔇 Mute is silent — they're never told. 🚫 Block is forever and works both ways.</p>
+</div>
+{% endblock %}

@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}💘 My dating profile — Match Here{% endblock %}
+{% block content %}
+<div style="max-width:560px;margin:0 auto;padding:8px 2px 34px">
+  <div style="text-align:center;padding:12px 8px 2px">
+    <img src="/static/match-here.png" alt="Match Here" style="width:74px;height:74px;border-radius:18px">
+    <h1 style="font-size:23px;margin:8px 0 2px">My dating profile</h1>
+    <p style="opacity:.85;margin:0">This is separate from your HERE profile — it's how people meet you in Match Here. 🔞 18+ only.</p>
+  </div>
+
+  <form method="post" action="/match/setup" enctype="multipart/form-data" class="card" style="margin-top:14px;display:flex;flex-direction:column;gap:13px">
+    <label style="display:block">
+      <span style="font-weight:700">Date of birth</span><br>
+      <input type="date" name="dob" required value="{{ p.dob|e }}" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+      <span style="opacity:.7;font-size:13px">Match Here is 18 and older only. Your age shows on your card; your birthdate never does.</span>
+    </label>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <label style="flex:1;min-width:150px">
+        <span style="font-weight:700">I am a</span><br>
+        <select name="gender" required style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">Pick one…</option>
+          {% for k, label in genders.items() %}
+          <option value="{{ k }}" {% if p.gender == k %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label style="flex:1;min-width:150px">
+        <span style="font-weight:700">I'm looking for</span><br>
+        <select name="looking_for" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="women" {% if p.looking_for == 'women' %}selected{% endif %}>Women</option>
+          <option value="men" {% if p.looking_for == 'men' %}selected{% endif %}>Men</option>
+          <option value="everyone" {% if p.looking_for == 'everyone' %}selected{% endif %}>Everyone</option>
+        </select>
+      </label>
+    </div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <label style="flex:2;min-width:150px">
+        <span style="font-weight:700">City — where you're from</span><br>
+        <input type="text" name="city" maxlength="60" value="{{ p.city|e }}" placeholder="Jackson" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+      </label>
+      <label style="flex:1;min-width:80px">
+        <span style="font-weight:700">State</span><br>
+        <input type="text" name="state" maxlength="2" value="{{ p.state|e }}" placeholder="MS" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px;text-transform:uppercase">
+      </label>
+      <label style="flex:1;min-width:100px">
+        <span style="font-weight:700">ZIP code</span><br>
+        <input type="text" name="zip" maxlength="5" inputmode="numeric" required value="{{ p.zip|e }}" placeholder="39201" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+      </label>
+    </div>
+    <p style="opacity:.7;font-size:13px;margin:-6px 0 0">Your ZIP powers near-you matches. People see your city and a distance — never your address, never a map pin.</p>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <label style="flex:1;min-width:120px">
+        <span style="font-weight:700">Height</span><br>
+        <span style="display:flex;gap:8px;margin-top:4px">
+          <select name="height_ft" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+            <option value="">ft</option>
+            {% for ft in range(4, 8) %}<option value="{{ ft }}" {% if height_ft == ft %}selected{% endif %}>{{ ft }} ft</option>{% endfor %}
+          </select>
+          <select name="height_in" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+            <option value="">in</option>
+            {% for inch in range(0, 12) %}<option value="{{ inch }}" {% if height_in == inch and height_ft %}selected{% endif %}>{{ inch }} in</option>{% endfor %}
+          </select>
+        </span>
+      </label>
+      <label style="flex:1;min-width:150px">
+        <span style="font-weight:700">Faith</span><br>
+        <select name="faith" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">Prefer not to say</option>
+          {% for f in faiths %}<option value="{{ f }}" {% if p.faith == f %}selected{% endif %}>{{ f }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <label style="flex:1;min-width:140px">
+        <span style="font-weight:700">Do you smoke?</span><br>
+        <select name="smoke" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">Prefer not to say</option>
+          {% for h in habits %}<option value="{{ h }}" {% if p.smoke == h %}selected{% endif %}>{{ h }}</option>{% endfor %}
+        </select>
+      </label>
+      <label style="flex:1;min-width:140px">
+        <span style="font-weight:700">Do you drink?</span><br>
+        <select name="drink" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">Prefer not to say</option>
+          {% for h in habits %}<option value="{{ h }}" {% if p.drink == h %}selected{% endif %}>{{ h }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <label style="display:block">
+      <span style="font-weight:700">Interests</span><br>
+      <input type="text" name="interests" maxlength="140" value="{{ p.interests|e }}" placeholder="Music, cars, church, fishing, cooking" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+      <span style="opacity:.7;font-size:13px">Separate them with commas.</span>
+    </label>
+
+    <label style="display:block">
+      <span style="font-weight:700">About me — one or two lines</span><br>
+      <textarea name="about" maxlength="300" rows="3" placeholder="Say it like you'd say it in person." style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">{{ p.about|e }}</textarea>
+    </label>
+
+    <div>
+      <span style="font-weight:700">My photos (up to 4)</span>
+      {% if photos %}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+        {% for ph in photos %}
+        <label style="text-align:center;font-size:12px">
+          <img src="{{ ph|e }}" alt="" style="width:74px;height:74px;object-fit:cover;border-radius:12px;display:block">
+          <input type="checkbox" name="photo_del" value="{{ raw_photos[loop.index0]|e }}"> remove
+        </label>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
+        <input type="file" name="photo1" accept="image/*">
+        <input type="file" name="photo2" accept="image/*">
+        <input type="file" name="photo3" accept="image/*">
+        <input type="file" name="photo4" accept="image/*">
+      </div>
+      <p style="opacity:.7;font-size:13px;margin-top:6px">Real photos of YOU only — your face check compares your selfie against these. At least one photo is required.</p>
+    </div>
+
+    <button class="btn" type="submit" style="font-size:17px;padding:13px">Save my dating profile 💘</button>
+    <p style="opacity:.7;font-size:13px;text-align:center;margin:0">Next step after saving: the face check — one selfie, and you're in the deck.</p>
+  </form>
+
+  <p style="text-align:center;margin-top:14px"><a href="/match">← Back to Match Here</a></p>
+</div>
+{% endblock %}

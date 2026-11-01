@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}✔ Face check — Match Here{% endblock %}
+{% block content %}
+<div style="max-width:520px;margin:0 auto;padding:8px 2px 34px">
+  <div style="text-align:center;padding:12px 8px 2px">
+    <img src="/static/match-here.png" alt="Match Here" style="width:74px;height:74px;border-radius:18px">
+    <h1 style="font-size:23px;margin:8px 0 2px">The face check</h1>
+    <p style="opacity:.85;margin:0">This is how Match Here stays catfish-free.</p>
+  </div>
+
+  {% if mode == 'done' %}
+  <div class="card" style="margin-top:14px;text-align:center">
+    <div style="font-size:42px">✔</div>
+    <div class="section-title">You're face-verified</div>
+    <p style="margin-top:8px;line-height:1.55">Your dating card carries the ✔ Face Verified badge. Go meet people.</p>
+    <p style="margin-top:12px"><a class="btn" href="/match">Open the deck 💘</a></p>
+  </div>
+  {% elif mode == 'pending' %}
+  <div class="card" style="margin-top:14px;text-align:center">
+    <div style="font-size:42px">⏳</div>
+    <div class="section-title">Your selfie is in line</div>
+    <p style="margin-top:8px;line-height:1.55">A human checks every face — no robots, no shortcuts. You'll get a notification the moment yours is approved.</p>
+    <p style="margin-top:12px"><a class="btn-ghost" href="/match">Back to Match Here</a></p>
+  </div>
+  {% else %}
+  <div class="card" style="margin-top:14px">
+    <div class="section-title">📸 Three steps — takes a minute</div>
+    <ol style="line-height:1.7;margin:10px 0 0;padding-left:20px">
+      <li>Write this code on a piece of paper, big and clear:</li>
+    </ol>
+    <div style="text-align:center;font-size:34px;font-weight:900;letter-spacing:2px;background:#111;color:#ffd400;border-radius:14px;padding:16px 8px;margin:12px 0">{{ code }}</div>
+    <ol start="2" style="line-height:1.7;margin:0;padding-left:20px">
+      <li>Take a selfie of <strong>your face</strong> holding that paper up next to you — like the code is introducing you.</li>
+      <li>Send it below. The owner compares it with your dating photos by hand. Same face? You're in — with the ✔ badge.</li>
+    </ol>
+    <p style="opacity:.75;font-size:13.5px;line-height:1.55">Your selfie is <strong>never</strong> shown on your profile or anywhere public. Only the owner sees it, only for this check. A photo of somebody else, a screenshot, or a picture of a picture won't pass — that's the whole point.</p>
+    <form method="post" action="/match/verify" enctype="multipart/form-data" style="margin-top:14px;display:flex;flex-direction:column;gap:12px">
+      <input type="file" name="selfie" accept="image/*" capture="user" required>
+      <button class="btn" type="submit" style="font-size:16.5px;padding:12px">Send my selfie ✔</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <p style="text-align:center;margin-top:14px"><a href="/match">← Back to Match Here</a></p>
+</div>
+{% endblock %}

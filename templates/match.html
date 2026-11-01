@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}💘 Match Here — HERE{% endblock %}
+{% block content %}
+<div style="max-width:540px;margin:0 auto;padding:8px 2px 34px">
+
+  <div style="text-align:center;padding:14px 8px 4px">
+    <img src="/static/match-here.png" alt="Match Here" style="width:92px;height:92px;border-radius:22px">
+    <h1 style="font-size:25px;margin:8px 0 2px">Match Here</h1>
+    <p style="opacity:.85;margin:0">Real faces. Real people. Free — forever.</p>
+  </div>
+
+  {% if mode == 'landing' %}
+  <div class="card" style="margin-top:14px">
+    <div class="section-title">💘 Find your person — on HERE</div>
+    <p style="margin-top:8px;line-height:1.55">Set up a dating profile, swipe through real people near you, and match when the feeling is mutual.</p>
+    <p style="line-height:1.55"><strong>✔ Every face is verified.</strong> Before anybody enters the deck, they prove the face in their photos is really them — a selfie holding a code, checked by a human. No catfish.</p>
+    <p style="line-height:1.55">👆 <strong>Swipe right</strong> (or tap the heart) to like somebody — it's secret unless they like you back.<br>
+    ✖ <strong>Swipe left</strong> to pass.<br>
+    🖐 <strong>Tap</strong> when you want them to know <em>right now</em>.</p>
+    <p style="line-height:1.55">🔞 <strong>18 and older only.</strong> Dating profiles ask your age, where you're from, your height, your interests, your faith, and the simple stuff — so people meet the real you.</p>
+    <p style="margin-top:14px"><a class="btn" href="/match/setup" style="font-size:17px;padding:12px 22px">Create my dating profile 💘</a></p>
+    <p style="opacity:.7;font-size:13px;margin-top:10px">Free. Always. Leave anytime — your dating profile disappears with you.</p>
+  </div>
+  {% endif %}
+
+  {% if mode == 'needverify' %}
+  <div class="card" style="margin-top:14px;text-align:center">
+    <div style="font-size:40px">📸</div>
+    <div class="section-title">One step left: verify your face</div>
+    <p style="margin-top:8px;line-height:1.55">Your dating profile is saved. Now prove the face in your photos is really you — it takes one selfie, and it's what keeps Match Here catfish-free for everybody.</p>
+    <p style="margin-top:14px"><a class="btn" href="/match/verify" style="font-size:17px;padding:12px 22px">Verify my face ✔</a></p>
+    <p style="margin-top:10px"><a href="/match/setup">✏️ Edit my dating profile</a></p>
+  </div>
+  {% endif %}
+
+  {% if mode == 'denied' %}
+  <div class="card" style="margin-top:14px;text-align:center">
+    <div style="font-size:40px">🔁</div>
+    <div class="section-title">That face check didn't pass</div>
+    <p style="margin-top:8px;line-height:1.55">The selfie has to show <strong>you</strong> — the same face as your profile photos — holding your code up where it can be read. Grab a fresh code and try again.</p>
+    <p style="margin-top:14px"><a class="btn" href="/match/verify" style="font-size:17px;padding:12px 22px">Try the face check again</a></p>
+    <p style="margin-top:10px"><a href="/match/setup">✏️ Edit my dating profile</a></p>
+  </div>
+  {% endif %}
+
+  {% if mode == 'pending' %}
+  <div class="card" style="margin-top:14px;text-align:center">
+    <div style="font-size:40px">⏳</div>
+    <div class="section-title">Your face is being checked</div>
+    <p style="margin-top:8px;line-height:1.55">Every face on Match Here is checked by a human — yours is in line. You'll get a notification the moment you're in, and then your profile joins the deck.</p>
+    <p style="margin-top:10px"><a href="/match/setup">✏️ Edit my dating profile while I wait</a></p>
+  </div>
+  {% endif %}
+
+  {% if mode == 'paused' %}
+  <div style="display:flex;gap:10px;justify-content:center;margin:12px 0 2px;flex-wrap:wrap">
+    <a class="btn-ghost" href="/match/matches">💘 My Matches ({{ match_count }})</a>
+    <a class="btn-ghost" href="/match/setup">✏️ My profile</a>
+  </div>
+  <div class="card" style="margin-top:12px;text-align:center">
+    <div style="font-size:40px">⏸️</div>
+    <div class="section-title">You're paused</div>
+    <p style="margin-top:8px;line-height:1.55">Your dating profile is hidden from the deck. Your matches can still reach you. Flip it back on whenever you're ready.</p>
+    <form method="post" action="/match/pause" style="margin-top:14px">
+      <button class="btn" type="submit" style="font-size:16px;padding:11px 22px">▶ Put me back in the deck</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if mode in ('deck', 'empty') %}
+  <div style="display:flex;gap:10px;justify-content:center;margin:12px 0 2px;flex-wrap:wrap">
+    <a class="btn-ghost" href="/match/matches">💘 My Matches ({{ match_count }})</a>
+    <a class="btn-ghost" href="/match/setup">✏️ My profile</a>
+    <form method="post" action="/match/pause" style="display:inline">
+      <button class="btn-ghost" type="submit">⏸ Pause me</button>
+    </form>
+  </div>
+
+  <form method="get" action="/match" style="display:flex;gap:8px;margin:14px 0 4px;flex-wrap:wrap">
+    <input type="text" name="q" value="{{ q|e }}" placeholder="City or ZIP code" style="flex:1;min-width:140px;padding:10px 12px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+    <select name="radius" style="padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+      <option value="0" {% if not radius %}selected{% endif %}>Any distance</option>
+      <option value="5" {% if radius == 5 %}selected{% endif %}>Within 5 mi</option>
+      <option value="10" {% if radius == 10 %}selected{% endif %}>Within 10 mi</option>
+      <option value="25" {% if radius == 25 %}selected{% endif %}>Within 25 mi</option>
+      <option value="50" {% if radius == 50 %}selected{% endif %}>Within 50 mi</option>
+      <option value="100" {% if radius == 100 %}selected{% endif %}>Within 100 mi</option>
+    </select>
+    <button class="btn" type="submit">🔍 Find</button>
+    <button class="btn-ghost" type="button" id="gpsbtn">📍 Near me</button>
+  </form>
+  <p style="opacity:.7;font-size:13px;margin:2px 0 0">People only ever see a distance — never your location. {% if mode == 'deck' %}{{ deck_count }} {{ 'person' if deck_count == 1 else 'people' }} in your deck.{% endif %}</p>
+
+  {% if mode == 'empty' %}
+  <div class="card" style="margin-top:14px;text-align:center">
+    <div style="font-size:40px">🌙</div>
+    <div class="section-title">Nobody new right now</div>
+    <p style="margin-top:8px;line-height:1.55">You've seen everybody who fits your search. Widen the distance, clear the city, or check back soon — new people join every day. And the fastest way to grow the deck? Invite somebody. 💘</p>
+    <p style="margin-top:12px"><a class="btn-ghost" href="/match">Show everybody</a> &nbsp;<a class="btn-ghost" href="/invite">🔗 Invite</a></p>
+  </div>
+  {% endif %}
+
+  {% if mode == 'deck' and card %}
+  <div id="swipecard" style="margin-top:14px;border-radius:20px;overflow:hidden;background:var(--card-bg,#fff);border:1px solid var(--border,#ddd);box-shadow:0 10px 30px rgba(0,0,0,.18);touch-action:pan-y;user-select:none;-webkit-user-select:none">
+    <div style="position:relative">
+      <img id="cardphoto" src="{{ card.photo|e }}" alt="" draggable="false" style="width:100%;height:430px;object-fit:cover;display:block">
+      <div style="position:absolute;left:0;right:0;bottom:0;padding:34px 16px 12px;background:linear-gradient(transparent,rgba(0,0,0,.72));color:#fff">
+        <div style="font-size:24px;font-weight:800">{{ card.name|e }}{% if card.age %}, {{ card.age }}{% endif %}{% if card.is_verified %} <span title="Verified on HERE" style="color:#ffd400">★</span>{% endif %} <span style="font-size:14px;background:#1db954;border-radius:20px;padding:2px 9px;vertical-align:3px">✔ Face Verified</span></div>
+        <div style="opacity:.92;font-size:15px">📍 {{ card.city|e }}{% if card.state %}, {{ card.state|e }}{% endif %}{% if card.distance %} · ~{{ card.distance }} mi away{% endif %}</div>
+      </div>
+    </div>
+    {% if card.photos|length > 1 %}
+    <div style="display:flex;gap:8px;padding:10px 12px 0">
+      {% for ph in card.photos %}
+      <img src="{{ ph|e }}" data-full="{{ ph|e }}" alt="" class="cardthumb" style="width:52px;height:52px;object-fit:cover;border-radius:10px;cursor:pointer;border:2px solid var(--border,#ddd)">
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div style="padding:12px 16px 16px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        {% if card.height %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">📏 {{ card.height }}</span>{% endif %}
+        {% if card.faith %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">✝️ {{ card.faith|e }}</span>{% endif %}
+        {% if card.smoke %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">🚬 {{ card.smoke }}</span>{% endif %}
+        {% if card.drink %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">🍺 {{ card.drink }}</span>{% endif %}
+      </div>
+      {% if card.interests %}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        {% for it in card.interests %}<span style="background:#fde8ea;border-radius:16px;padding:4px 11px;font-size:13.5px;color:#a4133c">🎯 {{ it|e }}</span>{% endfor %}
+      </div>
+      {% endif %}
+      {% if card.about %}<p style="margin:12px 0 0;line-height:1.55;font-size:15.5px">“{{ card.about|e }}”</p>{% endif %}
+      <p style="margin:10px 0 0"><a href="/user/{{ card.user_id }}" style="font-size:14px">See their HERE profile →</a></p>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:center;align-items:center;gap:22px;margin-top:18px">
+    <form method="post" action="/match/swipe" id="passform">
+      <input type="hidden" name="target_id" value="{{ card.user_id }}">
+      <input type="hidden" name="action" value="pass">
+      <input type="hidden" name="q" value="{{ q|e }}">
+      <input type="hidden" name="radius" value="{{ radius }}">
+      <input type="hidden" name="gps" value="{{ gps }}">
+      <button type="submit" title="Pass" style="width:62px;height:62px;border-radius:50%;border:2px solid var(--border,#ddd);background:var(--card-bg,#fff);font-size:26px;cursor:pointer">✖</button>
+    </form>
+    <form method="post" action="/match/tap/{{ card.user_id }}">
+      <button type="submit" title="Tap — let them know you're interested, right now" style="width:52px;height:52px;border-radius:50%;border:2px solid var(--border,#ddd);background:var(--card-bg,#fff);font-size:23px;cursor:pointer">🖐</button>
+    </form>
+    <form method="post" action="/match/swipe" id="likeform">
+      <input type="hidden" name="target_id" value="{{ card.user_id }}">
+      <input type="hidden" name="action" value="like">
+      <input type="hidden" name="q" value="{{ q|e }}">
+      <input type="hidden" name="radius" value="{{ radius }}">
+      <input type="hidden" name="gps" value="{{ gps }}">
+      <button type="submit" title="Like" style="width:62px;height:62px;border-radius:50%;border:none;background:#e0245e;font-size:27px;cursor:pointer;color:#fff">❤️</button>
+    </form>
+  </div>
+  <p style="text-align:center;opacity:.75;font-size:13.5px;margin-top:12px">✖ pass &nbsp;·&nbsp; 🖐 tap = they know now &nbsp;·&nbsp; ❤️ like = secret until it's mutual<br>First meet? Keep it public, tell a friend.</p>
+  {% endif %}
+  {% endif %}
+
+</div>
+<script>
+(function(){
+  var gpsbtn = document.getElementById('gpsbtn');
+  if (gpsbtn) {
+    gpsbtn.addEventListener('click', function(){
+      if (!navigator.geolocation) { alert('This device cannot share its location.'); return; }
+      gpsbtn.textContent = '📍 Locating…';
+      navigator.geolocation.getCurrentPosition(function(pos){
+        fetch('/match/gps', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({lat: pos.coords.latitude, lon: pos.coords.longitude})})
+        .then(function(){ window.location = '/match?gps=1'; })
+        .catch(function(){ gpsbtn.textContent = '📍 Near me'; });
+      }, function(){ gpsbtn.textContent = '📍 Near me'; alert('Location was not shared — check your phone settings if you want near-me matches.'); });
+    });
+  }
+  var main = document.getElementById('cardphoto');
+  if (main) {
+    document.querySelectorAll('.cardthumb').forEach(function(t){
+      t.addEventListener('click', function(){ main.src = t.getAttribute('data-full'); });
+    });
+  }
+  var card = document.getElementById('swipecard');
+  if (card) {
+    var sx = null, dx = 0;
+    card.addEventListener('pointerdown', function(e){ sx = e.clientX; dx = 0; });
+    card.addEventListener('pointermove', function(e){
+      if (sx === null) return;
+      dx = e.clientX - sx;
+      card.style.transform = 'translateX(' + dx + 'px) rotate(' + (dx / 28) + 'deg)';
+    });
+    function endSwipe(){
+      if (sx === null) return;
+      var d = dx; sx = null; dx = 0;
+      card.style.transform = '';
+      if (d > 90) { document.getElementById('likeform').submit(); }
+      else if (d < -90) { document.getElementById('passform').submit(); }
+    }
+    card.addEventListener('pointerup', endSwipe);
+    card.addEventListener('pointercancel', endSwipe);
+  }
+})();
+</script>
+{% endblock %}

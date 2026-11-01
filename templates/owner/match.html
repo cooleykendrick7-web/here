@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Match Here — Owner — HERE</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;padding:20px}
+a{color:#ff8f98}
+.topbar{display:flex;align-items:center;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+.brand{font-size:26px;font-weight:900;color:#ffd400}
+.btn{display:inline-block;background:#e0245e;color:#fff;border:none;border-radius:10px;padding:10px 18px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none}
+.btn-ghost{display:inline-block;background:#1c1c1e;color:#f0f0f0;border:1px solid #3a3a3c;border-radius:10px;padding:9px 16px;font-size:14.5px;cursor:pointer;text-decoration:none}
+.btn-ok{background:#1db954}
+.card{background:#161617;border:1px solid #2c2c2e;border-radius:16px;padding:16px;margin-bottom:18px}
+.flash{background:#123524;border:1px solid #1db954;color:#c9f5d6;border-radius:10px;padding:10px 14px;margin-bottom:16px}
+img.ph{width:110px;height:110px;object-fit:cover;border-radius:12px;border:2px solid #3a3a3c}
+img.selfie{width:170px;height:170px;object-fit:cover;border-radius:14px;border:3px solid #ffd400}
+.code{font-size:22px;font-weight:900;color:#ffd400;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">💘 Match Here — Owner</span>
+  <a class="btn-ghost" href="/owner">← Owner panel</a>
+</div>
+
+{% if flash %}
+<div class="flash">{{ flash|e }}</div>
+{% endif %}
+
+<h2 style="margin-bottom:10px">📸 Face checks waiting ({{ queue|length }})</h2>
+<p style="opacity:.8;margin-bottom:16px;max-width:640px;line-height:1.5">Every face is checked by you, by hand. The selfie must show the SAME person as the dating photos, holding the code below. Approve and they're in the deck with the ✔ badge. Deny and they get a fresh code to try again.</p>
+
+{% if not queue %}
+<div class="card" style="opacity:.85">Nobody waiting. ✔</div>
+{% endif %}
+
+{% for q in queue %}
+<div class="card">
+  <div style="font-size:18px;font-weight:800"><a href="/user/{{ q.user_id }}">{{ q.name|e }}</a>{% if q.age %}, {{ q.age }}{% endif %} — {{ q.city|e }}{% if q.state %}, {{ q.state|e }}{% endif %}</div>
+  <div style="opacity:.75;font-size:13.5px;margin:2px 0 12px">{{ q.email|e }} · their code: <span class="code">{{ q.code|e }}</span></div>
+  <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+    <div style="text-align:center">
+      {% if q.selfie %}<img class="selfie" src="{{ q.selfie|e }}" alt="">{% else %}<div class="selfie" style="display:flex;align-items:center;justify-content:center">no selfie</div>{% endif %}
+      <div style="font-size:13px;margin-top:6px;opacity:.85">🤳 Their code selfie</div>
+    </div>
+    <div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        {% for ph in q.photos %}<img class="ph" src="{{ ph|e }}" alt="">{% endfor %}
+      </div>
+      <div style="font-size:13px;margin-top:6px;opacity:.85">🖼️ Their dating photos — same face?</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+    <form method="post" action="/owner/match/{{ q.user_id }}/face">
+      <input type="hidden" name="decision" value="approve">
+      <button class="btn btn-ok" type="submit">✔ Same person — approve</button>
+    </form>
+    <form method="post" action="/owner/match/{{ q.user_id }}/face" onsubmit="return confirm('Deny this face check? They get a fresh code and can try again.')">
+      <input type="hidden" name="decision" value="deny">
+      <button class="btn" type="submit" style="background:#8e1f1f">✖ Not the same — deny</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+
+<h2 style="margin:26px 0 10px">⚠️ Match Here reports ({{ flags|length }} waiting)</h2>
+{% if not flags %}
+<div class="card" style="opacity:.85">No Match Here reports waiting. They also live in your main flag queue.</div>
+{% endif %}
+{% for f in flags %}
+<div class="card">
+  <div style="font-weight:700">Reported: <a href="/user/{{ f.item_id }}">{{ f.target_name|e or f.item_id }}</a></div>
+  <div style="opacity:.9;margin-top:4px">{{ f.reasons|e }}</div>
+  <div style="opacity:.7;font-size:13.5px;margin-top:2px">{{ f.excerpt|e }} · {{ f.created_at }}</div>
+</div>
+{% endfor %}
+
+</body>
+</html>
