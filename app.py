@@ -499,6 +499,12 @@ def init_db():
         c.execute("ALTER TABLE posts ADD COLUMN music_volume INTEGER DEFAULT 80")
     if "music_mute_orig" not in _post_cols:
         c.execute("ALTER TABLE posts ADD COLUMN music_mute_orig INTEGER DEFAULT 0")
+    if "music_orig_volume" not in _post_cols:
+        # Creator-set level of the post video's OWN sound under its
+        # music (Ken's correction, 2026-11-01: mixing happens at
+        # creation, viewers just hear the result). 25 = the duck
+        # level stories have always used.
+        c.execute("ALTER TABLE posts ADD COLUMN music_orig_volume INTEGER DEFAULT 25")
     # --- story replies/reactions ride the messages table (safe) ---
     # A message linked to a story carries the story's id plus the
     # uploads-relative path of a SHARED clip copy (uploads/story_replies/)
@@ -551,6 +557,7 @@ def init_db():
             ("music_len", "ALTER TABLE stories ADD COLUMN music_len INTEGER DEFAULT 15"),
             ("music_volume", "ALTER TABLE stories ADD COLUMN music_volume INTEGER DEFAULT 80"),
             ("music_mute_orig", "ALTER TABLE stories ADD COLUMN music_mute_orig INTEGER DEFAULT 0"),
+            ("music_orig_volume", "ALTER TABLE stories ADD COLUMN music_orig_volume INTEGER DEFAULT 25"),
             ("music_thumb", "ALTER TABLE stories ADD COLUMN music_thumb TEXT DEFAULT ''")):
         if _col not in _story_cols:
             c.execute(_ddl)
@@ -3233,7 +3240,12 @@ def post_card(p, viewer, owner_on=False):
                    "volume": (p.get("music_volume")
                               if p.get("music_volume") is not None
                               else 80),
-                   "mute_orig": bool(p.get("music_mute_orig"))}
+                   "mute_orig": bool(p.get("music_mute_orig")),
+                   "orig_volume": (p.get("music_orig_volume")
+                                   if p.get("music_orig_volume")
+                                   is not None
+                                   else (0 if p.get("music_mute_orig")
+                                         else 25))}
                   if p.get("music_video_id") else None),
         "created_at": fancy_time(p["created_at"]),
         "likes": likes, "liked": liked, "comments_count": cc,
@@ -5076,6 +5088,13 @@ def create_post_from_form(user, form, page_id=None):
         music_len = max(0, min(600, int(form.get("music_len") or 0)))
     except (TypeError, ValueError):
         music_len = 0
+    # The creator's level for the post video's own sound under the
+    # music (creation-time mixing only — viewers just hear it).
+    try:
+        music_orig_volume = max(0, min(100,
+                                int(form.get("music_orig_volume") or 25)))
+    except (TypeError, ValueError):
+        music_orig_volume = 25
 
     media_file = form.get("media")
     # Audio files are no longer accepted on ANY new post (the MP3 post
@@ -5125,9 +5144,9 @@ def create_post_from_form(user, form, page_id=None):
         "INSERT INTO posts(user_id, page_id, kind, body, feeling, link_url, "
         "video_url, media, privacy, music_video_id, music_title, "
         "music_artist, music_thumb, music_start, music_len, "
-        "music_volume, music_mute_orig, created_at, "
+        "music_volume, music_mute_orig, music_orig_volume, created_at, "
         "wall_user_id, wall_pending, lock_price, lock_adult) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], page_id, kind, body, feeling, link_url, video_url,
          media, privacy,
          music["video_id"] if music else "",
@@ -5138,6 +5157,7 @@ def create_post_from_form(user, form, page_id=None):
          music_len if music else 0,
          music["volume"] if music else 80,
          music["mute_orig"] if music else 0,
+         music_orig_volume if music else 25,
          now_iso(), wall_user_id, wall_pending, lock_price, lock_adult))
     pid = cur.lastrowid
     # Hashtags: parsed from the body of EVERY new post (any kind) into
@@ -7436,7 +7456,11 @@ def _story_payload(conn, s, viewer_id, seen):
                  "start": s["music_start"] or 0,
                  "len": s["music_len"] or 15,
                  "volume": s["music_volume"] if s["music_volume"] is not None else 80,
-                 "mute_orig": bool(s["music_mute_orig"])}
+                 "mute_orig": bool(s["music_mute_orig"]),
+                 "orig_volume": (s["music_orig_volume"]
+                                 if s["music_orig_volume"] is not None
+                                 else (0 if s["music_mute_orig"]
+                                       else 25))}
     # Games pack: the story's binary poll (when one is attached) rides
     # the same payload — counts for both choices + the VIEWER's pick,
     # so the viewer can render buttons or result bars without another
@@ -7828,15 +7852,18 @@ async def story_reshare(request: Request, sid: int):
         "INSERT INTO stories(user_id, media, caption, created_at, "
         "expires_at, music_kind, music_ref, music_title, music_artist, "
         "music_thumb, music_start, music_len, music_volume, "
-        "music_mute_orig, edit_json, audience) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "music_mute_orig, music_orig_volume, edit_json, audience) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], s["media"], s["caption"] or "", now_iso(),
          story_expires_at(), s["music_kind"], s["music_ref"] or "",
          s["music_title"] or "", s["music_artist"] or "",
          s["music_thumb"] or "", s["music_start"] or 0,
          s["music_len"] or 15,
          s["music_volume"] if s["music_volume"] is not None else 80,
-         s["music_mute_orig"] or 0, _json.dumps(new_edit), "friends"))
+         s["music_mute_orig"] or 0,
+         s["music_orig_volume"] if s["music_orig_volume"] is not None
+         else (0 if s["music_mute_orig"] else 25),
+         _json.dumps(new_edit), "friends"))
     new_id = cur.lastrowid
     conn.commit()
     conn.close()
@@ -7878,6 +7905,13 @@ async def story_create(request: Request):
     music_len = _int_field("music_len", 5, 600, 15)
     music_volume = _int_field("music_volume", 0, 100, 80)
     music_mute_orig = 1 if (form.get("music_mute_orig") or "") == "1" else 0
+    # Creator's level for the story video's own sound (creation-time
+    # mixing only). A form without the field falls back to the old
+    # mute/duck behaviour: muted -> 0, otherwise the 25 duck level.
+    if form.get("music_orig_volume") is not None:
+        music_orig_volume = _int_field("music_orig_volume", 0, 100, 25)
+    else:
+        music_orig_volume = 0 if music_mute_orig else 25
     # --- games pack: story poll + AMA (validated BEFORE anything is
     # saved — a partial poll refuses the whole story, nothing created).
     # The poll is all-or-nothing: question + BOTH choices, or none of
@@ -7933,8 +7967,9 @@ async def story_create(request: Request):
         "INSERT INTO stories(user_id, media, caption, created_at, expires_at, "
         "overlay_text, overlay_color, overlay_pos, music_kind, music_ref, "
         "music_title, music_artist, music_thumb, music_start, music_len, "
-        "music_volume, music_mute_orig, ama, edit_json, audience) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "music_volume, music_mute_orig, music_orig_volume, ama, "
+        "edit_json, audience) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], media, caption, now_iso(), story_expires_at(mins),
          overlay_text, overlay_color, overlay_pos,
          "youtube" if music else None,
@@ -7943,6 +7978,7 @@ async def story_create(request: Request):
          music["artist"] if music else "",
          music["thumb"] if music else "",
          music_start, music_len, music_volume, music_mute_orig,
+         music_orig_volume,
          story_ama, _json.dumps(edit), audience))
     sid = cur.lastrowid
     if story_poll:

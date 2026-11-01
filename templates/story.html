@@ -56,11 +56,6 @@
   </div>
 
   <div class="sv-music" id="sv-music" hidden></div>
-  <button id="sv-volbtn" type="button" hidden aria-label="Volume — music and video">🔊</button>
-  <div id="sv-volpanel" hidden>
-    <label>🎵 Music <input type="range" id="sv-vol-music" min="0" max="100" value="80"></label>
-    <label id="sv-vol-videorow">🎬 Video <input type="range" id="sv-vol-video" min="0" max="100" value="25"></label>
-  </div>
 
   <div class="sv-bottom" id="sv-ownbar" hidden>
     <button class="sv-chipbtn" id="sv-viewers-btn" type="button">👀 <span id="sv-viewers-count">0</span> views</button>
@@ -146,15 +141,6 @@
   var startedAt = 0, accum = 0, running = false;
   var ticker = null;
   var curMusic = null;  // music object of the current story
-  var volBtn = document.getElementById('sv-volbtn');
-  var volPanel = document.getElementById('sv-volpanel');
-  var volMusic = document.getElementById('sv-vol-music');
-  var volVideo = document.getElementById('sv-vol-video');
-  var volVideoRow = document.getElementById('sv-vol-videorow');
-  // The viewer's own mix for this viewing session (Ken's order,
-  // 2026-11-01): null = ride on the creator's saved levels; once
-  // the viewer drags a slider, their levels win for every story.
-  var svMusicVol = null, svVideoVol = null;
   var vidEnded = false;
 
   function esc(t) {
@@ -411,19 +397,9 @@
     // with music=null from the server and simply stay silent.
     curMusic = (s.music && s.music.kind === 'youtube') ? s.music : null;
     novol.hidden = true;
-    volPanel.hidden = true;
-    if (!curMusic) {
-      ytWrap.hidden = true; musicEl.hidden = true; volBtn.hidden = true;
-      return;
-    }
+    if (!curMusic) { ytWrap.hidden = true; musicEl.hidden = true; return; }
     ytWrap.hidden = false;
     musicEl.hidden = false;
-    volBtn.hidden = false;
-    volVideoRow.hidden = !s.is_video;
-    volMusic.value = String(svMusicVol != null ? svMusicVol
-      : (curMusic.volume == null ? 80 : curMusic.volume));
-    volVideo.value = String(svVideoVol != null ? svVideoVol
-      : (curMusic.mute_orig ? 0 : 25));
     musicEl.textContent = '🎵 ' + (curMusic.title || 'Music') +
       (curMusic.artist ? ' — ' + curMusic.artist : '');
     var m = curMusic;
@@ -439,8 +415,7 @@
           onReady: function (ev) {
             try {
               ev.target.setVolume(Math.max(0, Math.min(100,
-                svMusicVol != null ? svMusicVol
-                : (m.volume == null ? 80 : m.volume))));
+                m.volume == null ? 80 : m.volume)));
               ev.target.playVideo();
             } catch (e) {}
             // If audible autoplay got blocked anyway, surface the
@@ -564,13 +539,13 @@
     if (s.is_video) {
       vid.hidden = false;
       vid.src = s.media;
-      if (svVideoVol != null) {
-        vid.volume = svVideoVol / 100;
-        vid.muted = svVideoVol <= 0;
-      } else {
-        vid.muted = !!(s.music && s.music.mute_orig);
-        vid.volume = s.music ? (s.music.mute_orig ? 0 : 0.25) : 1;
-      }
+      // The creator's mix, applied as-is (Ken's correction,
+      // 2026-11-01): mixing happens at creation; viewers just hear
+      // the result. orig_volume falls back to the old mute/duck.
+      var ov = s.music ? (s.music.orig_volume == null
+        ? (s.music.mute_orig ? 0 : 25) : s.music.orig_volume) : 100;
+      vid.volume = ov / 100;
+      vid.muted = s.music ? ov <= 0 : false;
       durationMs = 15000; // provisional until metadata lands
       vid.addEventListener('loadedmetadata', function () {
         if (flat[idx] !== item) return;
@@ -623,11 +598,9 @@
       loadViewers(s.id);
     }
     // Someone else's story gets the reply + reaction bar instead;
-    // the taller bar lifts the music chip + volume button clear.
+    // the taller bar lifts the music chip clear of it.
     replyBar.hidden = s.mine;
     musicEl.style.bottom = s.mine ? '' : '158px';
-    volBtn.style.bottom = s.mine ? '' : '158px';
-    volPanel.style.bottom = s.mine ? '' : '208px';
     if (!s.mine) {
       replyInput.placeholder = 'Reply to ' + g.name + '…';
       replyNote.hidden = true;
@@ -688,46 +661,23 @@
   novol.addEventListener('click', function () {
     novol.hidden = true;
     var item = flat[idx];
-    if (item && item.s.is_video && !(item.s.music && item.s.music.mute_orig)) {
-      if (svVideoVol != null) {
-        vid.volume = svVideoVol / 100;
-        vid.muted = svVideoVol <= 0;
-      } else {
-        vid.muted = false;
-        vid.volume = item.s.music ? 0.25 : 1;
-      }
+    if (item && item.s.is_video) {
+      var m2 = item.s.music;
+      var ov2 = m2 ? (m2.orig_volume == null
+        ? (m2.mute_orig ? 0 : 25) : m2.orig_volume) : 100;
+      vid.volume = ov2 / 100;
+      vid.muted = m2 ? ov2 <= 0 : false;
       vid.play().catch(function () {});
     }
     if (curMusic && ytPlayer) {
       try {
         ytPlayer.setVolume(Math.max(0, Math.min(100,
-          svMusicVol != null ? svMusicVol
-          : (curMusic.volume == null ? 80 : curMusic.volume))));
+          curMusic.volume == null ? 80 : curMusic.volume)));
         ytPlayer.playVideo();
       } catch (e) {}
     }
   });
 
-  /* Viewer mix controls (Ken's order, 2026-11-01): the 🔊 button
-     opens the two sliders — 🎵 the Playbox music, 🎬 the story
-     video's own sound. Opening the panel holds the story clock so
-     nobody has to race their own story to mix it. */
-  volBtn.addEventListener('click', function () {
-    var opening = volPanel.hidden;
-    volPanel.hidden = !opening;
-    if (opening) pauseClock(); else resumeClock();
-  });
-  volMusic.addEventListener('input', function () {
-    svMusicVol = parseInt(volMusic.value || '0', 10) || 0;
-    if (ytPlayer) {
-      try { ytPlayer.setVolume(svMusicVol); } catch (e) {}
-    }
-  });
-  volVideo.addEventListener('input', function () {
-    svVideoVol = parseInt(volVideo.value || '0', 10) || 0;
-    vid.volume = svVideoVol / 100;
-    vid.muted = svVideoVol <= 0;
-  });
   /* First touch anywhere in the viewer unlocks a music start the
      browser held back — after that, stories play their songs by
      themselves as they roll. */

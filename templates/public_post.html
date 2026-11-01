@@ -67,13 +67,12 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
   <div class="embed"><iframe src="{{ embed_url|e }}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
   {% endif %}
   {% if music %}
-  <div class="pmusic" id="pmusic" data-vid="{{ music.video_id|e }}" data-start="{{ music.start }}" data-len="{{ music.len or 0 }}">
+  <div class="pmusic" id="pmusic" data-vid="{{ music.video_id|e }}" data-start="{{ music.start }}" data-len="{{ music.len or 0 }}" data-vol="{{ music.volume }}">
     <button type="button" id="pmusic-btn" aria-label="Play song">▶</button>
     <div class="pmusic-info">
       <div class="t">🎵 {{ music.title|e }}</div>
       <div class="a">{{ music.artist|e }}</div>
     </div>
-    <input type="range" id="pmusic-vol" min="0" max="100" value="{{ music.volume }}" aria-label="Music volume">
     <div id="pmusic-holder"></div>
   </div>
   <style>
@@ -84,7 +83,6 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
     .pmusic-info{flex:1;min-width:0}
     .pmusic-info .t{font-weight:700;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .pmusic-info .a{color:#65676b;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .pmusic input[type=range]{width:90px;accent-color:#d41f2e}
     #pmusic-holder{width:2px;height:2px;overflow:hidden;opacity:.01;pointer-events:none}
     #pmusic-holder iframe{width:2px;height:2px;border:0;display:block}
   </style>
@@ -93,7 +91,6 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
     var wrap = document.getElementById('pmusic');
     if (!wrap) return;
     var btn = document.getElementById('pmusic-btn'),
-        vol = document.getElementById('pmusic-vol'),
         holder = document.getElementById('pmusic-holder'),
         player = null;
     function loadYT(cb) {
@@ -107,14 +104,8 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
       tag.src = 'https://www.youtube.com/iframe_api';
       document.head.appendChild(tag);
     }
-    btn.addEventListener('click', function () {
-      if (player) {
-        try {
-          if (player.getPlayerState() === 1) { player.pauseVideo(); btn.textContent = '▶'; }
-          else { player.playVideo(); btn.textContent = '⏸'; }
-        } catch (e) {}
-        return;
-      }
+    function start() {
+      if (player) return;
       var slot = document.createElement('div');
       holder.appendChild(slot);
       loadYT(function () {
@@ -128,9 +119,8 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
           playerVars: pvars,
           events: {
             onReady: function (ev) {
-              try { ev.target.setVolume(parseInt(vol.value || '80', 10) || 0); } catch (e) {}
+              try { ev.target.setVolume(parseInt(wrap.getAttribute('data-vol') || '80', 10) || 0); } catch (e) {}
               ev.target.playVideo();
-              btn.textContent = '⏸';
             },
             onStateChange: function (ev) {
               if (ev.data === YT.PlayerState.PLAYING) btn.textContent = '⏸';
@@ -140,12 +130,21 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
           }
         });
       });
-    });
-    vol.addEventListener('input', function () {
+    }
+    btn.addEventListener('click', function () {
       if (player) {
-        try { player.setVolume(parseInt(vol.value || '0', 10) || 0); } catch (e) {}
+        try {
+          if (player.getPlayerState() === 1) { player.pauseVideo(); btn.textContent = '▶'; }
+          else { player.playVideo(); btn.textContent = '⏸'; }
+        } catch (e) {}
+        return;
       }
+      start();
     });
+    /* The song starts by itself when the page opens (the creator's
+       mix, nothing to adjust); the ▶ stays as the fallback if the
+       browser held the first start back. */
+    start();
   })();
   </script>
   {% endif %}

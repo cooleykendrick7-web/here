@@ -646,15 +646,7 @@ button.post-opt-item.like-btn.liked{color:var(--look-accent,var(--red))}
   overflow:hidden;opacity:.01;pointer-events:none}
 #sv-yt-wrap .sv-yt-frame{width:2px;height:2px;overflow:hidden}
 #sv-yt-wrap .sv-yt-frame iframe{width:2px;height:2px;display:block;border:0}
-#sv-volbtn{position:absolute;right:12px;bottom:76px;z-index:6;width:42px;height:42px;
-  border-radius:50%;border:1px solid rgba(255,255,255,.25);
-  background:rgba(14,14,17,.82);color:#fff;font-size:18px;cursor:pointer}
-#sv-volpanel{position:absolute;right:12px;bottom:126px;z-index:6;width:232px;
-  background:rgba(14,14,17,.88);border:1px solid rgba(255,255,255,.22);
-  border-radius:14px;padding:10px 14px;color:#fff}
-#sv-volpanel label{display:flex;align-items:center;gap:10px;font-size:13.5px;
-  font-weight:700;padding:5px 0;white-space:nowrap}
-#sv-volpanel input[type=range]{flex:1;accent-color:#e0245e;min-width:0}
+
 .sv-bottom{display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));
   background:linear-gradient(transparent,rgba(0,0,0,.55))}
 .sv-chipbtn{background:rgba(255,255,255,.14);color:#fff;border:none;border-radius:999px;
@@ -764,12 +756,7 @@ button.post-opt-item.like-btn.liked{color:var(--look-accent,var(--red))}
   width:38px;height:38px;font-size:15px;cursor:pointer;flex-shrink:0}
 .post-music-player{width:2px;height:2px;overflow:hidden;opacity:.01;pointer-events:none}
 .post-music-player iframe{width:2px;height:2px;display:block;border:0}
-.post-music-volbtn{background:none;border:1px solid var(--border);color:inherit;border-radius:50%;
-  width:40px;height:40px;font-size:16px;cursor:pointer;flex-shrink:0}
-.post-music-vols{padding:9px 12px;display:flex;flex-direction:column;gap:7px;border-top:1px solid var(--border)}
-.post-music-vols[hidden]{display:none}
-.pm-vol-row{display:flex;align-items:center;gap:10px;font-size:13.5px;font-weight:700}
-.pm-vol-row input[type=range]{flex:1;accent-color:var(--red)}
+
 /* ===== Playbox trim slider (2026-11-01): a window dragged across
    the whole song, over a stylized track wave ===== */
 .mp-dur{font-size:11.5px;color:var(--muted);font-weight:700;white-space:nowrap}
@@ -783,8 +770,8 @@ button.post-opt-item.like-btn.liked{color:var(--look-accent,var(--red))}
 .mp-range{width:100%;margin:8px 0 2px}
 .mp-tread{font-weight:800;font-size:15px}
 .mp-tnote{color:var(--muted);font-size:12.5px;margin-top:2px}
-.mp-pslot{margin-top:8px}
-.mp-pslot iframe{width:100%;height:200px;display:block;border:0;border-radius:10px}
+.mp-pslot{width:2px;height:2px;overflow:hidden;opacity:.01;pointer-events:none}
+.mp-pslot iframe{width:2px;height:2px;display:block;border:0}
 /* ===== reaction picker ===== */
 .react-wrap{position:relative;display:inline-block}
 .react-picker{position:absolute;bottom:135%;left:0;background:rgba(var(--glass-rgb,255,255,255),var(--glass-alpha));border:1px solid var(--border);
@@ -3136,10 +3123,20 @@ document.addEventListener('click', function(ev){
       window.hereLoadYT(function () {
         if (!song) return;
         player = new YT.Player(slot, {
-          width: '100%', height: '200', videoId: song.video_id,
+          width: '2', height: '2', videoId: song.video_id,
           playerVars: { start: Math.floor(start), rel: 0, playsinline: 1,
                         modestbranding: 1 },
-          events: { onReady: function (ev) {
+          events: { onStateChange: function (ev) {
+            /* Preview is AUDIO ONLY (Ken's order, 2026-11-01):
+               no video frame while adding a song — the button
+               itself reports the state. */
+            if (!pbtn) return;
+            if (ev.data === YT.PlayerState.PLAYING)
+              pbtn.textContent = '⏸ Stop preview';
+            else if (ev.data === YT.PlayerState.PAUSED ||
+                     ev.data === YT.PlayerState.ENDED)
+              pbtn.textContent = '▶ Preview this part';
+          }, onReady: function (ev) {
             try {
               var d = Math.round(ev.target.getDuration() || 0);
               if (d > 0 && d !== songDur) { songDur = d; paint(); }
@@ -3206,7 +3203,16 @@ document.addEventListener('click', function(ev){
       });
       wave.addEventListener('pointerup', function () { dragOn = false; });
     }
-    if (pbtn) pbtn.addEventListener('click', preview);
+    if (pbtn) pbtn.addEventListener('click', function () {
+      if (player) {
+        try {
+          if (player.getPlayerState() === 1) {
+            player.pauseVideo(); return;
+          }
+        } catch (e) {}
+      }
+      preview();
+    });
     paint();
     return { setSong: setSong, refit: refit, setStart: setStart,
              getState: function () {
@@ -3426,14 +3432,14 @@ document.addEventListener('click', function(ev){
              getSelected: function () { return selected; } };
   };
 
-  /* Post-wall music (Ken's order, 2026-11-01): AUDIO ONLY — the
+  /* Post-wall music (Ken's orders, 2026-11-01): AUDIO ONLY — the
      YouTube player lives in a 2px invisible holder and is never
      shown; the music bar is the whole face. Songs start by
      themselves when a post scrolls into view (one at a time;
-     scrolling away pauses), the ▶ button still toggles by hand,
-     and every card carries viewer volume sliders — 🎵 the music
-     and, on video posts, 🎬 the video's own sound — starting from
-     the levels the creator saved. */
+     scrolling away pauses) and the ▶ button still toggles by
+     hand. The mix is the CREATOR's, set while posting — music
+     level + the video's own sound level — and viewers simply
+     hear it; there are no viewer-side volume controls. */
   var pmPlayer = null, pmBtn = null, pmWrap = null;
   function pmDestroy() {
     if (pmPlayer) { try { pmPlayer.destroy(); } catch (e) {} pmPlayer = null; }
@@ -3445,10 +3451,17 @@ document.addEventListener('click', function(ev){
     pmBtn = null; pmWrap = null;
   }
   function pmMusicVol(wrap) {
-    var s = wrap.querySelector('.pm-vol-music');
-    var v = s ? parseInt(s.value || '80', 10)
-              : parseInt(wrap.getAttribute('data-vol') || '80', 10);
+    var v = parseInt(wrap.getAttribute('data-vol') || '80', 10);
     return Math.max(0, Math.min(100, isNaN(v) ? 80 : v));
+  }
+  function pmApplyOrigVol(wrap) {
+    var card = wrap.closest('.card');
+    var v = card ? card.querySelector('video.post-video-file') : null;
+    if (!v) return;
+    var ov = parseInt(wrap.getAttribute('data-origvol') || '25', 10);
+    if (isNaN(ov)) ov = 25;
+    v.volume = ov / 100;
+    v.muted = ov <= 0;
   }
   function pmStart(wrap) {
     var btn = wrap.querySelector('.post-music-play');
@@ -3463,6 +3476,7 @@ document.addEventListener('click', function(ev){
     var mlen = parseInt(wrap.getAttribute('data-len') || '0', 10) || 0;
     if (!box || !vid || !btn) return;
     pmBtn = btn; pmWrap = wrap;
+    pmApplyOrigVol(wrap);
     var slot = document.createElement('div');
     box.appendChild(slot);
     window.hereLoadYT(function () {
@@ -3491,13 +3505,6 @@ document.addEventListener('click', function(ev){
   document.addEventListener('click', function (e) {
     var t = e.target;
     if (!t || !t.closest) return;
-    var vbtn = t.closest('.post-music-volbtn');
-    if (vbtn) {
-      var vwrap = vbtn.closest('.post-music');
-      var panel = vwrap ? vwrap.querySelector('.post-music-vols') : null;
-      if (panel) panel.hidden = !panel.hidden;
-      return;
-    }
     var btn = t.closest('.post-music-play');
     if (!btn) return;
     var wrap = btn.closest('.post-music');
@@ -3510,28 +3517,6 @@ document.addEventListener('click', function(ev){
       return;
     }
     pmStart(wrap);
-  });
-  document.addEventListener('input', function (e) {
-    var s = e.target;
-    if (!s || !s.classList) return;
-    if (s.classList.contains('pm-vol-music')) {
-      var wrap = s.closest ? s.closest('.post-music') : null;
-      if (wrap && pmWrap === wrap && pmPlayer) {
-        try { pmPlayer.setVolume(parseInt(s.value || '0', 10) || 0); }
-        catch (err) {}
-      }
-    } else if (s.classList.contains('pm-vol-video')) {
-      var card = s.closest ? s.closest('.card') : null;
-      var v = card ? card.querySelector('video.post-video-file') : null;
-      if (v) {
-        var val = (parseInt(s.value || '0', 10) || 0) / 100;
-        v.volume = val;
-        v.muted = val <= 0;
-        if (val > 0 && v.paused) {
-          var p = v.play(); if (p && p.catch) p.catch(function () {});
-        }
-      }
-    }
   });
   /* Autoplay in view + first-touch unlock for a blocked start. */
   if ('IntersectionObserver' in window) {

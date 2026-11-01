@@ -242,6 +242,7 @@
         <input type="hidden" name="music_start" id="se-mus-startF" value="0">
         <input type="hidden" name="music_len" id="se-mus-lenF" value="15">
         <input type="hidden" name="music_volume" id="se-mus-volF" value="80">
+        <input type="hidden" name="music_orig_volume" id="se-mus-origF" value="25">
         <input type="checkbox" name="music_mute_orig" id="se-mus-muteF" value="1" style="display:none">
       </div>
       <input class="se-cap" name="caption" id="se-caption" maxlength="280" placeholder="Add a caption…" autocomplete="off">
@@ -876,7 +877,8 @@ function openMusic(){
     '<div class="mp-pslot"></div></div>' +
     '<label class="fld" for="se-mus-vol">Music volume</label>' +
     '<input type="range" id="se-mus-vol" class="se-range" min="0" max="100" step="1" value="80">' +
-    '<label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px"><input type="checkbox" value="1" id="se-mus-mute"> Mute my video’s own sound</label>' +
+    '<label class="fld" for="se-mus-origvol" style="margin-top:10px">My video’s own sound <span style="color:rgba(255,255,255,.55);font-weight:400">(0 = song only)</span></label>' +
+    '<input type="range" id="se-mus-origvol" class="se-range" min="0" max="100" step="1" value="25">' +
     '<button type="button" class="se-go" id="se-mus-done" style="margin-top:12px">Done</button></div>');
   seTrim = null;
   if (window.hereTrimUI){
@@ -896,16 +898,18 @@ function openMusic(){
     if (picker && musPick){
       picker.select(musPick, '');
       $('se-mus-vol').value = $('se-mus-volF').value || '80';
-      $('se-mus-mute').checked = $('se-mus-muteF').checked;
+      $('se-mus-origvol').value = $('se-mus-origF').value || '25';
       if (seTrim) seTrim.setStart($('se-mus-startF').value || '0');
     }
   }
   function syncVol(){
     $('se-mus-volF').value = $('se-mus-vol').value || '80';
-    $('se-mus-muteF').checked = $('se-mus-mute').checked;
+    var ov = $('se-mus-origvol') ? $('se-mus-origvol').value : '25';
+    $('se-mus-origF').value = ov;
+    $('se-mus-muteF').checked = (parseInt(ov || '25', 10) || 0) <= 0;
   }
   var volEl = $('se-mus-vol'); if (volEl) volEl.addEventListener('input', syncVol);
-  var muteEl = $('se-mus-mute'); if (muteEl) muteEl.addEventListener('change', syncVol);
+  var origEl = $('se-mus-origvol'); if (origEl) origEl.addEventListener('input', syncVol);
   syncVol();
   var doneBtn = $('se-mus-done');
   if (doneBtn) doneBtn.addEventListener('click', function(){ syncVol(); closeSheet(); });
@@ -1064,6 +1068,7 @@ function collectDraft(){
     ama: $('se-ama').value,
     music: musPick ? { info: musPick, start: $('se-mus-startF').value,
       len: $('se-mus-lenF').value, vol: $('se-mus-volF').value,
+      origvol: $('se-mus-origF').value,
       mute: $('se-mus-muteF').checked } : null };
 }
 function saveDraft(silent){
@@ -1097,6 +1102,8 @@ function applyDraft(d){
     $('se-mus-startF').value = d.music.start || '0';
     $('se-mus-lenF').value = d.music.len || '15';
     $('se-mus-volF').value = d.music.vol || '80';
+    $('se-mus-origF').value = d.music.origvol != null ? d.music.origvol
+      : (d.music.mute ? '0' : '25');
     $('se-mus-muteF').checked = !!d.music.mute;
   }
   clearDraft();
