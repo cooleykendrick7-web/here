@@ -2993,6 +2993,7 @@ document.addEventListener('click', function(ev){
      Markup contract (class hooks inside the root element):
        .mp-url (paste box), .mp-check, .mp-find, .mp-msg, .mp-card,
        .mp-thumb, .mp-title, .mp-artist, .mp-remove, .mp-popular,
+       .mp-search + .mp-results + .mp-mine (Playbox finder, optional),
        .mp-vid + .mp-urlhidden (hidden form fields it maintains).
      opts.onSelect(info|null) fires whenever the selection changes. */
   window.hereMusicPicker = function (root, opts) {
@@ -3065,6 +3066,88 @@ document.addEventListener('click', function(ev){
       if (urlIn) urlIn.value = '';
       select(null);
     });
+    /* Playbox finder (2026-11-01): 'Your songs' (this user's past
+       picks, /music/mine) render first; the search box looks over
+       every song already on HERE (/music/search). Picking a row is
+       the same select() as a Popular pick. New songs still enter by
+       pasting a YouTube link above (oEmbed-gated). */
+    function songRow(sg, badge) {
+      var row = document.createElement('div');
+      row.className = 'mus-row';
+      if (sg.thumb) {
+        var im = document.createElement('img');
+        im.className = 'mp-pop-thumb'; im.src = sg.thumb; im.alt = '';
+        row.appendChild(im);
+      }
+      var mid = document.createElement('div');
+      var t = document.createElement('div');
+      t.className = 't'; t.textContent = sg.title || 'Song';
+      var a = document.createElement('div');
+      a.className = 'a'; a.textContent = sg.artist || '';
+      mid.appendChild(t); mid.appendChild(a);
+      row.appendChild(mid);
+      if (badge) {
+        var b = document.createElement('span');
+        b.className = 'mp-uses'; b.textContent = badge;
+        row.appendChild(b);
+      }
+      row.addEventListener('click', function () {
+        select({ video_id: sg.video_id, title: sg.title,
+                 artist: sg.artist, thumb: sg.thumb }, '');
+      });
+      return row;
+    }
+    var mineBox = q('.mp-mine');
+    if (mineBox) {
+      fetch('/music/mine')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var songs = (d && d.songs) || [];
+          mineBox.innerHTML = '';
+          if (!songs.length) {
+            var p = document.createElement('p');
+            p.className = 'aud-hint';
+            p.textContent = 'Songs you add will live here for next time.';
+            mineBox.appendChild(p);
+            return;
+          }
+          songs.forEach(function (sg) { mineBox.appendChild(songRow(sg, '')); });
+        })
+        .catch(function () {});
+    }
+    var searchIn = q('.mp-search'), resBox = q('.mp-results');
+    if (searchIn && resBox) {
+      var searchTimer = null;
+      function runSearch() {
+        var query = (searchIn.value || '').trim();
+        if (query.length < 2) { resBox.innerHTML = ''; return; }
+        fetch('/music/search?q=' + encodeURIComponent(query))
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if ((searchIn.value || '').trim() !== query) return;
+            var songs = (d && d.songs) || [];
+            resBox.innerHTML = '';
+            if (!songs.length) {
+              var p = document.createElement('p');
+              p.className = 'aud-hint';
+              p.textContent = 'Not on HERE yet — paste its YouTube link below and it joins the box.';
+              resBox.appendChild(p);
+              return;
+            }
+            songs.forEach(function (sg) {
+              resBox.appendChild(songRow(sg, sg.uses ? '🎵 × ' + sg.uses : ''));
+            });
+          })
+          .catch(function () {});
+      }
+      searchIn.addEventListener('input', function () {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(runSearch, 300);
+      });
+      searchIn.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+      });
+    }
     if (popBox) {
       fetch('/music/popular')
         .then(function (r) { return r.json(); })

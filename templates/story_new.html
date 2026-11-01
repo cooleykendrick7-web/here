@@ -67,6 +67,14 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .se-audio-pill svg{width:17px;height:17px;flex:0 0 auto}
   .se-audio-pill span{overflow:hidden;text-overflow:ellipsis}
+  #se-song-pill{position:absolute;left:12px;top:64px;z-index:6;display:flex;align-items:center;gap:7px;
+    background:rgba(14,14,17,.82);border:1px solid rgba(255,255,255,.25);padding:8px 13px;border-radius:999px;
+    font-weight:700;font-size:13.5px;color:#fff;max-width:78%;cursor:grab;touch-action:none;backdrop-filter:blur(6px)}
+  #se-song-pill[hidden]{display:none}
+  #se-song-pill svg{width:15px;height:15px;flex:0 0 auto}
+  #se-song-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .se-savebtn{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);
+    padding:11px 13px;border-radius:999px;font-weight:700;color:#fff;font-size:13.5px;white-space:nowrap}
   .se-dots{width:38px;height:38px;border-radius:50%;background:rgba(20,20,24,.65);font-weight:900}
   .se-rail{position:absolute;right:10px;top:110px;display:flex;flex-direction:column;gap:15px;z-index:5}
   .se-tool{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;
@@ -208,12 +216,15 @@
         <div id="se-textstage"></div>
         <div id="se-layer"></div>
       </div>
+      <div id="se-song-pill" hidden><svg viewBox="0 0 24 24" fill="#fff"><circle cx="6.8" cy="17.8" r="3.1"/><circle cx="17.9" cy="15.8" r="3.1"/><path d="M9.4 17.8V5.4L20.5 3.6v12.2h-2.6V6.5L12 8.1v9.7H9.4z"/></svg><span id="se-song-label"></span></div>
+      <div id="se-draftbar" hidden style="position:absolute;left:50%;transform:translateX(-50%);top:112px;z-index:7;display:flex;gap:8px;align-items:center;background:rgba(14,14,17,.9);border:1px solid rgba(255,255,255,.25);padding:8px 12px;border-radius:999px;font-size:13px;font-weight:700;color:#fff;white-space:nowrap">
+        <span>📝 Draft saved</span>
+        <button type="button" id="se-draft-resume" style="background:var(--red);color:#fff;font-weight:800;padding:6px 12px;border-radius:999px">Resume draft</button>
+        <button type="button" id="se-draft-drop" aria-label="Discard draft" style="color:#fff;font-weight:900;padding:4px 6px">✕</button>
+      </div>
       <div class="se-top">
         <button type="button" class="se-back" id="se-back" aria-label="Back">‹</button>
-        <button type="button" class="se-audio-pill" id="se-audio-pill">
-          <svg viewBox="0 0 24 24" fill="#fff"><circle cx="6.8" cy="17.8" r="3.1"/><circle cx="17.9" cy="15.8" r="3.1"/><path d="M9.4 17.8V5.4L20.5 3.6v12.2h-2.6V6.5L12 8.1v9.7H9.4z"/></svg>
-          <span id="se-audio-label">Add audio</span>
-        </button>
+        <span style="flex:1"></span>
         <button type="button" class="se-dots" id="se-dots" aria-label="More options">•••</button>
       </div>
       <div class="se-rail" id="se-rail"></div>
@@ -225,7 +236,19 @@
       </div>
     </div>
     <div class="se-bottom">
+      <div id="se-mus-fields" hidden>
+        <input type="hidden" name="music_video_id" id="se-mus-vid" value="">
+        <input type="hidden" name="music_url" id="se-mus-url" value="">
+        <input type="hidden" name="music_start" id="se-mus-startF" value="0">
+        <input type="hidden" name="music_len" id="se-mus-lenF" value="15">
+        <input type="hidden" name="music_volume" id="se-mus-volF" value="80">
+        <input type="checkbox" name="music_mute_orig" id="se-mus-muteF" value="1" style="display:none">
+      </div>
       <input class="se-cap" name="caption" id="se-caption" maxlength="280" placeholder="Add a caption…" autocomplete="off">
+      <div class="se-bottomrow" style="margin-bottom:9px">
+        <button type="button" class="se-savebtn" id="se-save-phone">⬇ Save to phone</button>
+        <button type="button" class="se-savebtn" id="se-save-draft">📝 Save draft</button>
+      </div>
       <div class="se-bottomrow">
         <button type="button" class="se-aud" id="se-aud-btn">👥 <span id="se-aud-label">Friends</span> ▾</button>
         <button type="submit" id="se-share">Share</button>
@@ -361,7 +384,7 @@ document.querySelectorAll('.se-mode').forEach(function(btn){
     btn.classList.add('on');
     var m = btn.dataset.mode;
     if (m === 'text') openTextMode();
-    else if (m === 'music') { toast('Pick your photo or video — then tap Add audio up top'); }
+    else if (m === 'music') { toast('Pick your photo or video — then tap Music in the side rail'); }
     else if (m === 'boomerang') openBoomerang();
     else if (m === 'templates') openTemplates();
   });
@@ -375,6 +398,7 @@ function showEditor(){
 }
 function openEditor(cfg){
   S.mode = 'media'; S.source = cfg.source; S.mediaKind = cfg.kind;
+  S.objUrl = (cfg.source === 'file' || cfg.source === 'gen') ? cfg.url : '';
   S.existingPath = cfg.path || '';
   if (cfg.source === 'existing' || cfg.source === 'multi') $('se-existing').value = cfg.path || '';
   var img = $('se-media-img'), vid = $('se-media-vid');
@@ -392,7 +416,7 @@ function openEditor(cfg){
   showEditor();
 }
 function openTextMode(){
-  S.mode = 'text'; S.mediaKind = null; S.source = 'text';
+  S.mode = 'text'; S.mediaKind = null; S.source = 'text'; S.objUrl = '';
   var img = $('se-media-img'), vid = $('se-media-vid');
   img.hidden = true; vid.hidden = true; vid.removeAttribute('src');
   var ts = $('se-textstage');
@@ -411,6 +435,7 @@ $('se-back').addEventListener('click', function(){
 var railOpen = false;
 function buildRail(){
   var tools = [
+    ['music','Music', SE_ART.music],
     ['stickers','Stickers', '<path d="M12 2.5a9.5 9.5 0 1 0 0 19 9.5 9.5 0 0 0 0-19zM8.2 9.4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm7.6 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM7 13.4h10c-.6 3-2.5 4.7-5 4.7s-4.4-1.7-5-4.7z"/>'], ['text','Text','<path d="M5 4h14v3h-2.4V6h-3.1v12h2.3v2H9.2v-2h2.3V6H8.4v1H5z"/>'],
     ['mention','Mention', SE_ART.at], ['filters','Filters','<path d="M12 3l1.7 5.2L19 10l-5.3 1.8L12 17l-1.7-5.2L5 10l5.3-1.8z"/><circle cx="19" cy="16.5" r="1.6"/><circle cx="5.5" cy="17.5" r="1.2"/>'],
     ['trim','Trim','<path d="M6.5 5.3a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2zm0 1.8a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM6.5 13.5a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2zm0 1.8a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM9.6 9.4L21.2 4.4l-.6 2.6L10.4 10.6l-.8-1.2zM9.6 14.6l11.6 5-.6-2.6L10.4 13.4l-.8 1.2z"/>']
@@ -449,7 +474,8 @@ function refreshRail(){
   if (boomBtn) boomBtn.style.color = S.boomerang ? '#ff5b5b' : '';
 }
 function openTool(key){
-  if (key === 'stickers') openStickers();
+  if (key === 'music') openMusic();
+  else if (key === 'stickers') openStickers();
   else if (key === 'text') openTextSheet(false);
   else if (key === 'mention') openMention();
   else if (key === 'filters') openFilters();
@@ -800,13 +826,34 @@ function openCaptions(){
   $('cp-add').addEventListener('click', function(){ S.captions = $('cp-t').value.trim(); closeSheet(); toast(S.captions ? 'Captions saved' : 'Captions cleared'); });
 }
 
-/* ---- music (Add audio) ---- */
+/* ---- music: the Playbox sheet (Playbox integration, 2026-11-01) ----
+   Opened from the Music tool in the right rail (and by tapping the
+   song pill). Familiar FB/IG flow in HERE skin: search -> pick ->
+   trim. Playbox is FIND + TRIM only: the song keeps streaming through
+   YouTube's player in the viewer; nothing is ripped or rehosted.
+   The picked song's hidden fields live OUTSIDE this sheet (in the
+   editor, #se-mus-fields) so closing/reopening the sheet — or saving
+   a draft — never loses the pick. */
+var musPick = null;   // {video_id, title, artist, thumb} | null
+function setMusicPick(info){
+  musPick = info;
+  $('se-mus-vid').value = info ? info.video_id : '';
+  $('se-mus-url').value = '';
+  var pill = $('se-song-pill');
+  pill.hidden = !info;
+  if (info) $('se-song-label').textContent = (info.title || 'Song') +
+    (info.artist ? ' — ' + info.artist : '');
+}
 function openMusic(){
-  openSheet('<h3>🎵 Add music</h3>' +
+  openSheet('<h3>🎧 Playbox — add music</h3>' +
     '<div class="music-picker" id="se-music-picker">' +
-    '<input type="hidden" name="music_video_id" class="mp-vid" value="">' +
-    '<input type="hidden" name="music_url" class="mp-urlhidden" value="">' +
+    '<input type="hidden" class="mp-vid" value="">' +
+    '<input type="hidden" class="mp-urlhidden" value="">' +
     '<p style="color:rgba(255,255,255,.6);font-size:13px;margin:0 0 8px">Songs stream from YouTube — the artist’s official upload, played right on your story.</p>' +
+    '<input type="text" class="mp-search se-inp" style="margin:0" placeholder="🔎 Search songs on HERE — song or artist" autocomplete="off">' +
+    '<div class="mp-results" style="margin-top:6px"></div>' +
+    '<label class="fld">⭐ Your songs</label><div class="mp-mine"></div>' +
+    '<label class="fld">New song? Paste its YouTube link</label>' +
     '<div style="display:flex;gap:8px"><input type="text" class="mp-url se-inp" style="margin:0" placeholder="Paste a YouTube link" autocomplete="off">' +
     '<button type="button" class="se-go mp-check" style="width:auto;margin:0;padding:11px 16px">Check</button></div>' +
     '<p class="mp-msg"></p>' +
@@ -823,21 +870,259 @@ function openMusic(){
     '<input type="hidden" name="music_len" id="se-mus-len" value="15">' +
     '<label class="fld" for="se-mus-vol">Music volume</label>' +
     '<input type="range" name="music_volume" id="se-mus-vol" class="se-range" min="0" max="100" step="1" value="80">' +
-    '<label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px"><input type="checkbox" name="music_mute_orig" value="1" id="se-mus-mute"> Mute my video’s own sound</label></div>');
+    '<label style="display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px"><input type="checkbox" name="music_mute_orig" value="1" id="se-mus-mute"> Mute my video’s own sound</label>' +
+    '<button type="button" class="se-go" id="se-mus-done" style="margin-top:12px">Done</button></div>');
+  var picker = null;
   if (window.hereMusicPicker){
-    window.hereMusicPicker($('se-music-picker'), { onSelect: function(info){
+    picker = window.hereMusicPicker($('se-music-picker'), { onSelect: function(info){
+      setMusicPick(info);
       $('se-mus-ctl').hidden = !info;
-      $('se-audio-label').textContent = info ? (info.title || 'Music added') : 'Add audio';
     }});
+    if (picker && musPick) picker.select(musPick, '');
+    if (picker && musPick){
+      $('se-mus-start').value = $('se-mus-startF').value || '0';
+      $('se-mus-len').value = $('se-mus-lenF').value || '15';
+      sheetBody.querySelectorAll('#se-mus-lens .chip').forEach(function(x){
+        x.classList.toggle('on', x.dataset.len === $('se-mus-len').value);
+      });
+      $('se-mus-vol').value = $('se-mus-volF').value || '80';
+      $('se-mus-mute').checked = $('se-mus-muteF').checked;
+    }
   }
+  function syncTrim(){
+    $('se-mus-startF').value = $('se-mus-start').value || '0';
+    $('se-mus-lenF').value = $('se-mus-len').value || '15';
+    $('se-mus-volF').value = $('se-mus-vol').value || '80';
+    $('se-mus-muteF').checked = $('se-mus-mute').checked;
+  }
+  ['se-mus-start','se-mus-vol'].forEach(function(id){
+    var el = $(id); if (el) el.addEventListener('input', syncTrim);
+  });
+  var muteEl = $('se-mus-mute'); if (muteEl) muteEl.addEventListener('change', syncTrim);
   sheetBody.querySelectorAll('#se-mus-lens .chip').forEach(function(ch){
     ch.addEventListener('click', function(){
       sheetBody.querySelectorAll('#se-mus-lens .chip').forEach(function(x){ x.classList.remove('on'); });
-      ch.classList.add('on'); $('se-mus-len').value = ch.dataset.len;
+      ch.classList.add('on'); $('se-mus-len').value = ch.dataset.len; syncTrim();
     });
   });
+  var doneBtn = $('se-mus-done');
+  if (doneBtn) doneBtn.addEventListener('click', function(){ syncTrim(); closeSheet(); });
 }
-$('se-audio-pill').addEventListener('click', openMusic);
+/* song pill: drag to move, tap to reopen the Playbox sheet */
+(function(){
+  var pill = $('se-song-pill'), drag = null, moved = false;
+  pill.addEventListener('pointerdown', function(e){
+    drag = {x: e.clientX, y: e.clientY,
+            l: pill.offsetLeft, t: pill.offsetTop};
+    moved = false;
+    try { pill.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  pill.addEventListener('pointermove', function(e){
+    if (!drag) return;
+    var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 6) moved = true;
+    if (moved){
+      var w = pill.parentElement;
+      var nl = Math.max(0, Math.min(drag.l + dx, w.clientWidth - pill.offsetWidth));
+      var nt = Math.max(0, Math.min(drag.t + dy, w.clientHeight - pill.offsetHeight));
+      pill.style.left = nl + 'px'; pill.style.top = nt + 'px';
+    }
+  });
+  pill.addEventListener('pointerup', function(){
+    drag = null;
+    if (!moved) openMusic();
+  });
+})();
+
+/* ---- save to phone + save draft (Playbox integration, 2026-11-01) ----
+   Save to phone exports ONLY the user's own media + edit layer —
+   Playbox music is NEVER baked in (the button sheet says so plainly);
+   the song streams from YouTube when the story plays on HERE.
+   Save draft = browser localStorage (media reference + edit layer +
+   music pick/trim), restored by the Resume draft bar on reopen. */
+var SE_DRAFT_KEY = 'here_story_draft_v1';
+function downloadBlob(blob, name){
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 4000);
+}
+function drawStoryText(ctx, tx, W, H){
+  var fs = Math.round(W / 400 * 27 * (tx.scale || 1));
+  ctx.font = (tx.font === 'meme' ? '900 ' : tx.font === 'typewriter' ? '' : '700 ') +
+    fs + 'px ' + (tx.font === 'deco' ? 'Georgia, serif' :
+      tx.font === 'typewriter' ? "'Courier New', monospace" :
+      tx.font === 'meme' ? "Impact, 'Arial Black', sans-serif" : 'Arial, sans-serif');
+  ctx.textAlign = tx.align === 'left' ? 'left' : tx.align === 'right' ? 'right' : 'center';
+  ctx.textBaseline = 'middle';
+  var x = W * (tx.x || 50) / 100, y = H * (tx.y || 50) / 100;
+  var maxW = W * 0.86, words = String(tx.t || '').split(/\s+/), lines = [], line = '';
+  words.forEach(function(w){
+    var t = line ? line + ' ' + w : w;
+    if (ctx.measureText(t).width > maxW && line){ lines.push(line); line = w; }
+    else line = t;
+  });
+  if (line) lines.push(line);
+  var lh = fs * 1.25, y0 = y - (lines.length - 1) * lh / 2;
+  lines.forEach(function(ln, i){
+    if (tx.bg){
+      var wdt = ctx.measureText(ln).width;
+      ctx.fillStyle = 'rgba(0,0,0,.62)';
+      var bx = tx.align === 'left' ? x : tx.align === 'right' ? x - wdt : x - wdt / 2;
+      ctx.fillRect(bx - fs * .3, y0 + i * lh - fs * .68, wdt + fs * .6, lh);
+    }
+    if (tx.font === 'neon'){
+      ctx.shadowColor = tx.color || '#fff'; ctx.shadowBlur = fs * .5;
+    } else {
+      ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = fs * .18;
+    }
+    ctx.fillStyle = tx.color || '#fff';
+    ctx.fillText(ln, x, y0 + i * lh);
+  });
+  ctx.shadowBlur = 0;
+}
+function saveStoryToPhone(){
+  var note = musPick ? '<p style="color:#ffb3b3;font-size:13.5px">🎵 Your Playbox song is <b>not</b> in the phone copy — songs stay on HERE and stream from YouTube. The phone copy is your own photo/video + your edits.</p>' : '';
+  if (S.mediaKind === 'video'){
+    openSheet('<h3>⬇ Save to phone</h3>' + note +
+      '<p style="color:rgba(255,255,255,.7);font-size:14px">This saves your original video, unchanged. Text and stickers can’t be burned into a video in the browser.</p>' +
+      '<button type="button" class="se-go" id="sp-go">Save my video</button>');
+    $('sp-go').addEventListener('click', function(){
+      closeSheet();
+      if (S.genFile){ downloadBlob(S.genFile, S.genFile.name || 'here-story.webm'); return; }
+      var url = currentMediaUrl();
+      if (!url){ toast('No video to save'); return; }
+      fetch(url).then(function(r){ return r.blob(); }).then(function(b){
+        downloadBlob(b, 'here-story' + (url.indexOf('.webm') >= 0 ? '.webm' : url.indexOf('.mov') >= 0 ? '.mov' : '.mp4'));
+      }).catch(function(){ toast('Could not save that video'); });
+    });
+    return;
+  }
+  openSheet('<h3>⬇ Save to phone</h3>' + note +
+    '<p style="color:rgba(255,255,255,.7);font-size:14px">Saves your photo with your text on it, as one picture.</p>' +
+    '<button type="button" class="se-go" id="sp-go">Save picture</button>');
+  $('sp-go').addEventListener('click', function(){
+    closeSheet();
+    var W = 1080, H = 1350, cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    var ctx = cv.getContext('2d');
+    function finish(){
+      if (S.captions){
+        ctx.fillStyle = 'rgba(0,0,0,.72)'; ctx.fillRect(0, H - 92, W, 92);
+        ctx.fillStyle = '#fff'; ctx.font = '600 30px Arial, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(S.captions.slice(0, 90), W / 2, H - 46, W * .92);
+      }
+      S.texts.forEach(function(tx){ drawStoryText(ctx, tx, W, H); });
+      cv.toBlob(function(b){
+        if (b) downloadBlob(b, 'here-story.png');
+        else toast('Save failed in this browser');
+      }, 'image/png');
+    }
+    if (S.mode === 'text'){
+      var gr = ctx.createLinearGradient(0, 0, W * .3, H);
+      var stops = {dusk:['#23233a','#4a1942','#8f1d22'], ember:['#1c0f0a','#7a2408','#e04707'],
+        ocean:['#04141f','#0a4d5c','#0e86a0'], forest:['#0a1a10','#14532d','#3f9e4d'],
+        grape:['#170a26','#4c1d95','#9333ea'], mono:['#0a0a0c','#26262c','#52525b']}[S.textbg] ||
+        ['#23233a','#4a1942','#8f1d22'];
+      gr.addColorStop(0, stops[0]); gr.addColorStop(.55, stops[1]); gr.addColorStop(1, stops[2]);
+      ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+      finish();
+    } else {
+      var url = currentMediaUrl();
+      if (!url){ toast('No photo to save'); return; }
+      var im = new Image();
+      im.onload = function(){
+        if (S.filter && S.filter !== 'original' && SE_FILTERS[S.filter])
+          ctx.filter = SE_FILTERS[S.filter];
+        drawCover(ctx, im, 0, 0, W, H);
+        ctx.filter = 'none';
+        finish();
+      };
+      im.onerror = function(){ toast('That photo would not load for saving'); };
+      im.src = url;
+    }
+  });
+}
+function currentMediaUrl(){
+  if (S.objUrl) return S.objUrl;
+  var img = $('se-media-img'), vid = $('se-media-vid');
+  if (S.mediaKind === 'video') return (vid && vid.getAttribute('src')) || '';
+  return (img && img.getAttribute('src')) || '';
+}
+function collectDraft(){
+  return { v: 1, at: Date.now(), mode: S.mode,
+    source: (S.source === 'existing' || S.source === 'multi') ? 'existing' : (S.source === 'text' ? 'text' : ''),
+    path: S.existingPath || '', kind: S.mediaKind || '',
+    filter: S.filter, textbg: S.textbg, boomerang: !!S.boomerang,
+    texts: S.texts, stickers: S.stickers.filter(function(st){ return st.kind !== 'link' && st.kind !== 'mention' && st.kind !== 'addyours'; }),
+    captions: S.captions, audience: S.audience,
+    caption: $('se-caption').value || '',
+    lifetime: $('se-lifetime').value, customHours: $('se-custom-hours').value,
+    ama: $('se-ama').value,
+    music: musPick ? { info: musPick, start: $('se-mus-startF').value,
+      len: $('se-mus-lenF').value, vol: $('se-mus-volF').value,
+      mute: $('se-mus-muteF').checked } : null };
+}
+function saveDraft(silent){
+  var d = collectDraft();
+  if (!d.source && !d.texts.length && !d.music){
+    if (!silent) toast('Add a photo, text or a song first — then save the draft');
+    return;
+  }
+  try { localStorage.setItem(SE_DRAFT_KEY, JSON.stringify(d)); } catch (e) {}
+  if (!silent) toast('Draft saved on this phone — find it here next time');
+}
+function clearDraft(){
+  try { localStorage.removeItem(SE_DRAFT_KEY); } catch (e) {}
+  $('se-draftbar').hidden = true;
+}
+function applyDraft(d){
+  S.filter = d.filter || 'original';
+  S.textbg = d.textbg || 'dusk';
+  S.boomerang = !!d.boomerang;
+  S.texts = d.texts || []; S.stickers = d.stickers || [];
+  S.captions = d.captions || '';
+  S.audience = d.audience || 'friends';
+  $('se-audience').value = S.audience;
+  $('se-aud-label').textContent = S.audience === 'public' ? 'Public' : 'Friends';
+  $('se-caption').value = d.caption || '';
+  if (d.lifetime) $('se-lifetime').value = d.lifetime;
+  if (d.customHours) $('se-custom-hours').value = d.customHours;
+  $('se-ama').value = d.ama || '';
+  if (d.music && d.music.info){
+    setMusicPick(d.music.info);
+    $('se-mus-startF').value = d.music.start || '0';
+    $('se-mus-lenF').value = d.music.len || '15';
+    $('se-mus-volF').value = d.music.vol || '80';
+    $('se-mus-muteF').checked = !!d.music.mute;
+  }
+  clearDraft();
+  renderLayer(); refreshRail();
+  toast('Draft back — keep editing or Share');
+}
+$('se-save-phone').addEventListener('click', saveStoryToPhone);
+$('se-save-draft').addEventListener('click', function(){ saveDraft(false); });
+$('se-draft-drop').addEventListener('click', clearDraft);
+$('se-draft-resume').addEventListener('click', function(){
+  var raw = null;
+  try { raw = localStorage.getItem(SE_DRAFT_KEY); } catch (e) {}
+  if (!raw){ clearDraft(); return; }
+  var d = null;
+  try { d = JSON.parse(raw); } catch (e) {}
+  if (!d){ clearDraft(); return; }
+  if (d.source === 'existing' && d.path){
+    fetch('/stories/media').then(function(r){ return r.json(); }).then(function(dd){
+      var it = (dd.items || []).find(function(x){ return x.path === d.path; });
+      if (!it){ toast('That draft’s photo is gone — draft dropped'); clearDraft(); return; }
+      openEditor({source:'existing', path: it.path, kind: it.video ? 'video' : 'image', url: it.url});
+      applyDraft(d);
+    }).catch(function(){ toast('Could not load that draft'); });
+  } else if (d.source === 'text'){
+    openTextMode();
+    applyDraft(d);
+  } else { toast('That draft had no photo to bring back'); clearDraft(); }
+});
 $('se-dots').addEventListener('click', function(){
   var lives = [['5m','5 minutes'],['10m','10 minutes'],['15m','15 minutes'],['1h','1 hour'],['custom','Custom hours'],['24h','24 hours']];
   var cur = $('se-lifetime').value;
@@ -1024,6 +1309,7 @@ function buildEditJSON(){
   return JSON.stringify(e);
 }
 $('se-form').addEventListener('submit', function(ev){
+  try { localStorage.removeItem(SE_DRAFT_KEY); } catch (e) {}
   $('se-editjson').value = buildEditJSON();
   if (S.mode === 'text' && !S.texts.length){
     ev.preventDefault(); toast('Write your text first — tap Text'); openTextSheet(true); return;
@@ -1073,6 +1359,9 @@ if (ADDYOURS_PROMPT){
   S.stickers.push({kind:'addyours', prompt: ADDYOURS_PROMPT, x: 50, y: 42, scale: 1, rot: 0});
 }
 renderLayer();
+try {
+  if (localStorage.getItem(SE_DRAFT_KEY)) $('se-draftbar').hidden = false;
+} catch (e) {}
 })();
 </script>
 {% endblock %}

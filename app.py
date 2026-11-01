@@ -7298,6 +7298,69 @@ async def music_popular(request: Request):
          "uses": r["uses"]} for r in rows]})
 
 
+# Playbox (2026-11-01): the music picker's finder reads HERE's own
+# attachment snapshots only — no new catalog, no downloads. "Your
+# songs" = songs this user has attached to their own stories/posts;
+# search covers every song already attached anywhere on HERE. A song
+# not on HERE yet still enters through the paste-a-link oEmbed gate.
+_MUSIC_UNION = (
+    "SELECT music_ref AS video_id, music_title AS title, "
+    "       music_artist AS artist, music_thumb AS thumb, "
+    "       user_id AS uid, created_at AS ca "
+    "FROM stories WHERE music_kind='youtube' AND music_ref != '' "
+    "UNION ALL "
+    "SELECT music_video_id AS video_id, music_title AS title, "
+    "       music_artist AS artist, music_thumb AS thumb, "
+    "       user_id AS uid, created_at AS ca "
+    "FROM posts WHERE music_video_id != ''")
+
+
+@app.get("/music/mine")
+async def music_mine(request: Request):
+    """Playbox 'Your songs': this user's own past story/post music
+    attachments, most recent first, deduped by video."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    rows = conn.execute(
+        "SELECT video_id, MAX(title) AS title, MAX(artist) AS artist, "
+        "MAX(thumb) AS thumb, MAX(ca) AS last_used FROM (" + _MUSIC_UNION +
+        ") WHERE uid=? GROUP BY video_id ORDER BY last_used DESC LIMIT 10",
+        (user["id"],)).fetchall()
+    conn.close()
+    return JSONResponse({"ok": True, "songs": [
+        {"video_id": r["video_id"], "title": r["title"] or "",
+         "artist": r["artist"] or "", "thumb": r["thumb"] or ""}
+        for r in rows]})
+
+
+@app.get("/music/search")
+async def music_search(request: Request):
+    """Playbox search: title/artist match over every song already
+    attached on HERE (stories + posts snapshots)."""
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "error": "login"}, status_code=401)
+    q = (request.query_params.get("q") or "").strip()
+    if len(q) < 2:
+        return JSONResponse({"ok": True, "songs": []})
+    like = ("%" + q.replace("\\", "\\\\").replace("%", "\\%")
+            .replace("_", "\\_") + "%")
+    conn = db()
+    rows = conn.execute(
+        "SELECT video_id, MAX(title) AS title, MAX(artist) AS artist, "
+        "MAX(thumb) AS thumb, COUNT(*) AS uses FROM (" + _MUSIC_UNION +
+        ") WHERE title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' "
+        "GROUP BY video_id ORDER BY uses DESC, title ASC LIMIT 12",
+        (like, like)).fetchall()
+    conn.close()
+    return JSONResponse({"ok": True, "songs": [
+        {"video_id": r["video_id"], "title": r["title"] or "",
+         "artist": r["artist"] or "", "thumb": r["thumb"] or "",
+         "uses": r["uses"]} for r in rows]})
+
+
 def _own_media_path(uid, path):
     """True when `path` is one of THIS user's own uploads (a post's or
     story's media, their avatar or background) with a story-legal
