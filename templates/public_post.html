@@ -66,8 +66,88 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
   {% if embed_url %}
   <div class="embed"><iframe src="{{ embed_url|e }}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
   {% endif %}
-  {% if music_embed %}
-  <div class="embed"><iframe src="{{ music_embed|e }}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
+  {% if music %}
+  <div class="pmusic" id="pmusic" data-vid="{{ music.video_id|e }}" data-start="{{ music.start }}" data-len="{{ music.len or 0 }}">
+    <button type="button" id="pmusic-btn" aria-label="Play song">▶</button>
+    <div class="pmusic-info">
+      <div class="t">🎵 {{ music.title|e }}</div>
+      <div class="a">{{ music.artist|e }}</div>
+    </div>
+    <input type="range" id="pmusic-vol" min="0" max="100" value="{{ music.volume }}" aria-label="Music volume">
+    <div id="pmusic-holder"></div>
+  </div>
+  <style>
+    .pmusic{display:flex;align-items:center;gap:10px;margin-top:12px;padding:9px 12px;
+      border:1px solid #e3e5e8;border-radius:12px;background:#f7f7f9}
+    .pmusic #pmusic-btn{background:#d41f2e;color:#fff;border:none;border-radius:50%;
+      width:42px;height:42px;font-size:16px;cursor:pointer;flex-shrink:0}
+    .pmusic-info{flex:1;min-width:0}
+    .pmusic-info .t{font-weight:700;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .pmusic-info .a{color:#65676b;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .pmusic input[type=range]{width:90px;accent-color:#d41f2e}
+    #pmusic-holder{width:2px;height:2px;overflow:hidden;opacity:.01;pointer-events:none}
+    #pmusic-holder iframe{width:2px;height:2px;border:0;display:block}
+  </style>
+  <script>
+  (function () {
+    var wrap = document.getElementById('pmusic');
+    if (!wrap) return;
+    var btn = document.getElementById('pmusic-btn'),
+        vol = document.getElementById('pmusic-vol'),
+        holder = document.getElementById('pmusic-holder'),
+        player = null;
+    function loadYT(cb) {
+      if (window.YT && YT.Player) { cb(); return; }
+      var prev = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = function () {
+        if (prev) try { prev(); } catch (e) {}
+        cb();
+      };
+      var tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(tag);
+    }
+    btn.addEventListener('click', function () {
+      if (player) {
+        try {
+          if (player.getPlayerState() === 1) { player.pauseVideo(); btn.textContent = '▶'; }
+          else { player.playVideo(); btn.textContent = '⏸'; }
+        } catch (e) {}
+        return;
+      }
+      var slot = document.createElement('div');
+      holder.appendChild(slot);
+      loadYT(function () {
+        var start = parseInt(wrap.getAttribute('data-start') || '0', 10) || 0;
+        var mlen = parseInt(wrap.getAttribute('data-len') || '0', 10) || 0;
+        var pvars = { start: start, rel: 0, playsinline: 1, modestbranding: 1 };
+        if (mlen > 0) pvars.end = start + mlen;
+        player = new YT.Player(slot, {
+          width: '2', height: '2',
+          videoId: wrap.getAttribute('data-vid'),
+          playerVars: pvars,
+          events: {
+            onReady: function (ev) {
+              try { ev.target.setVolume(parseInt(vol.value || '80', 10) || 0); } catch (e) {}
+              ev.target.playVideo();
+              btn.textContent = '⏸';
+            },
+            onStateChange: function (ev) {
+              if (ev.data === YT.PlayerState.PLAYING) btn.textContent = '⏸';
+              else if (ev.data === YT.PlayerState.PAUSED ||
+                       ev.data === YT.PlayerState.ENDED) btn.textContent = '▶';
+            }
+          }
+        });
+      });
+    });
+    vol.addEventListener('input', function () {
+      if (player) {
+        try { player.setVolume(parseInt(vol.value || '0', 10) || 0); } catch (e) {}
+      }
+    });
+  })();
+  </script>
   {% endif %}
   <div class="stats">👍 {{ like_count }} · 💬 {{ comment_count }} Comments</div>
 </div>

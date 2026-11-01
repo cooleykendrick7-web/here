@@ -638,13 +638,23 @@ button.post-opt-item.like-btn.liked{color:var(--look-accent,var(--red))}
 .sv-music{position:absolute;left:12px;bottom:52px;background:rgba(0,0,0,.55);color:#fff;
   padding:5px 11px;border-radius:999px;font-size:13px;font-weight:600;max-width:78%;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
-/* story viewer's YouTube mini player: visible on purpose (YouTube's
-   terms) — sits bottom-left, above the viewers bar */
-#sv-yt-wrap{position:absolute;left:12px;bottom:76px;z-index:5;width:200px}
-#sv-yt-wrap .sv-yt-frame{width:200px;height:113px;border-radius:12px;overflow:hidden;
-  background:#000;box-shadow:0 4px 18px rgba(0,0,0,.5)}
-#sv-yt-wrap .sv-yt-frame iframe{width:100%;height:100%;display:block;border:0}
-#sv-yt-wrap .sv-music{position:static;display:inline-block;margin-top:6px;max-width:100%}
+/* story music is AUDIO ONLY (Ken's order, 2026-11-01): the song
+   streams through YouTube's official player in a 2px invisible
+   holder — never a video box on the story. The 🎵 credit chip
+   (.sv-music) stays on screen, like Facebook's music sticker. */
+#sv-yt-wrap{position:absolute;left:0;bottom:0;z-index:0;width:2px;height:2px;
+  overflow:hidden;opacity:.01;pointer-events:none}
+#sv-yt-wrap .sv-yt-frame{width:2px;height:2px;overflow:hidden}
+#sv-yt-wrap .sv-yt-frame iframe{width:2px;height:2px;display:block;border:0}
+#sv-volbtn{position:absolute;right:12px;bottom:76px;z-index:6;width:42px;height:42px;
+  border-radius:50%;border:1px solid rgba(255,255,255,.25);
+  background:rgba(14,14,17,.82);color:#fff;font-size:18px;cursor:pointer}
+#sv-volpanel{position:absolute;right:12px;bottom:126px;z-index:6;width:232px;
+  background:rgba(14,14,17,.88);border:1px solid rgba(255,255,255,.22);
+  border-radius:14px;padding:10px 14px;color:#fff}
+#sv-volpanel label{display:flex;align-items:center;gap:10px;font-size:13.5px;
+  font-weight:700;padding:5px 0;white-space:nowrap}
+#sv-volpanel input[type=range]{flex:1;accent-color:#e0245e;min-width:0}
 .sv-bottom{display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));
   background:linear-gradient(transparent,rgba(0,0,0,.55))}
 .sv-chipbtn{background:rgba(255,255,255,.14);color:#fff;border:none;border-radius:999px;
@@ -752,8 +762,14 @@ button.post-opt-item.like-btn.liked{color:var(--look-accent,var(--red))}
   overflow:hidden;text-overflow:ellipsis}
 .post-music-play{background:var(--red);color:#fff;border:none;border-radius:50%;
   width:38px;height:38px;font-size:15px;cursor:pointer;flex-shrink:0}
-.post-music-player{background:#000}
-.post-music-player iframe{width:100%;height:200px;display:block;border:0}
+.post-music-player{width:2px;height:2px;overflow:hidden;opacity:.01;pointer-events:none}
+.post-music-player iframe{width:2px;height:2px;display:block;border:0}
+.post-music-volbtn{background:none;border:1px solid var(--border);color:inherit;border-radius:50%;
+  width:40px;height:40px;font-size:16px;cursor:pointer;flex-shrink:0}
+.post-music-vols{padding:9px 12px;display:flex;flex-direction:column;gap:7px;border-top:1px solid var(--border)}
+.post-music-vols[hidden]{display:none}
+.pm-vol-row{display:flex;align-items:center;gap:10px;font-size:13.5px;font-weight:700}
+.pm-vol-row input[type=range]{flex:1;accent-color:var(--red)}
 /* ===== Playbox trim slider (2026-11-01): a window dragged across
    the whole song, over a stylized track wave ===== */
 .mp-dur{font-size:11.5px;color:var(--muted);font-weight:700;white-space:nowrap}
@@ -3410,64 +3426,137 @@ document.addEventListener('click', function(ev){
              getSelected: function () { return selected; } };
   };
 
-  /* Post-wall music: first tap builds the (visible) YouTube player in
-     the card and plays from the saved start second; only one post's
-     song plays at a time — starting another pauses/destroys the old. */
-  var pmPlayer = null, pmBtn = null, pmBox = null;
-  function pmReset() {
+  /* Post-wall music (Ken's order, 2026-11-01): AUDIO ONLY — the
+     YouTube player lives in a 2px invisible holder and is never
+     shown; the music bar is the whole face. Songs start by
+     themselves when a post scrolls into view (one at a time;
+     scrolling away pauses), the ▶ button still toggles by hand,
+     and every card carries viewer volume sliders — 🎵 the music
+     and, on video posts, 🎬 the video's own sound — starting from
+     the levels the creator saved. */
+  var pmPlayer = null, pmBtn = null, pmWrap = null;
+  function pmDestroy() {
     if (pmPlayer) { try { pmPlayer.destroy(); } catch (e) {} pmPlayer = null; }
     if (pmBtn) pmBtn.textContent = '▶';
-    if (pmBox) { pmBox.hidden = true; pmBox.innerHTML = ''; }
-    pmBtn = null; pmBox = null;
+    if (pmWrap) {
+      var b = pmWrap.querySelector('.post-music-player');
+      if (b) b.innerHTML = '';
+    }
+    pmBtn = null; pmWrap = null;
   }
-  document.addEventListener('click', function (e) {
-    var btn = e.target && e.target.closest ?
-      e.target.closest('.post-music-play') : null;
-    if (!btn) return;
-    var wrap = btn.closest('.post-music');
-    if (!wrap) return;
-    if (pmBtn === btn && pmPlayer) {
-      try {
-        if (pmPlayer.getPlayerState() === 1) {
-          pmPlayer.pauseVideo(); btn.textContent = '▶';
-        } else {
-          pmPlayer.playVideo(); btn.textContent = '⏸';
-        }
-      } catch (err) {}
+  function pmMusicVol(wrap) {
+    var s = wrap.querySelector('.pm-vol-music');
+    var v = s ? parseInt(s.value || '80', 10)
+              : parseInt(wrap.getAttribute('data-vol') || '80', 10);
+    return Math.max(0, Math.min(100, isNaN(v) ? 80 : v));
+  }
+  function pmStart(wrap) {
+    var btn = wrap.querySelector('.post-music-play');
+    if (pmWrap === wrap && pmPlayer) {
+      try { pmPlayer.playVideo(); } catch (e) {}
       return;
     }
-    pmReset();
+    pmDestroy();
     var box = wrap.querySelector('.post-music-player');
     var vid = wrap.getAttribute('data-vid');
     var start = parseInt(wrap.getAttribute('data-start') || '0', 10) || 0;
     var mlen = parseInt(wrap.getAttribute('data-len') || '0', 10) || 0;
-    if (!box || !vid) return;
-    pmBtn = btn; pmBox = box;
-    box.hidden = false;
+    if (!box || !vid || !btn) return;
+    pmBtn = btn; pmWrap = wrap;
     var slot = document.createElement('div');
     box.appendChild(slot);
     window.hereLoadYT(function () {
-      if (pmBtn !== btn) return;  // superseded while the API loaded
+      if (pmWrap !== wrap) return;  // superseded while the API loaded
       var pvars = { start: start, rel: 0, playsinline: 1,
                     modestbranding: 1 };
       if (mlen > 0) pvars.end = start + mlen;
       pmPlayer = new YT.Player(slot, {
-        width: '100%', height: '200', videoId: vid,
+        width: '2', height: '2', videoId: vid,
         playerVars: pvars,
         events: {
           onReady: function (ev) {
-            ev.target.playVideo();
-            btn.textContent = '⏸';
+            try { ev.target.setVolume(pmMusicVol(wrap)); } catch (e) {}
+            try { ev.target.playVideo(); } catch (e) {}
           },
           onStateChange: function (ev) {
-            if (ev.data === YT.PlayerState.PLAYING) btn.textContent = '⏸';
+            if (!pmBtn) return;
+            if (ev.data === YT.PlayerState.PLAYING) pmBtn.textContent = '⏸';
             else if (ev.data === YT.PlayerState.PAUSED ||
-                     ev.data === YT.PlayerState.ENDED) btn.textContent = '▶';
+                     ev.data === YT.PlayerState.ENDED) pmBtn.textContent = '▶';
           }
         }
       });
     });
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var vbtn = t.closest('.post-music-volbtn');
+    if (vbtn) {
+      var vwrap = vbtn.closest('.post-music');
+      var panel = vwrap ? vwrap.querySelector('.post-music-vols') : null;
+      if (panel) panel.hidden = !panel.hidden;
+      return;
+    }
+    var btn = t.closest('.post-music-play');
+    if (!btn) return;
+    var wrap = btn.closest('.post-music');
+    if (!wrap) return;
+    if (pmWrap === wrap && pmPlayer) {
+      try {
+        if (pmPlayer.getPlayerState() === 1) pmPlayer.pauseVideo();
+        else pmPlayer.playVideo();
+      } catch (err) {}
+      return;
+    }
+    pmStart(wrap);
   });
+  document.addEventListener('input', function (e) {
+    var s = e.target;
+    if (!s || !s.classList) return;
+    if (s.classList.contains('pm-vol-music')) {
+      var wrap = s.closest ? s.closest('.post-music') : null;
+      if (wrap && pmWrap === wrap && pmPlayer) {
+        try { pmPlayer.setVolume(parseInt(s.value || '0', 10) || 0); }
+        catch (err) {}
+      }
+    } else if (s.classList.contains('pm-vol-video')) {
+      var card = s.closest ? s.closest('.card') : null;
+      var v = card ? card.querySelector('video.post-video-file') : null;
+      if (v) {
+        var val = (parseInt(s.value || '0', 10) || 0) / 100;
+        v.volume = val;
+        v.muted = val <= 0;
+        if (val > 0 && v.paused) {
+          var p = v.play(); if (p && p.catch) p.catch(function () {});
+        }
+      }
+    }
+  });
+  /* Autoplay in view + first-touch unlock for a blocked start. */
+  if ('IntersectionObserver' in window) {
+    var pmIO = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        var wrap = en.target;
+        if (en.intersectionRatio >= 0.5) {
+          if (pmWrap !== wrap) pmStart(wrap);
+          else if (pmPlayer) { try { pmPlayer.playVideo(); } catch (e) {} }
+        } else if (en.intersectionRatio < 0.2 && pmWrap === wrap
+                   && pmPlayer) {
+          try { pmPlayer.pauseVideo(); } catch (e) {}
+        }
+      });
+    }, { threshold: [0.2, 0.5] });
+    document.querySelectorAll('.post-music[data-vid]').forEach(
+      function (w) { pmIO.observe(w); });
+    var pmUnlock = function () {
+      document.removeEventListener('pointerdown', pmUnlock);
+      document.removeEventListener('keydown', pmUnlock);
+      if (pmPlayer) { try { pmPlayer.playVideo(); } catch (e) {} }
+    };
+    document.addEventListener('pointerdown', pmUnlock);
+    document.addEventListener('keydown', pmUnlock);
+  }
 })();
 </script>
 {# Floating mini live player (Build GLASS): hidden by default; the

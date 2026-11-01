@@ -74,16 +74,21 @@
   {% endif %}
 
   {% if post.music %}
-  <div class="post-music" data-vid="{{ post.music.video_id|e }}" data-start="{{ post.music.start }}" data-len="{{ post.music.len or 0 }}">
+  <div class="post-music" data-vid="{{ post.music.video_id|e }}" data-start="{{ post.music.start }}" data-len="{{ post.music.len or 0 }}" data-vol="{{ post.music.volume }}" data-muteorig="{{ 1 if post.music.mute_orig else 0 }}">
     <div class="post-music-bar">
       {% if post.music.thumb %}<img class="post-music-thumb" src="{{ post.music.thumb|e }}" alt="">{% endif %}
       <div class="post-music-info">
         <div class="t">🎵 {{ post.music.title|e }}</div>
         <div class="a">{{ post.music.artist|e }}</div>
       </div>
+      <button type="button" class="post-music-volbtn" aria-label="Volume — music and video" title="Volume — music and video">🔊</button>
       <button type="button" class="post-music-play" aria-label="Play song">▶</button>
     </div>
-    <div class="post-music-player" hidden></div>
+    <div class="post-music-vols" hidden>
+      <label class="pm-vol-row">🎵 Music <input type="range" class="pm-vol-music" min="0" max="100" value="{{ post.music.volume }}"></label>
+      {% if post.kind == 'video' %}<label class="pm-vol-row">🎬 Video sound <input type="range" class="pm-vol-video" min="0" max="100" value="{{ 0 if post.music.mute_orig else 25 }}"></label>{% endif %}
+    </div>
+    <div class="post-music-player"></div>
   </div>
   {% endif %}
 

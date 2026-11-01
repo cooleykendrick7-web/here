@@ -492,6 +492,13 @@ def init_db():
         # clip length that rides with music_start. 0 = legacy post,
         # play the song without a window (from music_start to the end).
         c.execute("ALTER TABLE posts ADD COLUMN music_len INTEGER DEFAULT 0")
+    if "music_volume" not in _post_cols:
+        # Creator's music level for post music, matching stories
+        # (Ken's dual-volume order, 2026-11-01): viewers get their
+        # own sliders on top of these starting levels.
+        c.execute("ALTER TABLE posts ADD COLUMN music_volume INTEGER DEFAULT 80")
+    if "music_mute_orig" not in _post_cols:
+        c.execute("ALTER TABLE posts ADD COLUMN music_mute_orig INTEGER DEFAULT 0")
     # --- story replies/reactions ride the messages table (safe) ---
     # A message linked to a story carries the story's id plus the
     # uploads-relative path of a SHARED clip copy (uploads/story_replies/)
@@ -3222,7 +3229,11 @@ def post_card(p, viewer, owner_on=False):
                    "artist": p.get("music_artist") or "",
                    "thumb": p.get("music_thumb") or "",
                    "start": p.get("music_start") or 0,
-                   "len": p.get("music_len") or 0}
+                   "len": p.get("music_len") or 0,
+                   "volume": (p.get("music_volume")
+                              if p.get("music_volume") is not None
+                              else 80),
+                   "mute_orig": bool(p.get("music_mute_orig"))}
                   if p.get("music_video_id") else None),
         "created_at": fancy_time(p["created_at"]),
         "likes": likes, "liked": liked, "comments_count": cc,
@@ -4013,6 +4024,15 @@ async def public_post(request: Request, post_id: int):
         "body": p.get("body") or "",
         "media_url": media_url, "media_kind": media_kind,
         "embed_url": embed_url, "music_embed": music_embed,
+        "music": ({"video_id": str(p["music_video_id"]),
+                   "title": p.get("music_title") or "",
+                   "artist": p.get("music_artist") or "",
+                   "start": p.get("music_start") or 0,
+                   "len": p.get("music_len") or 0,
+                   "volume": (p.get("music_volume")
+                              if p.get("music_volume") is not None
+                              else 80)}
+                  if p.get("music_video_id") else None),
         "like_count": like_count, "comment_count": comment_count,
         "created": fancy_time(p.get("created_at")),
         "excerpt": ((p.get("body") or "").strip()[:200]
@@ -5104,9 +5124,10 @@ def create_post_from_form(user, form, page_id=None):
     cur = conn.execute(
         "INSERT INTO posts(user_id, page_id, kind, body, feeling, link_url, "
         "video_url, media, privacy, music_video_id, music_title, "
-        "music_artist, music_thumb, music_start, music_len, created_at, "
+        "music_artist, music_thumb, music_start, music_len, "
+        "music_volume, music_mute_orig, created_at, "
         "wall_user_id, wall_pending, lock_price, lock_adult) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], page_id, kind, body, feeling, link_url, video_url,
          media, privacy,
          music["video_id"] if music else "",
@@ -5115,6 +5136,8 @@ def create_post_from_form(user, form, page_id=None):
          music["thumb"] if music else "",
          music_start if music else 0,
          music_len if music else 0,
+         music["volume"] if music else 80,
+         music["mute_orig"] if music else 0,
          now_iso(), wall_user_id, wall_pending, lock_price, lock_adult))
     pid = cur.lastrowid
     # Hashtags: parsed from the body of EVERY new post (any kind) into
@@ -7372,6 +7395,12 @@ def _resolve_music(form):
     picked = (form.get("music_video_id") or "").strip()
     if not url and not picked:
         return None
+    try:
+        mvol = int(form.get("music_volume") or 80)
+    except (TypeError, ValueError):
+        mvol = 80
+    mvol = max(0, min(100, mvol))
+    mmute = 1 if (form.get("music_mute_orig") or "") == "1" else 0
     vid = youtube_id_from(url) if url else None
     if vid is None and picked and _YT_ID_RE.match(picked):
         vid = picked
@@ -7380,11 +7409,12 @@ def _resolve_music(form):
     if not url:
         snap = _music_snapshot(vid)
         if snap:
-            return {"video_id": vid, **snap}
+            return {"video_id": vid, "volume": mvol, "mute_orig": mmute,
+                    **snap}
     meta = youtube_oembed(vid)
     if meta is None:
         raise ValueError(MUSIC_EMBED_ERR)
-    return {"video_id": vid, **meta}
+    return {"video_id": vid, "volume": mvol, "mute_orig": mmute, **meta}
 
 
 def _story_payload(conn, s, viewer_id, seen):
