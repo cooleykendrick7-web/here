@@ -232,7 +232,7 @@ check("once matched, Bob leaves Alice's deck",
 r = Ac.post("/match/swipe", data={"target_id": CARL, "action": "pass"})
 r = Ac.get("/match")
 check("after passing Carl the deck is empty for Alice",
-      "Nobody new right now" in r.text)
+      "You've seen everyone" in r.text)
 
 # ---------- taps: loud, but capped ----------
 for _ in range(here.MATCH_TAP_DAILY):
@@ -284,9 +284,143 @@ check("blocked pair can never be a match",
       not here._match_is_match(conn, BOB, ELLA))
 conn.close()
 
+# ---------- v2 (Nov 1, 2026 — the Badoo-shape build) ----------
+def setup_profile2(c, dob, gender, looking, zipc, **extra):
+    data = {"dob": dob, "gender": gender, "looking_for": looking,
+            "city": "", "state": "", "zip": zipc,
+            "height_ft": "5", "height_in": "9", "faith": "Christian",
+            "smoke": "No", "drink": "Occasionally",
+            "interests": "Music, cars", "about": "Just me."}
+    data.update(extra)
+    return c.post("/match/setup", data=data,
+                  files={"photo1": ("me.png", PNG, "image/png")})
+
+
+def make_verified2(name, email, dob, gender, looking, zipc, **extra):
+    c, uid = signup(name, email)
+    r = setup_profile2(c, dob, gender, looking, zipc, **extra)
+    assert r.status_code == 303, (name, r.status_code)
+    verify_face(c)
+    owner_face(uid, "approve")
+    row = dbq("SELECT face_status FROM match_profiles "
+              "WHERE user_id=?", (uid,))
+    assert row and row[0]["face_status"] == "verified", (name, row)
+    return c, uid
+
+
+Vc, VICTOR = make_verified2(
+    "Victor Vibe", "victor@match.test", dob_years_ago(30), "man",
+    "women", "39201", intent="Ready for a relationship",
+    work="Truck driver", kids="Have kids", rel_status="Single",
+    languages="English", pets="Have pets", personality="Extrovert",
+    education="College degree")
+Rc, VERA = make_verified2(
+    "Vera Vale", "vera@match.test", dob_years_ago(30), "woman",
+    "men", "39201", intent="Open to chat", work="Nurse")
+
+row = dbq("SELECT * FROM match_profiles WHERE user_id=?",
+          (VICTOR,))[0]
+check("v2 fields persist (intent/work/kids/languages)",
+      row["intent"] == "Ready for a relationship"
+      and row["work"] == "Truck driver"
+      and row["kids"] == "Have kids"
+      and row["languages"] == "English")
+check("star sign computes from the birthday",
+      here._match_star("1990-06-15") == "Gemini"
+      and here._match_star("1990-12-25") == "Capricorn")
+check("completeness rewards a filled profile",
+      here._match_completeness(row) >= 60,
+      str(here._match_completeness(row)))
+
+r = Vc.get("/match")
+check("deck shows Vera to Victor", "Vera Vale" in r.text)
+check("no undo button before any swipe", "match/undo" not in r.text)
+r = Vc.post("/match/swipe", data={"target_id": str(VERA),
+                                  "action": "pass"})
+r = Vc.get("/match")
+check("undo button appears after a swipe", "match/undo" in r.text)
+r = Vc.post("/match/undo")
+n = dbq("SELECT COUNT(*) c FROM match_swipes WHERE swiper_id=?",
+        (VICTOR,))[0]["c"]
+check("undo removes the last swipe", n == 0, str(n))
+r = Vc.get("/match")
+check("undone card returns to the deck", "Vera Vale" in r.text)
+check("card carries the intent chip", "Open to chat" in r.text)
+
+# likes page: free, faces shown; like-back matches instantly
+r = Vc.post("/match/swipe", data={"target_id": str(VERA),
+                                  "action": "like"})
+r = Rc.get("/match/likes")
+check("likes page shows who liked you (free, unblurred)",
+      "Victor Vibe" in r.text and "Like back" in r.text)
+r = Vc.get("/match/likes")
+check("no like-back yet on Victor's likes page",
+      "Vera Vale" not in r.text)
+r = Rc.post("/match/swipe", data={"target_id": str(VICTOR),
+                                  "action": "like",
+                                  "back": "/match/likes"})
+check("swipe honors the in-Match back target",
+      r.status_code == 303
+      and r.headers.get("location", "").startswith("/match/likes"),
+      r.headers.get("location", ""))
+r = Rc.get("/match/matches")
+check("like-back from the Likes page makes the match",
+      "Victor Vibe" in r.text)
+
+# nearby grid + for-you + full profile view
+Nc, NINA = make_verified2("Nina North", "nina@match.test",
+                          dob_years_ago(28), "woman", "men", "39202")
+Oc, NOAH = make_verified2("Noah North", "noah@match.test",
+                          dob_years_ago(31), "man", "women", "39202")
+r = Nc.get("/match/nearby")
+check("nearby grid shows Noah", "Noah North" in r.text
+      and f"/match/view/{NOAH}" in r.text)
+r = Nc.get("/match/nearby?tab=foryou")
+check("for-you list renders", "Noah North" in r.text
+      and r.status_code == 200)
+r = Nc.get(f"/match/view/{NOAH}")
+check("full profile view renders with the facts block",
+      r.status_code == 200 and "More about" in r.text)
+r = Nc.get(f"/match/view/{KID}")
+check("view refuses profiles that are not face-verified",
+      r.status_code in (302, 303))
+
+# deck filters: age range + habits (all free)
+r = Oc.get("/match?agemin=40")
+check("age filter hides a 28-year-old", "Nina North" not in r.text)
+r = Oc.get("/match?fsmoke=Yes")
+check("smoking filter hides a non-smoker", "Nina North" not in r.text)
+r = Oc.get("/match?fsmoke=No")
+check("matching filter keeps her", "Nina North" in r.text)
+
+# opener limit: unmatched verified daters wait for a reply
+def dm_count(a, b):
+    return dbq("SELECT COUNT(*) c FROM messages WHERE sender_id=? "
+               "AND receiver_id=?", (a, b))[0]["c"]
+
+for i in range(3):
+    Nc.post(f"/messages/{NOAH}", data={"body": f"hey {i}"})
+check("three openers deliver", dm_count(NINA, NOAH) == 3,
+      str(dm_count(NINA, NOAH)))
+r = Nc.post(f"/messages/{NOAH}", data={"body": "one more"})
+check("the fourth opener waits for a reply",
+      dm_count(NINA, NOAH) == 3)
+Oc.post(f"/messages/{NINA}", data={"body": "hi back"})
+Nc.post(f"/messages/{NOAH}", data={"body": "thanks"})
+check("a reply reopens the conversation", dm_count(NINA, NOAH) == 4)
+for i in range(4):
+    Vc.post(f"/messages/{VERA}", data={"body": f"match msg {i}"})
+check("matched pairs are never opener-limited",
+      dm_count(VICTOR, VERA) >= 4, str(dm_count(VICTOR, VERA)))
+Pc, PETE = signup("Plain Pete", "pete@match.test")
+for i in range(4):
+    Pc.post(f"/messages/{VICTOR}", data={"body": f"plain {i}"})
+check("non-dating chats are never opener-limited",
+      dm_count(PETE, VICTOR) == 4, str(dm_count(PETE, VICTOR)))
+
 # ---------- pages render for a verified user ----------
 for path in ("/match", "/match/setup", "/match/verify",
-             "/match/matches"):
+             "/match/matches", "/match/nearby", "/match/likes"):
     r = Ac.get(path)
     check(f"GET {path} renders 200", r.status_code == 200,
           str(r.status_code))

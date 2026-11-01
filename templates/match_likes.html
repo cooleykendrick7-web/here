@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}❤️ Who liked you — Match Here{% endblock %}
+{% block content %}
+<div style="max-width:560px;margin:0 auto;padding:8px 2px 34px">
+  <div style="text-align:center;padding:12px 8px 2px">
+    <img src="/static/match-here.png" alt="Match Here" style="width:66px;height:66px;border-radius:16px">
+    <h1 style="font-size:23px;margin:8px 0 2px">Who liked you</h1>
+    <p style="opacity:.85;margin:0">Every face shown, free — no blur, no paywall. Like them back and it's a match on the spot. 💘</p>
+  </div>
+
+  {% set mtab = 'likes' %}{% include "partials/match_tabs.html" %}
+
+  {% if not cards %}
+  <div class="card" style="margin-top:16px;text-align:center">
+    <div style="font-size:40px">🫣</div>
+    <div class="section-title">No new likes yet</div>
+    <p style="margin-top:8px;line-height:1.55">When somebody taps the heart on your card, they land right here. Keep your profile full — photos, interests, the works — and keep swiping.</p>
+    <p style="margin-top:12px"><a class="btn" href="/match">Back to swiping 💘</a></p>
+  </div>
+  {% endif %}
+
+  {% for c in cards %}
+  <div class="card" style="margin-top:14px">
+    <div style="display:flex;gap:14px;align-items:center">
+      <a href="/match/view/{{ c.user_id }}">{% if c.photo %}<img src="{{ c.photo|e }}" alt="" style="width:92px;height:92px;object-fit:cover;border-radius:16px">{% elif c.avatar %}<img src="{{ c.avatar|e }}" alt="" style="width:92px;height:92px;object-fit:cover;border-radius:16px">{% endif %}</a>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:19px;font-weight:800">{{ c.name|e }}{% if c.age %}, {{ c.age }}{% endif %}{% if c.is_verified %} <span style="color:#ffd400">★</span>{% endif %}{% if c.online %} <span style="color:#2ee66b;font-size:14px">● on now</span>{% endif %}</div>
+        <div style="opacity:.85;font-size:14.5px">📍 {{ c.city|e }}{% if c.state %}, {{ c.state|e }}{% endif %}{% if c.distance %} · ~{{ c.distance }} mi away{% endif %}</div>
+        <div style="font-size:13.5px;color:#1db954;font-weight:700">✔ Face Verified</div>
+        {% if c.intent %}<div style="margin-top:4px"><span style="font-size:13px;background:#fde8ea;border-radius:20px;padding:2px 9px;font-weight:700;color:#a4133c">💬 {{ c.intent|e }}</span></div>{% endif %}
+        {% if c.about %}<div style="font-size:14.5px;margin-top:5px;line-height:1.45">“{{ c.about|e }}”</div>{% endif %}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center">
+      <form method="post" action="/match/swipe" style="display:inline">
+        <input type="hidden" name="target_id" value="{{ c.user_id }}">
+        <input type="hidden" name="action" value="like">
+        <input type="hidden" name="back" value="/match/likes">
+        <button class="btn" type="submit">❤️ Like back — it's a match</button>
+      </form>
+      <a class="btn-ghost" href="/messages/{{ c.user_id }}">💬 Message</a>
+      <a class="btn-ghost" href="/match/view/{{ c.user_id }}">👀 Profile</a>
+      <form method="post" action="/match/swipe" style="display:inline">
+        <input type="hidden" name="target_id" value="{{ c.user_id }}">
+        <input type="hidden" name="action" value="pass">
+        <input type="hidden" name="back" value="/match/likes">
+        <button class="btn-ghost" type="submit">✖ Pass</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

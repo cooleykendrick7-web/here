@@ -7,7 +7,7 @@
     <h1 style="font-size:23px;margin:8px 0 2px">My Matches</h1>
     <p style="opacity:.85;margin:0">You liked each other. The rest is up to you. 💘</p>
   </div>
-  <p style="text-align:center;margin-top:10px"><a class="btn-ghost" href="/match">← Back to the deck</a></p>
+  {% set mtab = 'matches' %}{% include "partials/match_tabs.html" %}
 
   {% if not cards %}
   <div class="card" style="margin-top:16px;text-align:center">

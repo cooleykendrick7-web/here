@@ -1035,6 +1035,15 @@ def init_db():
                     "lat, lon) VALUES(?,?,?,?,?)", _rows)
     except Exception:
         pass
+    # Match Here v2 fields (Nov 1, 2026 — the Badoo-shape build):
+    # intent ("why you're here") + the "more about you" set.
+    _mp_cols = [r["name"] for r in
+                c.execute("PRAGMA table_info(match_profiles)").fetchall()]
+    for _col in ("intent", "work", "kids", "rel_status", "languages",
+                 "pets", "personality", "education"):
+        if _col not in _mp_cols:
+            c.execute("ALTER TABLE match_profiles ADD COLUMN "
+                      + _col + " TEXT NOT NULL DEFAULT ''")
     _user_cols_now = [r["name"] for r in
                       c.execute("PRAGMA table_info(users)").fetchall()]
     if "private_profile" not in _user_cols_now:
@@ -10247,6 +10256,11 @@ async def send_message(request: Request, fid: int):
     body = (form.get("body") or "").strip()
     if not body:
         return redir(f"/messages/{fid}")
+    if _match_opener_blocked(user["id"], fid):
+        return redir(
+            f"/messages/{fid}",
+            "Give them a chance to reply \u2014 in Match Here you "
+            "can send a few openers, then it's their move. \U0001f498")
     _deliver_message(user, fid, body)
     return redir(f"/messages/{fid}")
 
@@ -12840,6 +12854,56 @@ MATCH_LOOKING = {"women": ("woman",), "men": ("man",),
 MATCH_FAITHS = ["Christian", "Other faith", "Not religious",
                 "Prefer not to say"]
 MATCH_HABITS = ["No", "Occasionally", "Yes"]
+MATCH_INTENTS = ["Here to date", "Ready for a relationship",
+                 "Open to chat", "Making friends", "See what happens"]
+MATCH_KIDS = ["Have kids", "Want someday", "Don't want kids",
+              "Prefer not to say"]
+MATCH_RELSTATUS = ["Single", "Just out of a relationship",
+                   "It's complicated", "Prefer not to say"]
+MATCH_PETS = ["Have pets", "No pets", "Love pets, none of my own",
+              "Prefer not to say"]
+MATCH_PERSONALITY = ["Introvert", "Extrovert", "A bit of both",
+                     "Prefer not to say"]
+MATCH_EDUCATION = ["High school", "Some college", "College degree",
+                   "Graduate degree or higher", "Trade / vocational",
+                   "Prefer not to say"]
+MATCH_STARS = [((1, 19), "Capricorn"), ((2, 18), "Aquarius"),
+               ((3, 20), "Pisces"), ((4, 19), "Aries"),
+               ((5, 20), "Taurus"), ((6, 20), "Gemini"),
+               ((7, 22), "Cancer"), ((8, 22), "Leo"),
+               ((9, 22), "Virgo"), ((10, 22), "Libra"),
+               ((11, 21), "Scorpio"), ((12, 21), "Sagittarius"),
+               ((12, 31), "Capricorn")]
+
+
+def _match_star(dob_str):
+    try:
+        d = date.fromisoformat((dob_str or "")[:10])
+    except ValueError:
+        return ""
+    for (m, day), name in MATCH_STARS:
+        if (d.month, d.day) <= (m, day):
+            return name
+    return "Capricorn"
+
+
+def _match_completeness(prof):
+    """Profile strength 0-100 over the fields that fill a card —
+    the ring the reference apps use to pull a profile together."""
+    if not prof:
+        return 0
+    keys = ("dob", "gender", "city", "zip", "height_in", "faith",
+            "smoke", "drink", "interests", "about", "intent", "work",
+            "kids", "rel_status", "languages", "pets", "personality",
+            "education")
+    filled = 0
+    for k in keys:
+        v = prof[k] if k in prof.keys() else ""
+        if v:
+            filled += 1
+    n_photos = len(_match_photos(prof))
+    score = filled * 4 + min(n_photos, 4) * 7
+    return min(100, score)
 
 
 def _match_age(dob_str):
@@ -12849,6 +12913,14 @@ def _match_age(dob_str):
         return None
     t = date.today()
     return t.year - d.year - ((t.month, t.day) < (d.month, d.day))
+
+
+def _match_online(u):
+    """Green-dot truth: seen on HERE in the last 15 minutes."""
+    ts = _parse_ts(_uget(u, "last_seen_at"))
+    if ts is None:
+        return False
+    return (datetime.now(timezone.utc) - ts) <= timedelta(minutes=15)
 
 
 def _match_profile(conn, uid):
@@ -12938,6 +13010,16 @@ def _match_card(conn, prof, viewer_prof, origin):
         "faith": prof["faith"], "smoke": prof["smoke"],
         "drink": prof["drink"], "interests": interests,
         "about": prof["about"] or "",
+        "intent": prof["intent"] or "",
+        "work": prof["work"] or "",
+        "kids": prof["kids"] or "",
+        "rel_status": prof["rel_status"] or "",
+        "languages": prof["languages"] or "",
+        "pets": prof["pets"] or "",
+        "personality": prof["personality"] or "",
+        "education": prof["education"] or "",
+        "star": _match_star(prof["dob"]),
+        "online": _match_online(u),
     }
 
 
@@ -13020,13 +13102,113 @@ def _match_deck(conn, user, prof, origin, radius):
     return cards
 
 
+MATCH_OPENER_MAX = 3
+
+
+def _match_my_origin(prof):
+    """My own point for distances: GPS if set, else my ZIP."""
+    if prof is None:
+        return None
+    if prof["gps_lat"] is not None:
+        return (prof["gps_lat"], prof["gps_lon"])
+    if prof["lat"] is not None:
+        return (prof["lat"], prof["lon"])
+    return None
+
+
+def _match_likes_in(conn, uid):
+    """People who liked ME in Match Here and are still waiting:
+    verified, un-paused, not decided by me, not unmatched/blocked.
+    Newest first. Seeing this list is FREE here — no blur, no
+    paywall (Ken's everything-free rule for dating, Nov 1, 2026)."""
+    me = _match_profile(conn, uid)
+    origin = _match_my_origin(me)
+    rows = conn.execute(
+        "SELECT mp.* FROM match_swipes ms "
+        "JOIN match_profiles mp ON mp.user_id = ms.swiper_id "
+        "WHERE ms.target_id=? AND ms.action='like' "
+        "AND mp.face_status='verified' AND mp.paused=0 "
+        "ORDER BY ms.created_at DESC", (uid,)).fetchall()
+    out = []
+    for r in rows:
+        tid = r["user_id"]
+        if tid == uid or blocked_either_way(uid, tid):
+            continue
+        if conn.execute(
+                "SELECT 1 FROM match_unmatches WHERE "
+                "(user_id=? AND other_id=?) OR (user_id=? AND "
+                "other_id=?)", (uid, tid, tid, uid)).fetchone():
+            continue
+        if conn.execute(
+                "SELECT 1 FROM match_swipes WHERE swiper_id=? AND "
+                "target_id=?", (uid, tid)).fetchone():
+            continue
+        card = _match_card(conn, r, me, origin)
+        if card:
+            out.append(card)
+    return out
+
+
+def _match_tab_ctx(conn, uid):
+    """Badge counts for the Match tab bar."""
+    return {"likes_n": len(_match_likes_in(conn, uid)),
+            "matches_n": len(_match_matches(conn, uid))}
+
+
+def _match_opener_blocked(sender_id, other_id):
+    """Match Here opener limit (Ken's reference video, Nov 1,
+    2026): between two VERIFIED Match daters who are neither
+    matched nor friends, the sender may send MATCH_OPENER_MAX
+    messages in a row — then they wait for a reply. Fail OPEN:
+    any surprise returns False so ordinary messaging is never
+    blocked by Match logic."""
+    try:
+        conn = db()
+        try:
+            a = _match_profile(conn, sender_id)
+            b = _match_profile(conn, other_id)
+            if not a or not b:
+                return False
+            if (a["face_status"] != "verified"
+                    or b["face_status"] != "verified"):
+                return False
+            if _match_is_match(conn, sender_id, other_id):
+                return False
+            fr = conn.execute(
+                "SELECT status FROM friendships WHERE "
+                "(user_id=? AND friend_id=?) OR (user_id=? AND "
+                "friend_id=?)",
+                (sender_id, other_id, other_id, sender_id)).fetchall()
+            if any(r["status"] == "accepted" for r in fr):
+                return False
+            rows = conn.execute(
+                "SELECT sender_id FROM messages WHERE "
+                "(sender_id=? AND receiver_id=?) OR (sender_id=? AND "
+                "receiver_id=?) ORDER BY id DESC LIMIT ?",
+                (sender_id, other_id, other_id, sender_id,
+                 MATCH_OPENER_MAX + 1)).fetchall()
+            streak = 0
+            for r in rows:
+                if r["sender_id"] == sender_id:
+                    streak += 1
+                else:
+                    break
+            return streak >= MATCH_OPENER_MAX
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def _match_new_code():
     return "MATCH-" + str(secrets.randbelow(9000) + 1000)
 
 
 @app.get("/match", response_class=HTMLResponse)
 async def match_home(request: Request, q: str = "", radius: int = 0,
-                     gps: int = 0):
+                     gps: int = 0, agemin: int = 0, agemax: int = 0,
+                     fsmoke: str = "", fdrink: str = "",
+                     ffaith: str = ""):
     user, err = require_login(request)
     if err:
         return err
@@ -13044,18 +13226,37 @@ async def match_home(request: Request, q: str = "", radius: int = 0,
         return render(request, "match.html", {"mode": "pending"})
     matches = _match_matches(conn, user["id"])
     if prof["paused"]:
+        tabs = _match_tab_ctx(conn, user["id"])
         conn.close()
         return render(request, "match.html", {
-            "mode": "paused", "match_count": len(matches)})
+            "mode": "paused", "match_count": len(matches), **tabs})
     origin = _match_origin(conn, user, prof, q, gps)
     eff_radius = radius or (50 if (q or gps) else 0)
     cards = _match_deck(conn, user, prof, origin, eff_radius)
+    if agemin or agemax:
+        _lo = agemin or 18
+        _hi = agemax or 99
+        cards = [c for c in cards if _lo <= c["age"] <= _hi]
+    if fsmoke in MATCH_HABITS:
+        cards = [c for c in cards if c["smoke"] == fsmoke]
+    if fdrink in MATCH_HABITS:
+        cards = [c for c in cards if c["drink"] == fdrink]
+    if ffaith in MATCH_FAITHS:
+        cards = [c for c in cards if c["faith"] == ffaith]
+    has_undo = conn.execute(
+        "SELECT 1 FROM match_swipes WHERE swiper_id=? LIMIT 1",
+        (user["id"],)).fetchone() is not None
+    tabs = _match_tab_ctx(conn, user["id"])
     conn.close()
     return render(request, "match.html", {
         "mode": "deck" if cards else "empty",
         "card": cards[0] if cards else None,
         "deck_count": len(cards), "match_count": len(matches),
-        "q": q, "radius": eff_radius, "gps": gps})
+        "q": q, "radius": eff_radius, "gps": gps,
+        "has_undo": has_undo,
+        "agemin": agemin, "agemax": agemax, "fsmoke": fsmoke,
+        "fdrink": fdrink, "ffaith": ffaith,
+        "habits": MATCH_HABITS, "faiths": MATCH_FAITHS, **tabs})
 
 
 @app.get("/match/setup", response_class=HTMLResponse)
@@ -13076,7 +13277,11 @@ async def match_setup(request: Request):
         "height_ft": hin // 12 if hin else "",
         "height_in": hin % 12 if hin else "",
         "faiths": MATCH_FAITHS, "habits": MATCH_HABITS,
-        "genders": MATCH_GENDERS})
+        "genders": MATCH_GENDERS, "intents": MATCH_INTENTS,
+        "kids_opts": MATCH_KIDS, "rel_opts": MATCH_RELSTATUS,
+        "pets_opts": MATCH_PETS, "person_opts": MATCH_PERSONALITY,
+        "edu_opts": MATCH_EDUCATION,
+        "completeness": _match_completeness(prof)})
 
 
 @app.post("/match/setup")
@@ -13128,6 +13333,19 @@ async def match_setup_save(request: Request):
         drink = ""
     interests = (form.get("interests") or "").strip()[:140]
     about = (form.get("about") or "").strip()[:300]
+
+    def _opt(name, allowed):
+        v = (form.get(name) or "").strip()
+        return v if v in allowed else ""
+
+    intent = _opt("intent", MATCH_INTENTS)
+    kids = _opt("kids", MATCH_KIDS)
+    rel_status = _opt("rel_status", MATCH_RELSTATUS)
+    pets = _opt("pets", MATCH_PETS)
+    personality = _opt("personality", MATCH_PERSONALITY)
+    education = _opt("education", MATCH_EDUCATION)
+    work = (form.get("work") or "").strip()[:80]
+    languages = (form.get("languages") or "").strip()[:60]
     prof = _match_profile(conn, user["id"])
     photos = _match_photos(prof) if prof else []
     drop = set(form.getlist("photo_del"))
@@ -13156,20 +13374,27 @@ async def match_setup_save(request: Request):
             "UPDATE match_profiles SET dob=?, gender=?, looking_for=?, "
             "city=?, state=?, zip=?, lat=?, lon=?, height_in=?, "
             "faith=?, smoke=?, drink=?, interests=?, about=?, "
+            "intent=?, work=?, kids=?, rel_status=?, languages=?, "
+            "pets=?, personality=?, education=?, "
             "photos=?, updated_at=? WHERE user_id=?",
             (dob, gender, looking, city, state, zipc, zrow["lat"],
              zrow["lon"], height_in, faith, smoke, drink, interests,
-             about, json.dumps(photos), now, user["id"]))
+             about, intent, work, kids, rel_status, languages, pets,
+             personality, education, json.dumps(photos), now,
+             user["id"]))
     else:
         conn.execute(
             "INSERT INTO match_profiles(user_id, dob, gender, "
             "looking_for, city, state, zip, lat, lon, height_in, "
-            "faith, smoke, drink, interests, about, photos, "
-            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,"
-            "?,?,?,?,?,?)",
+            "faith, smoke, drink, interests, about, intent, work, "
+            "kids, rel_status, languages, pets, personality, "
+            "education, photos, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user["id"], dob, gender, looking, city, state, zipc,
              zrow["lat"], zrow["lon"], height_in, faith, smoke, drink,
-             interests, about, json.dumps(photos), now, now))
+             interests, about, intent, work, kids, rel_status,
+             languages, pets, personality, education,
+             json.dumps(photos), now, now))
     conn.commit()
     conn.close()
     prof2 = None
@@ -13263,7 +13488,8 @@ async def match_swipe(request: Request):
     except ValueError:
         radius = 0
     gps = 1 if (form.get("gps") or "") == "1" else 0
-    dest = "/match"
+    back = (form.get("back") or "").strip()
+    dest = back if back.startswith("/match") else "/match"
     params = {}
     if q:
         params["q"] = q
@@ -13365,8 +13591,119 @@ async def match_matches_page(request: Request):
         if card:
             card["muted"] = tid in muted
             cards.append(card)
+    tabs = _match_tab_ctx(conn, user["id"])
     conn.close()
-    return render(request, "match_matches.html", {"cards": cards})
+    return render(request, "match_matches.html",
+                  {"cards": cards, **tabs})
+
+
+@app.post("/match/undo")
+async def match_undo(request: Request):
+    """Take back my most recent swipe — FREE here (the reference
+    apps charge for this). The card simply returns to my deck."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute(
+        "SELECT target_id FROM match_swipes WHERE swiper_id=? "
+        "ORDER BY created_at DESC LIMIT 1", (user["id"],)).fetchone()
+    if row:
+        conn.execute(
+            "DELETE FROM match_swipes WHERE swiper_id=? AND "
+            "target_id=?", (user["id"], row["target_id"]))
+        conn.commit()
+    conn.close()
+    return redir("/match", "Undone — they're back in your deck. ↩")
+
+
+def _match_gate(request):
+    """Shared gate for the v2 surfaces. Success: (user, prof,
+    conn). Failure: (None, None, response). Face-verified
+    profiles only."""
+    user, err = require_login(request)
+    if err:
+        return None, None, err
+    conn = db()
+    prof = _match_profile(conn, user["id"])
+    if not prof or prof["face_status"] != "verified":
+        conn.close()
+        return None, None, redir(
+            "/match", "Finish your Match Here profile first. 💘")
+    return user, prof, conn
+
+
+@app.get("/match/nearby", response_class=HTMLResponse)
+async def match_nearby(request: Request, tab: str = "everyone",
+                       q: str = "", radius: int = 0, gps: int = 0):
+    user, prof, gate = _match_gate(request)
+    if user is None:
+        return gate
+    conn = gate
+    origin = _match_origin(conn, user, prof, q, gps)
+    eff_radius = radius or (50 if (q or gps) else 0)
+    cards = _match_deck(conn, user, prof, origin, eff_radius)
+    if tab == "foryou":
+        mine = {x.strip().lower()
+                for x in (prof["interests"] or "").split(",")
+                if x.strip()}
+
+        def _fy_key(c):
+            shared = len(mine & {i.lower() for i in c["interests"]})
+            dist = c["distance"] if c["distance"] is not None else 99999
+            return (-shared, dist)
+        cards = sorted(cards, key=_fy_key)
+    tabs = _match_tab_ctx(conn, user["id"])
+    conn.close()
+    return render(request, "match_nearby.html", {
+        "cards": cards,
+        "tab": tab if tab in ("everyone", "foryou") else "everyone",
+        "q": q, "radius": eff_radius, "gps": gps, **tabs})
+
+
+@app.get("/match/likes", response_class=HTMLResponse)
+async def match_likes_page(request: Request):
+    user, prof, gate = _match_gate(request)
+    if user is None:
+        return gate
+    conn = gate
+    cards = _match_likes_in(conn, user["id"])
+    tabs = _match_tab_ctx(conn, user["id"])
+    conn.close()
+    return render(request, "match_likes.html", {"cards": cards, **tabs})
+
+
+@app.get("/match/view/{uid}", response_class=HTMLResponse)
+async def match_view(request: Request, uid: int):
+    user, prof, gate = _match_gate(request)
+    if user is None:
+        return gate
+    conn = gate
+    row = conn.execute(
+        "SELECT * FROM match_profiles WHERE user_id=?",
+        (uid,)).fetchone()
+    ok = (row and uid != user["id"]
+          and row["face_status"] == "verified"
+          and not blocked_either_way(user["id"], uid)
+          and not conn.execute(
+              "SELECT 1 FROM match_unmatches WHERE (user_id=? AND "
+              "other_id=?) OR (user_id=? AND other_id=?)",
+              (user["id"], uid, uid, user["id"])).fetchone())
+    if not ok:
+        conn.close()
+        return redir("/match", "That profile isn't available. 💘")
+    card = _match_card(conn, row, prof, _match_my_origin(prof))
+    matched = _match_is_match(conn, user["id"], uid)
+    i_liked = conn.execute(
+        "SELECT 1 FROM match_swipes WHERE swiper_id=? AND "
+        "target_id=? AND action='like'",
+        (user["id"], uid)).fetchone() is not None
+    muted = uid in muted_id_set(user["id"])
+    tabs = _match_tab_ctx(conn, user["id"])
+    conn.close()
+    return render(request, "match_view.html", {
+        "card": card, "matched": matched, "i_liked": i_liked,
+        "muted": muted, **tabs})
 
 
 @app.post("/match/unmatch")

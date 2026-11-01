@@ -8,6 +8,16 @@
     <p style="opacity:.85;margin:0">This is separate from your HERE profile — it's how people meet you in Match Here. 🔞 18+ only.</p>
   </div>
 
+  {% set mtab = 'profile' %}{% include "partials/match_tabs.html" %}
+
+  {% if completeness %}
+  <div style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700"><span>Profile strength</span><span>{{ completeness }}%</span></div>
+    <div style="height:9px;border-radius:99px;background:rgba(127,127,127,.25);overflow:hidden;margin-top:5px"><div style="height:100%;width:{{ completeness }}%;background:#d41f2e;border-radius:99px"></div></div>
+    <p style="font-size:12.5px;opacity:.8;margin:5px 0 0">Fuller profiles get seen — and liked — more.</p>
+  </div>
+  {% endif %}
+
   <form method="post" action="/match/setup" enctype="multipart/form-data" class="card" style="margin-top:14px;display:flex;flex-direction:column;gap:13px">
     <label style="display:block">
       <span style="font-weight:700">Date of birth</span><br>
@@ -96,6 +106,64 @@
       <input type="text" name="interests" maxlength="140" value="{{ p.interests|e }}" placeholder="Music, cars, church, fishing, cooking" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
       <span style="opacity:.7;font-size:13px">Separate them with commas.</span>
     </label>
+
+    <div>
+      <span style="font-weight:700">Why you're here</span>
+      <div style="display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:6px">
+        {% for opt in intents %}
+        <label style="cursor:pointer;font-size:14px">
+          <input type="radio" name="intent" value="{{ opt }}" {% if p.intent == opt %}checked{% endif %} style="accent-color:#d41f2e"> {{ opt }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <label style="display:block">
+      <span style="font-weight:700">Work — what you do</span><br>
+      <input type="text" name="work" maxlength="80" value="{{ p.work|e }}" placeholder="Truck driver, nurse, own a shop…" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+    </label>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px">
+      <label>
+        <span style="font-weight:700;font-size:13px">Kids</span>
+        <select name="kids" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">—</option>
+          {% for opt in kids_opts %}<option value="{{ opt }}" {% if p.kids == opt %}selected{% endif %}>{{ opt }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>
+        <span style="font-weight:700;font-size:13px">Relationship</span>
+        <select name="rel_status" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">—</option>
+          {% for opt in rel_opts %}<option value="{{ opt }}" {% if p.rel_status == opt %}selected{% endif %}>{{ opt }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>
+        <span style="font-weight:700;font-size:13px">Pets</span>
+        <select name="pets" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">—</option>
+          {% for opt in pets_opts %}<option value="{{ opt }}" {% if p.pets == opt %}selected{% endif %}>{{ opt }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>
+        <span style="font-weight:700;font-size:13px">Personality</span>
+        <select name="personality" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">—</option>
+          {% for opt in person_opts %}<option value="{{ opt }}" {% if p.personality == opt %}selected{% endif %}>{{ opt }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>
+        <span style="font-weight:700;font-size:13px">Education</span>
+        <select name="education" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">—</option>
+          {% for opt in edu_opts %}<option value="{{ opt }}" {% if p.education == opt %}selected{% endif %}>{{ opt }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>
+        <span style="font-weight:700;font-size:13px">Languages you speak</span>
+        <input type="text" name="languages" maxlength="60" value="{{ p.languages|e }}" placeholder="English, Spanish" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+      </label>
+    </div>
 
     <label style="display:block">
       <span style="font-weight:700">About me — one or two lines</span><br>

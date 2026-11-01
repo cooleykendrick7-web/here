@@ -53,10 +53,7 @@
   {% endif %}
 
   {% if mode == 'paused' %}
-  <div style="display:flex;gap:10px;justify-content:center;margin:12px 0 2px;flex-wrap:wrap">
-    <a class="btn-ghost" href="/match/matches">💘 My Matches ({{ match_count }})</a>
-    <a class="btn-ghost" href="/match/setup">✏️ My profile</a>
-  </div>
+  {% set mtab = 'deck' %}{% include "partials/match_tabs.html" %}
   <div class="card" style="margin-top:12px;text-align:center">
     <div style="font-size:40px">⏸️</div>
     <div class="section-title">You're paused</div>
@@ -68,11 +65,10 @@
   {% endif %}
 
   {% if mode in ('deck', 'empty') %}
-  <div style="display:flex;gap:10px;justify-content:center;margin:12px 0 2px;flex-wrap:wrap">
-    <a class="btn-ghost" href="/match/matches">💘 My Matches ({{ match_count }})</a>
-    <a class="btn-ghost" href="/match/setup">✏️ My profile</a>
+  {% set mtab = 'deck' %}{% include "partials/match_tabs.html" %}
+  <div style="text-align:right;margin-top:6px">
     <form method="post" action="/match/pause" style="display:inline">
-      <button class="btn-ghost" type="submit">⏸ Pause me</button>
+      <button class="btn-ghost" type="submit" style="font-size:13px;padding:5px 12px">⏸ Pause me</button>
     </form>
   </div>
 
@@ -88,40 +84,85 @@
     </select>
     <button class="btn" type="submit">🔍 Find</button>
     <button class="btn-ghost" type="button" id="gpsbtn">📍 Near me</button>
+    <details style="flex-basis:100%">
+      <summary style="cursor:pointer;font-weight:700;font-size:14px;padding:4px 2px">🎛 Filters — all free, always</summary>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <label style="font-size:13px;font-weight:700">Age from
+          <input type="number" name="agemin" min="18" max="99" value="{{ agemin or '' }}" placeholder="18" style="width:70px;padding:9px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+        </label>
+        <label style="font-size:13px;font-weight:700">to
+          <input type="number" name="agemax" min="18" max="99" value="{{ agemax or '' }}" placeholder="99" style="width:70px;padding:9px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+        </label>
+        <label style="font-size:13px;font-weight:700">Smoking
+          <select name="fsmoke" style="padding:9px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+            <option value="">Any</option>
+            {% for h in habits %}<option value="{{ h }}" {% if fsmoke == h %}selected{% endif %}>{{ h }}</option>{% endfor %}
+          </select>
+        </label>
+        <label style="font-size:13px;font-weight:700">Drinking
+          <select name="fdrink" style="padding:9px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+            <option value="">Any</option>
+            {% for h in habits %}<option value="{{ h }}" {% if fdrink == h %}selected{% endif %}>{{ h }}</option>{% endfor %}
+          </select>
+        </label>
+        <label style="font-size:13px;font-weight:700">Faith
+          <select name="ffaith" style="padding:9px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+            <option value="">Any</option>
+            {% for f in faiths %}<option value="{{ f }}" {% if ffaith == f %}selected{% endif %}>{{ f }}</option>{% endfor %}
+          </select>
+        </label>
+      </div>
+      <p style="font-size:12.5px;opacity:.75;margin:6px 0 0">Other apps lock these behind a paywall. Here they're just… yours.</p>
+    </details>
   </form>
   <p style="opacity:.7;font-size:13px;margin:2px 0 0">People only ever see a distance — never your location. {% if mode == 'deck' %}{{ deck_count }} {{ 'person' if deck_count == 1 else 'people' }} in your deck.{% endif %}</p>
 
   {% if mode == 'empty' %}
   <div class="card" style="margin-top:14px;text-align:center">
-    <div style="font-size:40px">🌙</div>
-    <div class="section-title">Nobody new right now</div>
-    <p style="margin-top:8px;line-height:1.55">You've seen everybody who fits your search. Widen the distance, clear the city, or check back soon — new people join every day. And the fastest way to grow the deck? Invite somebody. 💘</p>
-    <p style="margin-top:12px"><a class="btn-ghost" href="/match">Show everybody</a> &nbsp;<a class="btn-ghost" href="/invite">🔗 Invite</a></p>
+    <div style="font-size:52px">🔍</div>
+    <div class="section-title">You've seen everyone</div>
+    <p style="margin-top:8px;line-height:1.55">That's everybody who fits your search right now. Browse the grid in Nearby, loosen the filters, or check back soon — new people join every day. And the fastest way to grow the deck? Invite somebody. 💘</p>
+    <p style="margin-top:14px"><a class="btn" href="/match/nearby" style="font-size:16px;padding:11px 22px">Go to Nearby 📍</a></p>
+    <p style="margin-top:10px"><a class="btn-ghost" href="/match">↺ Show everybody</a> &nbsp;<a class="btn-ghost" href="/invite">🔗 Invite</a></p>
   </div>
   {% endif %}
 
   {% if mode == 'deck' and card %}
   <div id="swipecard" style="margin-top:14px;border-radius:20px;overflow:hidden;background:var(--card-bg,#fff);border:1px solid var(--border,#ddd);box-shadow:0 10px 30px rgba(0,0,0,.18);touch-action:pan-y;user-select:none;-webkit-user-select:none">
     <div style="position:relative">
-      <img id="cardphoto" src="{{ card.photo|e }}" alt="" draggable="false" style="width:100%;height:430px;object-fit:cover;display:block">
-      <div style="position:absolute;left:0;right:0;bottom:0;padding:34px 16px 12px;background:linear-gradient(transparent,rgba(0,0,0,.72));color:#fff">
-        <div style="font-size:24px;font-weight:800">{{ card.name|e }}{% if card.age %}, {{ card.age }}{% endif %}{% if card.is_verified %} <span title="Verified on HERE" style="color:#ffd400">★</span>{% endif %} <span style="font-size:14px;background:#1db954;border-radius:20px;padding:2px 9px;vertical-align:3px">✔ Face Verified</span></div>
-        <div style="opacity:.92;font-size:15px">📍 {{ card.city|e }}{% if card.state %}, {{ card.state|e }}{% endif %}{% if card.distance %} · ~{{ card.distance }} mi away{% endif %}</div>
+      <img id="cardphoto" src="{{ card.photo|e }}" alt="" draggable="false" style="width:100%;height:460px;object-fit:cover;display:block">
+      {% if card.photos|length > 1 %}
+      <div id="phsegs" style="position:absolute;top:10px;left:12px;right:12px;display:flex;gap:5px;z-index:3">
+        {% for ph in card.photos %}<span data-i="{{ loop.index0 }}" style="flex:1;height:4px;border-radius:99px;background:rgba(255,255,255,.45);cursor:pointer"></span>{% endfor %}
+      </div>
+      <button type="button" id="phPrev" aria-label="Previous photo" style="position:absolute;left:6px;top:45%;z-index:3;width:38px;height:38px;border-radius:50%;border:none;background:rgba(0,0,0,.35);color:#fff;font-size:19px;cursor:pointer">‹</button>
+      <button type="button" id="phNext" aria-label="Next photo" style="position:absolute;right:6px;top:45%;z-index:3;width:38px;height:38px;border-radius:50%;border:none;background:rgba(0,0,0,.35);color:#fff;font-size:19px;cursor:pointer">›</button>
+      {% endif %}
+      <details style="position:absolute;top:22px;right:10px;z-index:4">
+        <summary style="list-style:none;cursor:pointer;width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,.4);color:#fff;font-size:19px;text-align:center;line-height:36px">⋯</summary>
+        <div style="position:absolute;right:0;top:42px;width:215px;border-radius:14px;padding:8px;background:var(--card-bg,#fff);border:1px solid var(--border,#ddd);box-shadow:0 12px 30px rgba(0,0,0,.28);color:inherit">
+          <a href="/match/view/{{ card.user_id }}" style="display:block;padding:9px 10px;border-radius:9px;text-decoration:none;color:inherit;font-weight:700">👀 View full profile</a>
+          <a href="/messages/{{ card.user_id }}" style="display:block;padding:9px 10px;border-radius:9px;text-decoration:none;color:inherit;font-weight:700">💬 Message them</a>
+          <a href="/match/view/{{ card.user_id }}#safety" style="display:block;padding:9px 10px;border-radius:9px;text-decoration:none;color:#c0392b;font-weight:700">⚑ Report · Mute · Block</a>
+        </div>
+      </details>
+      <div style="position:absolute;left:0;right:0;top:0;padding:26px 56px 30px 16px;background:linear-gradient(rgba(0,0,0,.55),transparent);color:#fff;pointer-events:none">
+        <div style="font-size:25px;font-weight:800;text-shadow:0 1px 6px rgba(0,0,0,.5)">{{ card.name|e }}{% if card.age %}, {{ card.age }}{% endif %}{% if card.is_verified %} <span title="Verified on HERE" style="color:#ffd400">★</span>{% endif %}{% if card.online %} <span title="On HERE now" style="color:#2ee66b;font-size:15px">●</span>{% endif %}</div>
+        <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap">
+          <span style="font-size:13px;background:#1db954;border-radius:20px;padding:2px 9px;font-weight:700">✔ Face Verified</span>
+          {% if card.intent %}<span style="font-size:13px;background:rgba(255,255,255,.92);color:#a4133c;border-radius:20px;padding:2px 9px;font-weight:700">💬 {{ card.intent|e }}</span>{% endif %}
+        </div>
+        <div style="opacity:.95;font-size:14.5px;margin-top:5px">📍 {{ card.city|e }}{% if card.state %}, {{ card.state|e }}{% endif %}{% if card.distance %} · ~{{ card.distance }} mi away{% endif %}</div>
       </div>
     </div>
-    {% if card.photos|length > 1 %}
-    <div style="display:flex;gap:8px;padding:10px 12px 0">
-      {% for ph in card.photos %}
-      <img src="{{ ph|e }}" data-full="{{ ph|e }}" alt="" class="cardthumb" style="width:52px;height:52px;object-fit:cover;border-radius:10px;cursor:pointer;border:2px solid var(--border,#ddd)">
-      {% endfor %}
-    </div>
-    {% endif %}
     <div style="padding:12px 16px 16px">
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         {% if card.height %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">📏 {{ card.height }}</span>{% endif %}
         {% if card.faith %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">✝️ {{ card.faith|e }}</span>{% endif %}
         {% if card.smoke %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">🚬 {{ card.smoke }}</span>{% endif %}
         {% if card.drink %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">🍺 {{ card.drink }}</span>{% endif %}
+        {% if card.star %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">✨ {{ card.star }}</span>{% endif %}
+        {% if card.work %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">💼 {{ card.work|e }}</span>{% endif %}
       </div>
       {% if card.interests %}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
@@ -129,11 +170,17 @@
       </div>
       {% endif %}
       {% if card.about %}<p style="margin:12px 0 0;line-height:1.55;font-size:15.5px">“{{ card.about|e }}”</p>{% endif %}
-      <p style="margin:10px 0 0"><a href="/user/{{ card.user_id }}" style="font-size:14px">See their HERE profile →</a></p>
+      <p style="margin:10px 0 0"><a href="/match/view/{{ card.user_id }}" style="font-size:14.5px;font-weight:700">See their full dating profile →</a></p>
     </div>
   </div>
 
-  <div style="display:flex;justify-content:center;align-items:center;gap:22px;margin-top:18px">
+  <script type="application/json" id="cardphotos">{{ card.photos|tojson }}</script>
+  <div style="display:flex;justify-content:center;align-items:center;gap:15px;margin-top:18px">
+    {% if has_undo %}
+    <form method="post" action="/match/undo">
+      <button type="submit" title="Undo my last swipe — free" style="width:46px;height:46px;border-radius:50%;border:2px solid var(--border,#ddd);background:var(--card-bg,#fff);font-size:20px;cursor:pointer">↩</button>
+    </form>
+    {% endif %}
     <form method="post" action="/match/swipe" id="passform">
       <input type="hidden" name="target_id" value="{{ card.user_id }}">
       <input type="hidden" name="action" value="pass">
@@ -145,6 +192,7 @@
     <form method="post" action="/match/tap/{{ card.user_id }}">
       <button type="submit" title="Tap — let them know you're interested, right now" style="width:52px;height:52px;border-radius:50%;border:2px solid var(--border,#ddd);background:var(--card-bg,#fff);font-size:23px;cursor:pointer">🖐</button>
     </form>
+    <a href="/messages/{{ card.user_id }}" title="Message them — free, no match needed" style="width:52px;height:52px;border-radius:50%;border:2px solid var(--border,#ddd);background:var(--card-bg,#fff);font-size:22px;display:flex;align-items:center;justify-content:center;text-decoration:none">💬</a>
     <form method="post" action="/match/swipe" id="likeform">
       <input type="hidden" name="target_id" value="{{ card.user_id }}">
       <input type="hidden" name="action" value="like">
@@ -154,7 +202,7 @@
       <button type="submit" title="Like" style="width:62px;height:62px;border-radius:50%;border:none;background:#e0245e;font-size:27px;cursor:pointer;color:#fff">❤️</button>
     </form>
   </div>
-  <p style="text-align:center;opacity:.75;font-size:13.5px;margin-top:12px">✖ pass &nbsp;·&nbsp; 🖐 tap = they know now &nbsp;·&nbsp; ❤️ like = secret until it's mutual<br>First meet? Keep it public, tell a friend.</p>
+  <p style="text-align:center;opacity:.75;font-size:13.5px;margin-top:12px">✖ pass &nbsp;·&nbsp; 🖐 tap = they know now &nbsp;·&nbsp; 💬 message — free, right now &nbsp;·&nbsp; ❤️ like<br>First meet? Keep it public, tell a friend.</p>
   {% endif %}
   {% endif %}
 
@@ -175,10 +223,25 @@
     });
   }
   var main = document.getElementById('cardphoto');
-  if (main) {
-    document.querySelectorAll('.cardthumb').forEach(function(t){
-      t.addEventListener('click', function(){ main.src = t.getAttribute('data-full'); });
+  var phtag = document.getElementById('cardphotos');
+  if (main && phtag) {
+    var PH = [];
+    try { PH = JSON.parse(phtag.textContent || '[]'); } catch (e) { PH = []; }
+    var pi = 0;
+    var segs = document.querySelectorAll('#phsegs span');
+    function show(i){
+      if (!PH.length) return;
+      pi = ((i % PH.length) + PH.length) % PH.length;
+      main.src = PH[pi];
+      segs.forEach(function(s, j){ s.style.background = j === pi ? '#fff' : 'rgba(255,255,255,.45)'; });
+    }
+    segs.forEach(function(s){
+      s.addEventListener('click', function(ev){ ev.stopPropagation(); show(parseInt(s.getAttribute('data-i'), 10) || 0); });
     });
+    var pv = document.getElementById('phPrev'), nx = document.getElementById('phNext');
+    if (pv) pv.addEventListener('click', function(ev){ ev.stopPropagation(); show(pi - 1); });
+    if (nx) nx.addEventListener('click', function(ev){ ev.stopPropagation(); show(pi + 1); });
+    show(0);
   }
   var card = document.getElementById('swipecard');
   if (card) {
