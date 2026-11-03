@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+{% block og_title %}🔴 LIVE: {{ live.title|e }} — {{ host.name|e }} on HERE{% endblock %}
+{% block og_description %}{{ host.name|e }} is live on HERE right now. Watch free right here — join in one tap to chat, gift, and hop on the panel.{% endblock %}
+{% block og_image_block %}<meta property="og:image" content="{{ og_img }}">
+<meta property="og:image:type" content="image/gif">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image" content="{{ og_png }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="🔴 LIVE: {{ live.title|e }} — {{ host.name|e }} on HERE">
+<meta name="twitter:description" content="Watch free on HERE right in your browser — join free to join the room.">
+<meta name="twitter:image" content="{{ og_png }}">{% endblock %}
+{% block head_extra %}
+<style>
+.gw-wrap{max-width:860px;margin:0 auto;padding:18px 12px 40px}
+.gw-stage-card{background:linear-gradient(160deg,#1a0508,#101014 55%);color:#fff;border:1px solid rgba(224,30,38,.45);border-radius:22px;padding:18px 16px 14px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.gw-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.gw-pill{display:inline-flex;align-items:center;gap:8px;background:#e01e26;color:#fff;font-weight:900;letter-spacing:.06em;border-radius:999px;padding:6px 14px;font-size:13px}
+.gw-pill .dot{width:9px;height:9px;border-radius:50%;background:#fff;animation:gwpulse 1.2s ease-in-out infinite}
+@keyframes gwpulse{0%,100%{opacity:1}50%{opacity:.25}}
+.gw-title{font-size:21px;font-weight:900;line-height:1.25;margin:10px 0 2px}
+.gw-host{opacity:.85;font-size:14.5px}
+.gw-stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;margin-top:14px}
+.gw-tile{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:16/10}
+.gw-tile video{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+.gw-tile .gw-name{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.55);color:#fff;font-size:12.5px;font-weight:700;border-radius:999px;padding:3px 10px}
+.gw-tile .gw-wait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:14px}
+.gw-bar{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+.gw-count{opacity:.85;font-size:14px}
+.gw-sound{background:#e01e26;color:#fff;border:0;font-weight:800;border-radius:999px;padding:9px 16px;font-size:14px;cursor:pointer}
+.gw-note{opacity:.75;font-size:13px;margin-top:8px}
+.gw-chat-card{margin-top:14px}
+.gw-chat{max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:7px;padding:4px 2px}
+.gw-msg{display:flex;gap:8px;align-items:flex-start;font-size:14.5px}
+.gw-msg img{width:26px;height:26px;border-radius:50%;object-fit:cover;flex:none}
+.gw-msg .gw-ph{width:26px;height:26px;border-radius:50%;background:#40161b;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;flex:none}
+.gw-msg b{margin-right:5px}
+.gw-join{margin-top:14px;text-align:center}
+.gw-join form{display:flex;flex-direction:column;gap:9px;max-width:420px;margin:12px auto 0;text-align:left}
+.gw-join input{border:1px solid var(--border);border-radius:10px;padding:11px 12px;font-size:15px;background:var(--bg);color:var(--text);width:100%;box-sizing:border-box}
+.gw-ended{display:none;text-align:center;padding:34px 10px}
+</style>
+{% endblock %}
+{% block content %}
+<div class="gw-wrap">
+  <div class="gw-stage-card">
+    <div class="gw-top">
+      <span class="gw-pill"><span class="dot"></span>LIVE NOW</span>
+      <span class="gw-count" id="gw-count">👀 {{ watching }} watching</span>
+    </div>
+    <div class="gw-title">{{ live.title|e }}</div>
+    <div class="gw-host">hosted by <strong>{{ host.name|e }}</strong>{% if host.founding_no %} · 🏅 Original #{{ host.founding_no }}{% endif %}</div>
+    <div class="gw-stage" id="gw-stage"></div>
+    <div class="gw-ended" id="gw-ended">
+      <div style="font-size:22px;font-weight:900">This live has ended</div>
+      <p style="opacity:.85">Join HERE free and you'll catch the next one from inside.</p>
+    </div>
+    <div class="gw-bar">
+      <button type="button" class="gw-sound" id="gw-sound">🔊 Tap for sound</button>
+      <span class="gw-count">❤️ <span id="gw-likes">0</span></span>
+    </div>
+    <div class="gw-note">You're watching as a guest. Join free below and you're inside this live — chat, gift the host, even hop on the panel.</div>
+  </div>
+
+  <div class="card gw-chat-card">
+    <b>💬 Room chat</b> <span style="color:var(--muted);font-size:13px">(read-only for guests)</span>
+    <div class="gw-chat" id="gw-chat"></div>
+  </div>
+
+  <div class="card gw-join" id="join">
+    <b style="font-size:19px">Join HERE free — 30 seconds, no card</b>
+    <form action="/signup" method="post">
+      <input type="hidden" name="next" value="/live/{{ live.id }}">
+      <input type="text" name="name" required maxlength="80" placeholder="Your name" autocomplete="name">
+      <input type="email" name="email" required placeholder="Email" autocomplete="email">
+      <input type="password" name="password" required placeholder="Password" autocomplete="new-password">
+      <button type="submit" class="btn" style="font-size:16.5px;padding:13px">Create my free account →</button>
+    </form>
+    <p style="margin:12px 0 0;color:var(--muted);font-size:14px">Already on HERE? <a href="/login?next=/live/{{ live.id }}">Log in</a> and you're straight back in this live.</p>
+  </div>
+</div>
+
+<script type="application/json" id="gw-boot">{"lid": {{ live.id }}}</script>
+<script>
+(function () {
+  var B = JSON.parse(document.getElementById('gw-boot').textContent);
+  var LID = B.lid;
+  var token = null;
+  var iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  var peers = {};        /* uid -> {pc, tile, video, iceQ, stream} */
+  var panelNow = {};     /* uid -> person */
+  var lastComment = 0, lastSignal = 0, ended = false;
+  var stage = document.getElementById('gw-stage');
+  var chatBox = document.getElementById('gw-chat');
+
+  function jpost(path, body) {
+    return fetch(path, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}) }).then(function (r) {
+        return r.json(); }).catch(function () { return {}; });
+  }
+  function jget(path) {
+    return fetch(path).then(function (r) { return r.json(); })
+      .catch(function () { return {}; });
+  }
+  function sendSignal(to, kind, payload) {
+    if (!token) return;
+    jpost('/live/' + LID + '/guest/signal',
+          { token: token, to_id: to, kind: kind, payload: payload });
+  }
+
+  function makeTile(p) {
+    var tile = document.createElement('div');
+    tile.className = 'gw-tile';
+    var wait = document.createElement('div');
+    wait.className = 'gw-wait';
+    wait.textContent = 'Connecting…';
+    var video = document.createElement('video');
+    video.autoplay = true; video.playsInline = true; video.muted = true;
+    var name = document.createElement('span');
+    name.className = 'gw-name';
+    name.textContent = p.name || '';
+    tile.appendChild(video); tile.appendChild(wait);
+    tile.appendChild(name);
+    stage.appendChild(tile);
+    return { tile: tile, video: video, wait: wait };
+  }
+
+  function ensurePeer(uid) {
+    if (peers[uid]) return peers[uid];
+    var p = panelNow[uid] || { name: '' };
+    var t = makeTile(p);
+    var pc = new RTCPeerConnection({ iceServers: iceServers });
+    var P = { pc: pc, tile: t.tile, video: t.video, wait: t.wait,
+              iceQ: [], stream: null };
+    peers[uid] = P;
+    pc.onicecandidate = function (ev) {
+      if (ev.candidate) sendSignal(uid, 'ice', ev.candidate.toJSON());
+    };
+    pc.ontrack = function (ev) {
+      if (!P.stream) P.stream = new MediaStream();
+      P.stream.addTrack(ev.track);
+      P.video.srcObject = P.stream;
+      P.wait.style.display = 'none';
+      var pr = P.video.play();
+      if (pr && pr.catch) pr.catch(function () {});
+    };
+    pc.onconnectionstatechange = function () {
+      if (pc.connectionState === 'failed'
+          || pc.connectionState === 'closed') {
+        closePeer(uid);
+        if (!ended && panelNow[uid]) {
+          setTimeout(function () {
+            if (!ended && panelNow[uid] && !peers[uid]) {
+              ensurePeer(uid);
+              sendSignal(uid, 'hello', { watch: 1 });
+            }
+          }, 2500);
+        }
+      }
+    };
+    return P;
+  }
+
+  function closePeer(uid) {
+    var P = peers[uid];
+    if (!P) return;
+    try { P.pc.close(); } catch (e) {}
+    if (P.tile && P.tile.parentNode) P.tile.parentNode.removeChild(P.tile);
+    delete peers[uid];
+  }
+
+  function reconcile(panel) {
+    var next = {};
+    panel.forEach(function (p) { next[p.id] = p; });
+    Object.keys(panelNow).forEach(function (uid) {
+      if (!next[uid]) { closePeer(+uid); delete panelNow[uid]; }
+    });
+    panel.forEach(function (p) {
+      var isNew = !panelNow[p.id];
+      panelNow[p.id] = p;
+      if (isNew) {
+        ensurePeer(p.id);
+        sendSignal(p.id, 'hello', { watch: 1 });
+      }
+    });
+  }
+
+  function addComment(c) {
+    var row = document.createElement('div');
+    row.className = 'gw-msg';
+    if (c.avatar) {
+      var img = document.createElement('img');
+      img.src = c.avatar; img.alt = '';
+      row.appendChild(img);
+    } else {
+      var ph = document.createElement('span');
+      ph.className = 'gw-ph';
+      ph.textContent = (c.name || '?').charAt(0).toUpperCase();
+      row.appendChild(ph);
+    }
+    var txt = document.createElement('div');
+    var b = document.createElement('b');
+    b.textContent = c.name || '';
+    txt.appendChild(b);
+    txt.appendChild(document.createTextNode(c.body || ''));
+    row.appendChild(txt);
+    var nearBottom = chatBox.scrollHeight - chatBox.scrollTop
+                     - chatBox.clientHeight < 90;
+    chatBox.appendChild(row);
+    if (nearBottom) chatBox.scrollTop = chatBox.scrollHeight;
+  }
+
+  function pollState() {
+    if (ended || !token) return;
+    jget('/live/' + LID + '/guest/state?token='
+         + encodeURIComponent(token) + '&since_comment=' + lastComment)
+      .then(function (s) {
+        if (!s || !s.ok) return;
+        if (s.status === 'ended') { showEnded(); return; }
+        document.getElementById('gw-count').textContent
+          = '👀 ' + (s.viewers || 0) + ' watching';
+        document.getElementById('gw-likes').textContent = s.likes || 0;
+        (s.comments || []).forEach(function (c) {
+          addComment(c);
+          if (c.id > lastComment) lastComment = c.id;
+        });
+        reconcile(s.panel || []);
+        setTimeout(pollState, 3000);
+      });
+  }
+
+  function pollSignals() {
+    if (ended || !token) return;
+    jget('/live/' + LID + '/guest/signals?token='
+         + encodeURIComponent(token) + '&since=' + lastSignal)
+      .then(function (s) {
+        ((s && s.signals) || []).forEach(function (sig) {
+          if (sig.id > lastSignal) lastSignal = sig.id;
+          handleSignal(sig);
+        });
+        setTimeout(pollSignals, 1200);
+      });
+  }
+
+  function handleSignal(sig) {
+    var from = sig.from_id;
+    if (sig.kind === 'offer') {
+      var P = ensurePeer(from);
+      var payload = sig.payload || {};
+      P.pc.setRemoteDescription(new RTCSessionDescription(payload))
+        .then(function () {
+          P.iceQ.forEach(function (cand) {
+            P.pc.addIceCandidate(cand).catch(function () {});
+          });
+          P.iceQ = [];
+          return P.pc.createAnswer();
+        })
+        .then(function (a) { return P.pc.setLocalDescription(a); })
+        .then(function () {
+          sendSignal(from, 'answer', P.pc.localDescription.toJSON());
+        })
+        .catch(function () {});
+    } else if (sig.kind === 'ice') {
+      var P2 = peers[from];
+      if (!P2) return;
+      var cand = null;
+      try { cand = new RTCIceCandidate(sig.payload); } catch (e) {}
+      if (!cand) return;
+      if (P2.pc.remoteDescription && P2.pc.remoteDescription.type) {
+        P2.pc.addIceCandidate(cand).catch(function () {});
+      } else {
+        P2.iceQ.push(cand);
+      }
+    } else if (sig.kind === 'bye') {
+      closePeer(from);
+    }
+  }
+
+  function heartbeat() {
+    if (ended || !token) return;
+    jpost('/live/' + LID + '/guest/heartbeat', { token: token })
+      .then(function (s) {
+        if (s && s.status === 'ended') { showEnded(); return; }
+        setTimeout(heartbeat, 10000);
+      });
+  }
+
+  function showEnded() {
+    if (ended) return;
+    ended = true;
+    Object.keys(peers).forEach(function (uid) { closePeer(+uid); });
+    document.getElementById('gw-ended').style.display = 'block';
+  }
+
+  document.getElementById('gw-sound').addEventListener('click',
+    function () {
+      Object.keys(peers).forEach(function (uid) {
+        var v = peers[uid].video;
+        v.muted = false;
+        var pr = v.play();
+        if (pr && pr.catch) pr.catch(function () {});
+      });
+      this.textContent = '🔊 Sound on';
+    });
+
+  jget('/ice.json').then(function (s) {
+    if (s && s.iceServers && s.iceServers.length) {
+      iceServers = s.iceServers;
+    }
+    return jpost('/live/' + LID + '/guest/join', {});
+  }).then(function (s) {
+    if (!s || !s.ok) { showEnded(); return; }
+    token = s.token;
+    reconcile(s.panel || []);
+    heartbeat();
+    pollState();
+    pollSignals();
+  });
+})();
+</script>
+{% endblock %}

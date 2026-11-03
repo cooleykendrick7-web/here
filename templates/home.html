@@ -215,6 +215,58 @@ document.querySelectorAll('.remind-btn').forEach(function(b){
   </div>
 </div>
 
+{% if race_share %}
+<div class="card" id="race-share" style="border:1.5px solid #d4a017;background:linear-gradient(160deg,rgba(212,160,23,.14),rgba(224,30,38,.07))">
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <b style="font-size:16.5px">🏁 $100 Invite Race</b>
+    <span style="color:var(--muted);font-size:13px">{{ race_share.days_left }} day{{ 's' if race_share.days_left != 1 }} left · first to {{ race_share.min }} real joins wins the $100</span>
+  </div>
+  <p style="margin:8px 0;font-size:14.5px">Your score: <b>{{ race_share.qualified }} real joins</b> ({{ race_share.raw }} joined). Send your link — a join counts when they actually use HERE.</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <input type="text" readonly value="{{ race_share.link }}" id="race-link" style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13.5px;background:var(--bg)">
+    <button type="button" class="btn" id="race-copy-btn">Copy link</button>
+    <button type="button" class="btn-ghost" id="race-share-btn">📲 Share</button>
+  </div>
+</div>
+<script>
+(function () {
+  var link = {{ race_share.link|tojson }};
+  var text = "Join me on HERE — a new social platform where creators actually get paid. 💸 Sign up with my link and help me win the $100 Invite Race: " + link;
+  var copyBtn = document.getElementById('race-copy-btn');
+  function done(btn, label) {
+    if (!btn) return;
+    var old = btn.textContent;
+    btn.textContent = label;
+    setTimeout(function () { btn.textContent = old; }, 1800);
+  }
+  if (copyBtn) copyBtn.addEventListener('click', function () {
+    var input = document.getElementById('race-link');
+    function fb() {
+      if (!input) return;
+      input.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      done(copyBtn, '✅ Copied');
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(function () {
+        done(copyBtn, '✅ Copied');
+      }, fb);
+    } else fb();
+  });
+  var shareBtn = document.getElementById('race-share-btn');
+  if (shareBtn) shareBtn.addEventListener('click', function () {
+    if (navigator.share) {
+      navigator.share({ title: 'Join me on HERE', text: text, url: link }).catch(function () {});
+    } else if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        done(shareBtn, '✅ Message copied');
+      });
+    }
+  });
+})();
+</script>
+{% endif %}
+
 {% for item in feed_items %}
   {% if item.kind == 'ad' %}
     {% with ad=item.ad %}{% include "partials/ad_card.html" %}{% endwith %}

@@ -779,6 +779,17 @@ def init_db():
         joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
         left_at TEXT,
         PRIMARY KEY (live_id, user_id))""")
+    # Guest live preview (Ken's build, Nov 3, 2026): logged-out
+    # watchers of a PUBLIC live get a row here — never in
+    # live_viewers, so guests never inflate viewer counts, race
+    # qualification, or any member statistic. A guest's signaling
+    # id is the NEGATIVE of this row's id (real user ids are
+    # positive), which lets the existing point-to-point signal
+    # table carry guest traffic untouched.
+    c.execute("""CREATE TABLE IF NOT EXISTS live_guest_viewers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS live_join_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         live_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
@@ -2334,8 +2345,23 @@ def _save_upload_r2(up, subdir, ext, cap_mb):
         ctype = (getattr(up, "content_type", "") or
                  mimetypes.guess_type(up.filename or "")[0] or
                  "application/octet-stream")
+        body = tmp
+        if ext in IMG_COMPRESS_EXTS:
+            # Same compression as the disk path (see _compress_image):
+            # the spooled bytes re-encode web-weight before the PUT.
+            import io as _io
+            raw = tmp.read()
+            packed = _compress_image(raw, subdir)
+            if packed and len(packed[0]) < len(raw):
+                data2, ext = packed
+                key = f"{subdir}/{uuid.uuid4().hex}.{ext}"
+                ctype = "image/png" if ext == "png" else "image/jpeg"
+                body = _io.BytesIO(data2)
+                total = len(data2)
+            else:
+                tmp.seek(0)
         try:
-            storage.put_object(key, tmp, ctype, size=total)
+            storage.put_object(key, body, ctype, size=total)
         except storage.StorageError:
             raise ValueError(_UPLOAD_FAIL)
     finally:
@@ -2363,6 +2389,37 @@ def _accept_media_key(user, key, subdir, allowed_exts):
     return key, ""
 
 
+IMG_COMPRESS_EXTS = {"jpg", "jpeg", "png", "webp"}
+
+
+def _compress_image(data, subdir):
+    """Shrink an uploaded image in memory: EXIF orientation applied
+    first (phone photos never land sideways), downscale (avatars
+    512px, everything else 1920px), re-encode JPEG q82 — PNG only
+    when the image carries real transparency. Returns (bytes, ext)
+    or None when the bytes aren't a readable image (the caller then
+    saves the original untouched). Ken's speed order, Nov 3, 2026:
+    full-size camera photos (2-3 MB avatars) made every page feel
+    slow; new uploads now land web-weight."""
+    try:
+        import io as _io
+        from PIL import Image, ImageOps
+        im = Image.open(_io.BytesIO(data))
+        im = ImageOps.exif_transpose(im)
+        cap = 512 if subdir == "avatars" else 1920
+        im.thumbnail((cap, cap), Image.LANCZOS)
+        has_alpha = im.mode in ("RGBA", "LA") or (
+            im.mode == "P" and "transparency" in im.info)
+        buf = _io.BytesIO()
+        if has_alpha:
+            im.save(buf, "PNG", optimize=True)
+            return buf.getvalue(), "png"
+        im.convert("RGB").save(buf, "JPEG", quality=82, optimize=True)
+        return buf.getvalue(), "jpg"
+    except Exception:
+        return None
+
+
 def save_upload(up, subdir, allowed, max_mb=0):
     """Save an uploaded file under UPLOAD_DIR/subdir with a uuid name.
     Returns the relative path (e.g. 'avatars/abc123.png') or '' if no file.
@@ -2379,14 +2436,36 @@ def save_upload(up, subdir, allowed, max_mb=0):
     if storage.r2_enabled():
         return _save_upload_r2(up, subdir, ext, cap_mb)
     limit = cap_mb * 1024 * 1024
-    name = f"{uuid.uuid4().hex}.{ext}"
-    dest = os.path.join(UPLOAD_DIR, subdir, name)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
     src = up.file
     try:
         src.seek(0)
     except Exception:
         pass
+    if ext in IMG_COMPRESS_EXTS:
+        # Images buffer whole (they're capped well under video
+        # sizes) so they can be compressed before they land.
+        data = b""
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            data += chunk
+            if len(data) > limit:
+                raise ValueError(
+                    "That file couldn't be uploaded — "
+                    "try a different one.")
+        packed = _compress_image(data, subdir)
+        if packed and len(packed[0]) < len(data):
+            data, ext = packed
+        name = f"{uuid.uuid4().hex}.{ext}"
+        dest = os.path.join(UPLOAD_DIR, subdir, name)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(data)
+        return f"{subdir}/{name}"
+    name = f"{uuid.uuid4().hex}.{ext}"
+    dest = os.path.join(UPLOAD_DIR, subdir, name)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
     total = 0
     try:
         with open(dest, "wb") as f:
@@ -4935,8 +5014,29 @@ async def home(request: Request):
     paid_total = _paid_total_cents(_lc)
     upcoming = _upcoming_shows(_lc, user, 5)
     _lc.close()
+    # $100 Invite Race share strip (Ken's growth order, Nov 3,
+    # 2026): while the race is open, EVERY home load carries the
+    # member's own invite link with one-tap Copy/Share and a
+    # ready-made message — the race was stalling at 0 qualified
+    # joins because sharing took too many taps and the feed's
+    # race card only showed sometimes, to almost nobody.
+    race_share = None
+    if _race_phase() == "open":
+        _rc2 = db()
+        _code = ensure_invite_code(_rc2, user)
+        _mine = _race_mine(_rc2, user["id"])
+        _rc2.close()
+        _end = datetime(2026, 11, 15, 23, 59, 59,
+                        tzinfo=CHICAGO_TZ)
+        race_share = {
+            "link": _abs_url(request, "/join/" + _code),
+            "days_left": max(0, (_end - datetime.now(
+                CHICAGO_TZ)).days + 1),
+            "raw": _mine["raw"], "qualified": _mine["qualified"],
+            "min": RACE_MIN_QUALIFIED}
     return render(request, "home.html",
                   {"posts": posts, "feed_items": feed_items,
+                   "race_share": race_share,
                    "contacts": contacts,
                    "stories_tray": stories_tray(user["id"]),
                    "live_now": live_now_for(user["id"], owner_on),
@@ -14869,7 +14969,12 @@ async def live_og_gif(lid: int):
 async def live_page(request: Request, lid: int):
     user = current_user(request)
     if not user:
-        # Guests (and every social scraper) get the watch-gate:
+        # Guests (and every social scraper) land here. A PUBLIC
+        # live (running, free door, public host) opens the guest
+        # watch page: the real live in a mid block, read-only
+        # chat, and an inline join that unlocks in place (Ken's
+        # guest-preview build, Nov 3, 2026). Ticket-door and
+        # private-host lives keep the classic watch-gate below:
         # the host, the panel faces, and one job — join and
         # you're inside this live. Scrapers read its og blocks.
         conn = db()
@@ -14878,6 +14983,18 @@ async def live_page(request: Request, lid: int):
         if not glive:
             conn.close()
             return redir("/login")
+        if _guest_watchable(conn, glive):
+            ghost = _live_person(glive["host_id"])
+            gpanel = [_live_person(pid) for pid
+                      in _live_panel_ids(conn, glive)]
+            gwatch = _live_viewer_count(conn, lid)
+            og_img = _abs_url(request, f"/live/{lid}/og.gif")
+            og_png = _abs_url(request, f"/live/{lid}/og.png")
+            conn.close()
+            return render(request, "live_watch.html", {
+                "live": glive, "host": ghost, "panel": gpanel,
+                "watching": gwatch, "og_img": og_img,
+                "og_png": og_png})
         ghost = _live_person(glive["host_id"])
         gpanel = [ghost]
         for m in conn.execute(
@@ -14997,6 +15114,263 @@ async def live_page(request: Request, lid: int):
         "live_share_url": f"https://joincomehere.com/l/{lid}",
         "live_share_text": live_share_text,
         "hide_golive": True})
+
+
+# ---------------- Guest live preview (Ken's build, Nov 3, 2026) --
+# A logged-out visitor opening a PUBLIC live's link watches the
+# real live (WebRTC, view-only), reads the chat, and joins inline
+# without leaving the page. Guests are NOT members: they live in
+# live_guest_viewers (never live_viewers), signal under a negative
+# id, and can only answer/hello — never offer, never comment,
+# never gift. Ticket-door lives and private hosts' lives stay
+# locked behind the join gate, exactly as before.
+
+GUEST_FRESH_SECONDS = 120
+GUEST_MAX_PER_LIVE = 300
+
+
+def _guest_watchable(conn, live):
+    """Guest-preview eligibility: the live is running, its door is
+    free (no ticket entry), and the host's profile is public."""
+    if not live or live["status"] != "live":
+        return False
+    if live["entry_tickets"]:
+        return False
+    host = get_user(live["host_id"])
+    if host and host.get("private_profile"):
+        return False
+    return True
+
+
+def _guest_cutoff():
+    return (datetime.now(timezone.utc)
+            - timedelta(seconds=GUEST_FRESH_SECONDS)).isoformat()
+
+
+def _guest_row(conn, lid, token):
+    """The fresh guest row for (live, token), or None."""
+    if not token:
+        return None
+    return conn.execute(
+        "SELECT * FROM live_guest_viewers WHERE live_id=? "
+        "AND token=? AND last_seen_at>=?",
+        (lid, token, _guest_cutoff())).fetchone()
+
+
+def _guest_panel(conn, live):
+    return [_live_person(pid)
+            for pid in _live_panel_ids(conn, live)]
+
+
+@app.post("/live/{lid}/guest/join")
+async def live_guest_join(request: Request, lid: int):
+    """Open a guest watch session on a public live. Returns the
+    guest's token + negative signaling id; the watch page takes
+    it from there (heartbeat, state, signals)."""
+    conn = db()
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if not live:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not found"},
+                            status_code=404)
+    if not _guest_watchable(conn, live):
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "This live needs a free account."},
+            status_code=403)
+    stale = (datetime.now(timezone.utc)
+             - timedelta(seconds=600)).isoformat()
+    conn.execute(
+        "DELETE FROM live_guest_viewers WHERE live_id=? "
+        "AND last_seen_at<?", (lid, stale))
+    fresh = conn.execute(
+        "SELECT COUNT(*) c FROM live_guest_viewers WHERE live_id=? "
+        "AND last_seen_at>=?", (lid, _guest_cutoff())).fetchone()["c"]
+    if fresh >= GUEST_MAX_PER_LIVE:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "This live is full right now."},
+            status_code=429)
+    token = uuid.uuid4().hex
+    stamp = now_iso()
+    cur = conn.execute(
+        "INSERT INTO live_guest_viewers(live_id, token, created_at, "
+        "last_seen_at) VALUES(?,?,?,?)", (lid, token, stamp, stamp))
+    gid = cur.lastrowid
+    panel = _guest_panel(conn, live)
+    host = _live_person(live["host_id"])
+    viewers = _live_viewer_count(conn, lid)
+    conn.commit()
+    conn.close()
+    return JSONResponse({
+        "ok": True, "token": token, "guest_uid": -gid,
+        "title": live["title"], "host": host, "panel": panel,
+        "viewers": viewers})
+
+
+@app.post("/live/{lid}/guest/heartbeat")
+async def live_guest_heartbeat(request: Request, lid: int):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    token = data.get("token") if isinstance(data, dict) else None
+    conn = db()
+    row = _guest_row(conn, lid, token)
+    if not row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "session"},
+                            status_code=403)
+    conn.execute(
+        "UPDATE live_guest_viewers SET last_seen_at=? WHERE id=?",
+        (now_iso(), row["id"]))
+    live = _live_get(conn, lid)
+    viewers = _live_viewer_count(conn, lid)
+    conn.commit()
+    conn.close()
+    return JSONResponse({
+        "ok": True,
+        "status": live["status"] if live else "ended",
+        "viewers": viewers})
+
+
+@app.get("/live/{lid}/guest/state")
+async def live_guest_state(request: Request, lid: int):
+    """The guest watch page's poll: panel roster, read-only chat
+    since ?since_comment=, the REAL member viewer count (guests
+    are never counted), and the like total."""
+    token = request.query_params.get("token") or ""
+    conn = db()
+    row = _guest_row(conn, lid, token)
+    if not row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "session"},
+                            status_code=403)
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if not live or live["status"] != "live":
+        conn.close()
+        return JSONResponse({"ok": True, "status": "ended"})
+    if not _guest_watchable(conn, live):
+        conn.close()
+        return JSONResponse({"ok": True, "status": "ended"})
+    try:
+        since = int(request.query_params.get("since_comment") or 0)
+    except (TypeError, ValueError):
+        since = 0
+    rows = conn.execute(
+        "SELECT lc.*, u.name, u.avatar, u.founding_no, u.plus_until "
+        "FROM live_comments lc "
+        "LEFT JOIN users u ON u.id=lc.user_id WHERE lc.live_id=? "
+        "AND lc.id>? ORDER BY lc.id ASC LIMIT 100",
+        (lid, since)).fetchall()
+    comments = [_live_comment_json(dict(r), 0, live["host_id"])
+                for r in rows]
+    likes = conn.execute(
+        "SELECT COUNT(*) c FROM live_like_events WHERE live_id=?",
+        (lid,)).fetchone()["c"]
+    out = {"ok": True, "status": "live",
+           "panel": _guest_panel(conn, live),
+           "comments": comments,
+           "viewers": _live_viewer_count(conn, lid),
+           "likes": likes, "title": live["title"]}
+    conn.close()
+    return JSONResponse(out)
+
+
+@app.get("/live/{lid}/guest/signals")
+async def live_guest_signals(request: Request, lid: int):
+    """Signals addressed to this guest, member-poll semantics:
+    delivered in order, marked consumed on delivery."""
+    token = request.query_params.get("token") or ""
+    conn = db()
+    row = _guest_row(conn, lid, token)
+    if not row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "session"},
+                            status_code=403)
+    try:
+        since = int(request.query_params.get("since") or 0)
+    except (TypeError, ValueError):
+        since = 0
+    rows = conn.execute(
+        "SELECT * FROM live_signals WHERE live_id=? AND to_id=? "
+        "AND id>? ORDER BY id ASC LIMIT 200",
+        (lid, -row["id"], since)).fetchall()
+    if rows:
+        ids = [r["id"] for r in rows]
+        conn.execute(
+            "UPDATE live_signals SET consumed=1 WHERE id IN (%s)"
+            % ",".join("?" * len(ids)), ids)
+        conn.commit()
+    conn.close()
+    sigs = []
+    for r in rows:
+        payload = r["payload"]
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            pass
+        sigs.append({"id": r["id"], "from_id": r["from_id"],
+                     "kind": r["kind"], "payload": payload,
+                     "created_at": r["created_at"]})
+    return JSONResponse({"ok": True, "signals": sigs})
+
+
+@app.post("/live/{lid}/guest/signal")
+async def live_guest_signal(request: Request, lid: int):
+    """A guest may hello/answer/ice/bye — never offer — and only
+    to the host or an on-camera panelist of this live."""
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    conn = db()
+    row = _guest_row(conn, lid, data.get("token"))
+    if not row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "session"},
+                            status_code=403)
+    _sweep_lives(conn)
+    live = _live_get(conn, lid)
+    if not live or live["status"] != "live" \
+            or not _guest_watchable(conn, live):
+        conn.close()
+        return JSONResponse({"ok": False, "error": "ended"},
+                            status_code=403)
+    kind = data.get("kind")
+    if kind not in ("hello", "answer", "ice", "bye"):
+        conn.close()
+        return JSONResponse({"ok": False, "error": "Bad kind."},
+                            status_code=400)
+    try:
+        to_id = int(data.get("to_id") or 0)
+    except (TypeError, ValueError):
+        to_id = 0
+    allowed = set(_live_panel_ids(conn, live))
+    if to_id not in allowed:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "That person isn't on the panel."},
+            status_code=403)
+    payload = data.get("payload")
+    if not isinstance(payload, str):
+        payload = json.dumps(payload or {})
+    if len(payload) > LIVE_MAX_PAYLOAD:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "Signal too big."},
+                            status_code=400)
+    cur = conn.execute(
+        "INSERT INTO live_signals(live_id, from_id, to_id, kind, "
+        "payload, created_at) VALUES(?,?,?,?,?,?)",
+        (lid, -row["id"], to_id, kind, payload, now_iso()))
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "id": sid})
 
 
 @app.post("/live/{lid}/end")
@@ -18305,6 +18679,15 @@ async def live_signal_send(request: Request, lid: int):
             "SELECT user_id FROM live_viewers WHERE live_id=? AND "
             "left_at IS NULL", (lid,)).fetchall():
         allowed.add(v["user_id"])
+    # Guest-preview watchers (negative ids) are reachable too while
+    # their guest row is fresh — otherwise the panel could never
+    # answer a guest's hello with an offer.
+    _gcut = (datetime.now(timezone.utc)
+             - timedelta(seconds=120)).isoformat()
+    for g in conn.execute(
+            "SELECT id FROM live_guest_viewers WHERE live_id=? "
+            "AND last_seen_at>=?", (lid, _gcut)).fetchall():
+        allowed.add(-g["id"])
     for v in conn.execute(
             "SELECT user_id FROM live_join_requests WHERE live_id=? "
             "AND status IN ('pending','approved')", (lid,)).fetchall():

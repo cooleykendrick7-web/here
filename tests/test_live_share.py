@@ -1,7 +1,9 @@
 """Live share tests (Oct 29): a shared live link shows an
-animated OG card to feeds, lands guests on a watch-gate (not
-a bare login wall), and login/signup ?next= drops the member
-inside the live they came for.
+animated OG card to feeds, lands guests on a watch page (not
+a bare login wall — since Nov 3, 2026 a PUBLIC live opens the
+guest watch page: real live + read-only chat + inline join;
+locked lives keep the watch-gate), and login/signup ?next=
+drops the member inside the live they came for.
 
 Run:  ./venv/bin/python tests/test_live_share.py
 """
@@ -50,15 +52,15 @@ lid = r.json().get("live_id") or r.json().get("id")
 
 G = TestClient(here.app, follow_redirects=False)
 r = G.get(f"/live/{lid}")
-check("guest clicking a live link lands on the watch-gate",
-      r.status_code == 200 and "Create your free profile" in r.text
+check("guest clicking a public live link lands on the guest watch page",
+      r.status_code == 200 and 'id="gw-stage"' in r.text
       and "Probe Night Live" in r.text
       and "Hank Host" in r.text)
 check("gate carries the live's own og card tags",
       f"/live/{lid}/og.gif" in r.text
       and 'property="og:image"' in r.text)
-check("gate CTAs carry the return path",
-      f"/signup?next=/live/{lid}" in r.text
+check("watch page join carries the return path (inline signup + login)",
+      f'name="next" value="/live/{lid}"' in r.text
       and f"/login?next=/live/{lid}" in r.text)
 
 r = G.get(f"/live/{lid}/og.png")
