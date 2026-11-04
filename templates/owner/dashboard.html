@@ -46,6 +46,7 @@ table.admin tr:last-child td{border-bottom:none}
   <a class="btn-ghost" href="/owner/race">🏁 Invite Race</a>
   <a class="btn-ghost" href="/owner/suggestions">💡 Suggestions</a>
   <a class="btn-ghost" href="/owner/match">💘 Match Here</a>
+  <a class="btn-ghost" href="/owner/idm">💡 IDM</a>
   <a class="btn-ghost" href="/owner/artists">🎤 Artists</a>
   <a class="logout" href="/owner/logout">Logout</a>
 </div>
@@ -417,6 +418,9 @@ table.admin tr:last-child td{border-bottom:none}
             </form>
             <form class="inline-form" action="/owner/users/{{ u.id }}/badge/vvendor" method="post">
               <button type="submit" class="btn-ghost" title="Flip the gold Verified Vendor sticker on this profile">🏷 Verified Vendor: {{ 'ON' if u.is_verified_vendor else 'OFF' }}</button>
+            </form>
+            <form class="inline-form" action="/owner/users/{{ u.id }}/idm" method="post">
+              <button type="submit" class="btn-ghost" title="Instant Developer Mode: white avatar ring, HERE IDM badge, and the private ? door in their Settings">💡 IDM: {{ 'ON' if u.idm_member else 'OFF' }}</button>
             </form>
             <form class="inline-form" action="/owner/user/{{ u.id }}/remove" method="post" onsubmit="return confirm('Remove user {{ u.name|e }} and ALL their content?');">
               <button type="submit" class="btn">Remove User</button>

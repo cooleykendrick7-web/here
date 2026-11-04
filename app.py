@@ -640,6 +640,30 @@ def init_db():
     c.execute("UPDATE users SET vuser_status='none' WHERE vuser_status IS NULL")
     c.execute("UPDATE users SET is_verified_vendor=0 WHERE is_verified_vendor IS NULL")
     c.execute("UPDATE users SET vvendor_status='none' WHERE vvendor_status IS NULL")
+    # --- IDM: Instant Developer Mode (Ken's build, Nov 4, 2026) ---
+    # Ken's hand-picked insider crew: members wear a white neon
+    # ring on their avatar + a tiny "HERE IDM" badge, and their
+    # Settings grows a small ❓ door whose findings/suggestions
+    # land in the owner suggestions desk tagged source='idm' and
+    # in Ken's own notifications the moment they send. Granted
+    # from the owner panel (per-user flip), or applied for in
+    # Settings and approved at /owner/idm.
+    if "idm_member" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN idm_member INTEGER DEFAULT 0")
+    if "idm_since" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN idm_since TEXT DEFAULT ''")
+    c.execute("UPDATE users SET idm_member=0 WHERE idm_member IS NULL")
+    c.execute("""CREATE TABLE IF NOT EXISTS idm_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT '',
+        decided_at TEXT)""")
+    _sugg_cols = [r[1] for r in
+                  c.execute("PRAGMA table_info(app_suggestions)")]
+    if _sugg_cols and "source" not in _sugg_cols:
+        c.execute("ALTER TABLE app_suggestions ADD COLUMN "
+                  "source TEXT NOT NULL DEFAULT 'settings'")
     # --- MySpace-style full profile backgrounds (safe on existing DBs) ---
     if "background" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN background TEXT DEFAULT ''")
@@ -1502,7 +1526,7 @@ def init_db():
         user_id INTEGER NOT NULL, text TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'new',
         created_at TEXT NOT NULL DEFAULT '',
-        decided_at TEXT)""")
+        decided_at TEXT, source TEXT NOT NULL DEFAULT 'settings')""")
     c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
         user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
@@ -1961,6 +1985,17 @@ def render(request: Request, name, ctx=None):
     ctx = dict(ctx or {})
     ctx.setdefault("icon_style", "emoji")
     ctx.setdefault("ic", lambda key: icon_html(key, "emoji"))
+    # IDM (Instant Developer Mode): the stored avatar paths of
+    # Ken's insider crew — base.html rings those avatars with a
+    # white neon glow wherever they appear, for every viewer.
+    try:
+        _ic = db()
+        ctx["idm_avatars"] = [r["avatar"] for r in _ic.execute(
+            "SELECT avatar FROM users WHERE idm_member=1 "
+            "AND avatar IS NOT NULL AND avatar<>''").fetchall()]
+        _ic.close()
+    except Exception:
+        ctx["idm_avatars"] = []
     u = current_user(request)
     if u:
         touch_seen(u["id"])
@@ -3170,7 +3205,7 @@ def post_card(p, viewer, owner_on=False):
     a = conn.execute("SELECT id,name,avatar,is_verified,"
                      "is_verified_user,is_verified_vendor,"
                      "private_profile,founding_no,creator_mode,"
-                     "plus_until "
+                     "plus_until,idm_member "
                      "FROM users WHERE id=?",
                      (p["user_id"],)).fetchone()
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
@@ -3293,6 +3328,7 @@ def post_card(p, viewer, owner_on=False):
         "author_verified": bool(a["is_verified"]) if a else False,
         "author_vuser": bool(a["is_verified_user"]) if a else False,
         "author_vvendor": bool(a["is_verified_vendor"]) if a else False,
+        "author_idm": bool(a["idm_member"]) if a else False,
         "kind": p["kind"], "body": p["body"] or "",
         "body_html": linkify_body(p["body"] or "", tagged_users, tagged_pages),
         "feeling": p["feeling"] or "", "link_url": p["link_url"] or "",
@@ -9442,6 +9478,7 @@ async def profile(request: Request, uid: int):
         "tap_count": tcount,
         "is_verified": bool(prof.get("is_verified")),
         "is_verified_user": bool(prof.get("is_verified_user")),
+        "idm_member": bool(prof.get("idm_member")),
         "vuser_status": prof.get("vuser_status") or "none",
         "is_verified_vendor": bool(prof.get("is_verified_vendor")),
         "vvendor_status": prof.get("vvendor_status") or "none",
@@ -9720,9 +9757,15 @@ async def profile_edit_page(request: Request):
     _artist_pending = bool(conn.execute(
         "SELECT 1 FROM artist_applications WHERE user_id=? "
         "AND status='new'", (user["id"],)).fetchone())
+    _idm_pending = bool(conn.execute(
+        "SELECT 1 FROM idm_requests WHERE user_id=? "
+        "AND status='pending'", (user["id"],)).fetchone())
     conn.close()
     return render(request, "profile_edit.html", {
         "artist_app_pending": _artist_pending,
+        "idm": {"member": bool(user.get("idm_member")),
+                "pending": _idm_pending},
+        "idm_flash": request.query_params.get("idm") or "",
         "my_suggestions": _my_sugg,
         "idea_flash": request.query_params.get("idea") or "",
         "media_flash": request.query_params.get("media") or "",
@@ -14537,6 +14580,207 @@ async def owner_suggestion_status(request: Request, sid: int):
             + SUGGESTION_STATUS_LABELS[status],
             status=status, label=SUGGESTION_STATUS_LABELS[status])
     return RedirectResponse("/owner/suggestions", status_code=303)
+
+
+# ---------------- IDM: Instant Developer Mode (Nov 4, 2026) ------
+# Ken's insider crew. Members: white neon ring on their avatar
+# everywhere (base.html + render's idm_avatars), a tiny "HERE IDM"
+# badge by their name, and a small ❓ door in Settings whose
+# findings land in the owner suggestions desk tagged 'idm' AND in
+# Ken's own notifications instantly. Ken grants it from the owner
+# panel (per-user flip) or approves applications at /owner/idm.
+
+IDM_DAILY_CAP = 10
+
+
+def _owner_user_id(conn):
+    """Ken's member account (Original seat #1) — IDM submissions
+    notify him there the moment they land."""
+    r = conn.execute(
+        "SELECT id FROM users WHERE founding_no=1").fetchone()
+    return r["id"] if r else 3
+
+
+def _idm_grant(conn, uid, on):
+    """Flip a user's IDM membership (no commit). Turning it on
+    also settles any pending application as approved."""
+    if on:
+        conn.execute(
+            "UPDATE users SET idm_member=1, idm_since=? WHERE id=?",
+            (now_iso(), uid))
+        conn.execute(
+            "UPDATE idm_requests SET status='approved', "
+            "decided_at=? WHERE user_id=? AND status='pending'",
+            (now_iso(), uid))
+    else:
+        conn.execute(
+            "UPDATE users SET idm_member=0, idm_since='' WHERE id=?",
+            (uid,))
+
+
+@app.post("/settings/idm-apply")
+async def settings_idm_apply(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    note = str(form.get("note") or "").strip()[:300]
+    conn = db()
+    fresh = get_user(user["id"]) or {}
+    if fresh.get("idm_member"):
+        conn.close()
+        return RedirectResponse("/settings/profile?idm=member#idm",
+                                status_code=303)
+    pend = conn.execute(
+        "SELECT id FROM idm_requests WHERE user_id=? "
+        "AND status='pending'", (user["id"],)).fetchone()
+    if pend:
+        conn.close()
+        return RedirectResponse("/settings/profile?idm=pending#idm",
+                                status_code=303)
+    conn.execute(
+        "INSERT INTO idm_requests(user_id, note, status, "
+        "created_at) VALUES(?,?,'pending',?)",
+        (user["id"], note, now_iso()))
+    conn.commit()
+    conn.close()
+    return RedirectResponse("/settings/profile?idm=applied#idm",
+                            status_code=303)
+
+
+@app.post("/settings/idm-suggest")
+async def settings_idm_suggest(request: Request):
+    """The IDM ❓ door: a member's finding/suggestion goes straight
+    to the owner suggestions desk (source='idm') and into Ken's
+    notifications — no queue in between."""
+    user, err = require_login(request)
+    if err:
+        return err
+    fresh = get_user(user["id"]) or {}
+    if not fresh.get("idm_member"):
+        return RedirectResponse("/settings/profile?idm=denied#idm",
+                                status_code=303)
+    form = await request.form()
+    text = str(form.get("text") or "").strip()
+    if len(text) < 5 or len(text) > 600:
+        return RedirectResponse("/settings/profile?idm=bad#idm",
+                                status_code=303)
+    conn = db()
+    today = now_iso()[:10]
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM app_suggestions WHERE user_id=? "
+        "AND source='idm' AND substr(created_at,1,10)=?",
+        (user["id"], today)).fetchone()["c"]
+    if n >= IDM_DAILY_CAP:
+        conn.close()
+        return RedirectResponse("/settings/profile?idm=many#idm",
+                                status_code=303)
+    conn.execute(
+        "INSERT INTO app_suggestions(user_id, text, status, "
+        "created_at, source) VALUES(?,?,'new',?,'idm')",
+        (user["id"], text, now_iso()))
+    owner_id = _owner_user_id(conn)
+    conn.commit()
+    conn.close()
+    if owner_id != user["id"]:
+        notify(owner_id, "idm",
+               f"💡 IDM — {fresh.get('name', 'A member')} sent a "
+               f"finding: “{text[:90]}”",
+               "/owner/suggestions", actor_id=user["id"])
+    return RedirectResponse("/settings/profile?idm=sent#idm",
+                            status_code=303)
+
+
+@app.post("/owner/users/{uid}/idm")
+async def owner_user_idm_toggle(request: Request, uid: int):
+    """Owner panel switch (Ken's ask): click a person in the owner
+    panel to put them on IDM — or take them off — instantly."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute(
+        "SELECT idm_member AS f, name FROM users WHERE id=?",
+        (uid,)).fetchone()
+    if row:
+        newv = 0 if row["f"] else 1
+        _idm_grant(conn, uid, bool(newv))
+        conn.commit()
+        if newv:
+            notify(uid, "idm",
+                   "💡 You're on HERE IDM — Instant Developer Mode. "
+                   "Your avatar wears the white ring now, and a "
+                   "private ❓ door in your Settings sends your "
+                   "findings straight to the owner.",
+                   "/settings/profile#idm")
+    conn.close()
+    if _oa(request):
+        if not row:
+            return _oa_fail("That user is gone.")
+        return _oa_json(
+            f"IDM turned {'ON' if newv else 'OFF'} for "
+            f"{row['name']}.", on=bool(newv))
+    return redir("/owner")
+
+
+@app.get("/owner/idm", response_class=HTMLResponse)
+async def owner_idm_page(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    apps = conn.execute(
+        "SELECT r.*, u.name AS uname, u.avatar AS uavatar "
+        "FROM idm_requests r JOIN users u ON u.id=r.user_id "
+        "WHERE r.status='pending' ORDER BY r.id ASC").fetchall()
+    members = conn.execute(
+        "SELECT id, name, avatar, idm_since FROM users "
+        "WHERE idm_member=1 ORDER BY idm_since ASC").fetchall()
+    recent = conn.execute(
+        "SELECT s.*, u.name AS uname FROM app_suggestions s "
+        "JOIN users u ON u.id=s.user_id WHERE s.source='idm' "
+        "ORDER BY s.id DESC LIMIT 25").fetchall()
+    conn.close()
+    return render(request, "owner/idm.html", {
+        "applications": [{**dict(r),
+                          "uavatar": avatar_url(r["uavatar"] or "")}
+                         for r in apps],
+        "members": [{**dict(r),
+                     "avatar": avatar_url(r["avatar"] or "")}
+                    for r in members],
+        "recent": [dict(r) for r in recent],
+        "labels": SUGGESTION_STATUS_LABELS})
+
+
+@app.post("/owner/idm/{rid}/decide")
+async def owner_idm_decide(request: Request, rid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    form = await request.form()
+    act = str(form.get("act") or "")
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM idm_requests WHERE id=? AND "
+        "status='pending'", (rid,)).fetchone()
+    if row and act in ("approve", "deny"):
+        conn.execute(
+            "UPDATE idm_requests SET status=?, decided_at=? "
+            "WHERE id=?",
+            ("approved" if act == "approve" else "denied",
+             now_iso(), rid))
+        if act == "approve":
+            _idm_grant(conn, row["user_id"], True)
+            conn.commit()
+            notify(row["user_id"], "idm",
+                   "💡 You're on HERE IDM — Instant Developer Mode. "
+                   "Your avatar wears the white ring now, and a "
+                   "private ❓ door in your Settings sends your "
+                   "findings straight to the owner.",
+                   "/settings/profile#idm")
+        conn.commit()
+    conn.close()
+    return RedirectResponse("/owner/idm", status_code=303)
 
 
 @app.get("/founders", response_class=HTMLResponse)
@@ -23321,7 +23565,8 @@ async def owner_dashboard(request: Request):
                       "created_at": fancy_time(u["created_at"]),
                       "posts": posts_n, "friends": friends_n,
                       "is_verified_user": bool(u["is_verified_user"]),
-                      "is_verified_vendor": bool(u["is_verified_vendor"])})
+                      "is_verified_vendor": bool(u["is_verified_vendor"]),
+                      "idm_member": bool(u["idm_member"])})
 
     fact = conn.execute(
         "SELECT f.*, a.name AS req_name, b.name AS tgt_name FROM friendships f "

@@ -49,7 +49,7 @@ table.admin tr:last-child td{border-bottom:none}
       <tbody>
       {% for s in suggestions %}
         <tr>
-          <td><a href="/user/{{ s.user_id }}">{{ s.uname|e }}</a></td>
+          <td><a href="/user/{{ s.user_id }}">{{ s.uname|e }}</a>{% if s.source == 'idm' %} <span style="background:#fff;color:#111;font-size:10.5px;font-weight:900;padding:2px 7px;border-radius:999px;vertical-align:middle" title="Sent through the IDM ? door — Instant Developer Mode">💡 IDM</span>{% endif %}</td>
           <td class="idea">{{ s.text|e }}</td>
           <td><span class="status-pill {% if s.status == 'new' %}pending{% endif %}">{{ labels[s.status] or s.status }}</span></td>
           <td>{{ s.created_at[:10] }}</td>

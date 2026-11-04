@@ -260,6 +260,46 @@
   {% endif %}
 </div>
 
+<div class="card" id="idm">
+  <div class="section-title">💡 IDM — Instant Developer Mode</div>
+  {% if idm.member %}
+  <p style="margin-top:8px;color:var(--muted)">You're on the inside crew. Your profile picture wears the white neon ring, your name carries the tiny <span class="idm-badge">HERE IDM</span> badge, and your findings go straight to the owner — no line, no queue. See something? Tap the little <b>?</b> and say what you found.</p>
+  {% if idm_flash == 'sent' %}<p style="margin-top:10px;color:#1d9e50;font-weight:700">✅ Sent — it's on the owner's desk and in his notifications right now.</p>
+  {% elif idm_flash == 'bad' %}<p style="margin-top:10px;color:#c0392b;font-weight:700">Give it a few more words (5–600 characters) so it can be acted on.</p>
+  {% elif idm_flash == 'many' %}<p style="margin-top:10px;color:#c0392b;font-weight:700">That's 10 findings today — plenty. More tomorrow!</p>{% endif %}
+  <button type="button" id="idm-qbtn" aria-label="Send a finding to the owner" style="margin-top:12px;width:34px;height:34px;border-radius:50%;border:2px solid #fff;background:#141419;color:#fff;font-weight:900;font-size:17px;cursor:pointer;box-shadow:0 0 0 2px rgba(255,255,255,.35),0 0 12px 2px rgba(255,255,255,.35)">?</button>
+  <form action="/settings/idm-suggest" method="post" id="idm-form" hidden style="margin-top:12px">
+    <div class="field">
+      <label for="idm-text" style="font-weight:600">What did you find?</label>
+      <textarea id="idm-text" name="text" rows="3" maxlength="600" required placeholder="Say what you found, or the suggestion — it lands on the owner's desk instantly…" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14.5px"></textarea>
+    </div>
+    <button type="submit" class="btn">Send to the owner</button>
+  </form>
+  <script>
+  (function () {
+    var b = document.getElementById('idm-qbtn');
+    var f = document.getElementById('idm-form');
+    if (b && f) b.addEventListener('click', function () {
+      f.hidden = !f.hidden;
+      if (!f.hidden) { var t = document.getElementById('idm-text'); if (t) t.focus(); }
+    });
+  })();
+  </script>
+  {% elif idm.pending %}
+  <p style="margin-top:8px;color:var(--muted)">Your IDM application is in — the owner reviews every one by hand. If you're approved, this section turns into your private line to the owner, your avatar gets the white ring, and your name gets the <span class="idm-badge">HERE IDM</span> badge.</p>
+  {% else %}
+  <p style="margin-top:8px;color:var(--muted)">IDM is the owner's inside crew — people who study HERE and help develop it. Members get the white neon ring on their avatar, the tiny <span class="idm-badge">HERE IDM</span> badge by their name, and a private <b>?</b> door right here in Settings that sends their findings straight to the owner.</p>
+  {% if idm_flash == 'applied' %}<p style="margin-top:10px;color:#1d9e50;font-weight:700">✅ Application sent — the owner will review it.</p>{% endif %}
+  <form action="/settings/idm-apply" method="post" style="margin-top:12px">
+    <div class="field">
+      <label for="idm-note" style="font-weight:600">Why you? (optional)</label>
+      <input type="text" id="idm-note" name="note" maxlength="300" placeholder="What you do on HERE, what you've spotted…" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14.5px">
+    </div>
+    <button type="submit" class="btn-ghost">Apply for IDM</button>
+  </form>
+  {% endif %}
+</div>
+
 <div class="card" id="privacy">
   <div class="section-title">🔒 Privacy</div>
   <p style="margin-top:8px;color:var(--muted)">When your profile is private, only your friends can see your profile and your posts. People can still find you in search (with a 🔒) and send you a friend request.</p>

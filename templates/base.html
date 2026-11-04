@@ -138,6 +138,13 @@ img{max-width:100%}
   text-shadow:0 0 6px #fff,0 0 12px #FFD700,0 0 8px rgba(212,31,46,.8)}
 .verified-wrap{display:inline-flex;align-items:center;gap:4px}
 
+/* ===== IDM — Instant Developer Mode (Ken, Nov 4, 2026) =====
+   The crew's marks: a white neon ring around the avatar wherever
+   it shows (the ring script at the end of body tags member avatar
+   images), and a tiny HERE IDM badge beside the name. */
+.idm-ring{box-shadow:0 0 0 2px #fff,0 0 9px 2px rgba(255,255,255,.9),0 0 17px 5px rgba(255,255,255,.45) !important}
+.idm-badge{display:inline-block;background:#fff;color:#111;font-size:9.5px;font-weight:900;letter-spacing:.06em;padding:2px 6px;border-radius:999px;vertical-align:middle;box-shadow:0 0 7px rgba(255,255,255,.75)}
+
 /* ===== Verified User / Verified Vendor stickers ===== */
 .bv-seal{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;vertical-align:-3px;flex:none;margin-left:3px;border:1.5px solid rgba(255,255,255,.9);box-shadow:0 1px 5px rgba(0,0,0,.35), inset 0 1px 2px rgba(255,255,255,.55)}
 .bv-user{background:radial-gradient(circle at 32% 30%, #ff6a5e, #d41f2e 55%, #8f101c)}
@@ -4037,5 +4044,51 @@ document.addEventListener('click', function (e) {
 </script>
 {% endif %}
 {% include "partials/upload_progress.html" %}
+<script type="application/json" id="idm-avatars">{{ idm_avatars|tojson }}</script>
+<script>
+/* IDM avatar ring: tag every <img> that shows an IDM member's
+   avatar with the white neon ring — including images added later
+   (chat, live tiles, lazy feeds) via MutationObserver. */
+(function () {
+  var el = document.getElementById('idm-avatars');
+  if (!el) return;
+  var paths = [];
+  try { paths = JSON.parse(el.textContent) || []; } catch (e) {}
+  if (!paths.length) return;
+  function hit(src) {
+    if (!src) return false;
+    var clean = src.split('?')[0];
+    for (var i = 0; i < paths.length; i++) {
+      if (clean === paths[i] || clean.endsWith('/' + paths[i])) return true;
+    }
+    return false;
+  }
+  function mark(root) {
+    if (!root || !root.querySelectorAll) return;
+    var imgs = root.querySelectorAll('img');
+    for (var i = 0; i < imgs.length; i++) {
+      if (!imgs[i].classList.contains('idm-ring')
+          && hit(imgs[i].getAttribute('src'))) {
+        imgs[i].classList.add('idm-ring');
+      }
+    }
+  }
+  mark(document);
+  if (document.body && window.MutationObserver) {
+    new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        for (var j = 0; j < muts[i].addedNodes.length; j++) {
+          var n = muts[i].addedNodes[j];
+          if (n.nodeType === 1) {
+            if (n.tagName === 'IMG') {
+              if (hit(n.getAttribute('src'))) n.classList.add('idm-ring');
+            } else mark(n);
+          }
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+})();
+</script>
 </body>
 </html>
