@@ -157,7 +157,8 @@ def webhook_event(payload_obj, secret=TEST_SECRET, event_type="checkout.session.
                      headers={"Stripe-Signature": f"t={t},v1={sig}"})
 
 
-sess1 = {"id": "cs_test_1", "metadata": {"user_id": str(VID),
+sess1 = {"id": "cs_test_1", "payment_status": "paid",
+         "metadata": {"user_id": str(VID),
          "pack_key": "pack500", "tickets": "500"}}
 b0, _ = bal(VID)
 r = webhook_event(sess1)
@@ -179,7 +180,8 @@ check("bad signature -> 400", r.status_code == 400, str(r.status_code))
 r = webhook_event({"id": "cs_other"}, event_type="payment_intent.created")
 check("other event types ignored (200, no credit)",
       r.status_code == 200 and r.json().get("ignored") is True)
-r = webhook_event({"id": "cs_test_2", "metadata": {
+r = webhook_event({"id": "cs_test_2", "payment_status": "paid",
+    "metadata": {
     "user_id": str(VID), "pack_key": "pack100", "tickets": "100"}},
     secret=TEST_SECRET, event_type="checkout.session.completed")
 b3, _ = bal(VID)

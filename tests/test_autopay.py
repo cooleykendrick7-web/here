@@ -50,7 +50,7 @@ def dbx(sql, args=()):
 CALLS = {"n": 0, "mode": "ok"}
 
 
-def fake_stripe(method, path, data=None):
+def fake_stripe(method, path, data=None, headers=None):
     if path == "/v1/transfers":
         CALLS["n"] += 1
         if CALLS["mode"] == "broke":
