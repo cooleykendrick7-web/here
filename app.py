@@ -68,12 +68,18 @@ LOCKED_DIR = os.environ.get(
 SESSION_COOKIE = "here_session"
 OWNER_COOKIE = "here_owner"
 
-# Owner password hash — build-time constant. The plaintext lives nowhere in
-# this repo; the hash was pasted in from owner_hash.txt during the build.
-# Owner password hash. Prefer the HERE_OWNER_HASH env var when set (Render
-# dashboard -> Environment -> HERE_OWNER_HASH, sync: false); otherwise the
-# baked-in build-time hash is used. The plaintext lives nowhere in this repo.
-OWNER_PW_HASH = os.environ.get("HERE_OWNER_HASH", "$2b$12$5KZ9EpDumnhhvCrmdfDB0OV.jnMBAob23CAQEEawWakJgB4/x8mLC")
+# Owner password hash — from the HERE_OWNER_HASH env var ONLY
+# (Render dashboard -> Environment). There is deliberately NO
+# baked-in fallback: a hash for the owner password sat in this
+# public source until Nov 4, 2026, which meant anyone could
+# attack the owner lock offline. Ken rotated the password that
+# day and the new hash lives only on Render. If the env var is
+# missing, owner login fails CLOSED — nobody gets in, including
+# by accident.
+OWNER_PW_HASH = os.environ.get("HERE_OWNER_HASH", "")
+if not OWNER_PW_HASH:
+    print("[owner] HERE_OWNER_HASH is not set — owner login is "
+          "DISABLED until it is set on Render.")
 
 KINDS = ("text", "photo", "feeling", "clothes", "link", "video", "audio")
 PRIVACIES = ("public", "friends", "onlyme")
@@ -473,6 +479,12 @@ def init_db():
         created_at TEXT NOT NULL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS owner_sessions (
         token TEXT PRIMARY KEY, created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS key_cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT NOT NULL DEFAULT 'Owner Key Card',
+        card_no TEXT NOT NULL UNIQUE, token_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL, revoked_at TEXT,
+        last_used_at TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS hidden_posts (
         user_id INTEGER NOT NULL, post_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, UNIQUE(user_id, post_id))""")
@@ -24023,7 +24035,8 @@ async def owner_login(request: Request):
     if _too_many_attempts("owner_login", _okey, 10, 15):
         return redir("/owner/login?error=" + "Too many tries — wait "
                      "a few minutes and try again.")
-    if not bcrypt.checkpw(password.encode(), OWNER_PW_HASH.encode()):
+    if not OWNER_PW_HASH or not bcrypt.checkpw(
+            password.encode(), OWNER_PW_HASH.encode()):
         _record_attempt("owner_login", _okey)
         return redir("/owner/login?error=" + "Wrong password.")
     _clear_attempts("owner_login", _okey)
@@ -24043,6 +24056,189 @@ async def owner_logout(request: Request):
     resp = redir("/login")
     resp.delete_cookie(OWNER_COOKIE, path="/")
     return resp
+
+
+# ---------------- Owner Key Card + Vault (Ken's order, Nov 4, 2026) ----
+# The magnetic-stripe Owner Key Card: a 3-track card whose stripe
+# carries ONLY a card number and a one-purpose numeric secret —
+# never the owner password, never any real credential. Swiping it
+# (MSR readers type like a keyboard) into /keycard opens an owner
+# session, exactly like typing the owner password does; the typed
+# password door at /owner/login always stays as the fallback.
+# Only the sha256 of the secret is stored, cards can be revoked
+# from the vault, and a lost card is just plastic once revoked.
+def _keycard_hash(card_no, secret_digits):
+    return hashlib.sha256(
+        f"{card_no}:{secret_digits}".encode()).hexdigest()
+
+
+def _keycard_tracks(card_no, secret_digits):
+    """The exact 3 track strings to write with an MSR writer."""
+    return {
+        "track1": f"%HEREKEY^OWNER^{card_no}?",
+        "track2": f";{card_no}={secret_digits[:14]}?",
+        "track3": f";{secret_digits[14:]}={card_no}?",
+    }
+
+
+def _keycard_parse(raw):
+    """(card_no, secret) out of a raw swipe string, or None.
+    Tolerant on purpose: readers differ in separators, so this
+    keys off the track shapes themselves — Track 2 carries
+    card_no '=' first-14, Track 3 opens with ';' + last-14."""
+    if not raw:
+        return None
+    m2 = re.search(r"(\d{10})=(\d{14})", raw)
+    m3 = re.search(r";(\d{14})(?:=|\?|$)", raw)
+    if not m2 or not m3:
+        return None
+    return m2.group(1), m2.group(2) + m3.group(1)
+
+
+@app.get("/keycard", response_class=HTMLResponse)
+async def keycard_page(request: Request):
+    if is_owner(request):
+        return redir("/owner/vault")
+    return render(request, "keycard.html",
+                  {"error": request.query_params.get("error", "")})
+
+
+@app.post("/keycard")
+async def keycard_submit(request: Request):
+    form = await request.form()
+    ip = _client_ip(request)
+    if _too_many_attempts("keycard", ip, 10, 15):
+        return redir("/keycard?error=" + "Too many tries — wait a "
+                     "few minutes and try again.")
+    parsed = _keycard_parse(form.get("swipe") or "")
+    if not parsed:
+        card_no = (form.get("card_no") or "").strip()
+        secret_digits = (form.get("secret") or "").strip()
+        if card_no.isdigit() and secret_digits.isdigit() \
+                and len(secret_digits) == 28:
+            parsed = (card_no, secret_digits)
+    row = None
+    if parsed:
+        conn = db()
+        row = conn.execute(
+            "SELECT * FROM key_cards WHERE card_no=?",
+            (parsed[0],)).fetchone()
+        conn.close()
+        if row and (row["revoked_at"] or not hmac.compare_digest(
+                row["token_hash"],
+                _keycard_hash(parsed[0], parsed[1]))):
+            row = None
+    if not row:
+        _record_attempt("keycard", ip)
+        return redir("/keycard?error=" + "That card didn't open "
+                     "the vault.")
+    _clear_attempts("keycard", ip)
+    conn = db()
+    conn.execute("UPDATE key_cards SET last_used_at=? WHERE id=?",
+                 (now_iso(), row["id"]))
+    conn.commit()
+    conn.close()
+    token = new_owner_session()
+    resp = redir("/owner/vault")
+    return set_session_cookie(resp, token, OWNER_COOKIE)
+
+
+def _latest_backup_key():
+    """(key, head) of the newest daily DB backup in R2, or None."""
+    if not storage.r2_enabled():
+        return None
+    import datetime as _dt
+    today = datetime.now(timezone.utc).date()
+    for back in range(8):
+        day = today - _dt.timedelta(days=back)
+        key = ("backups/db/here-"
+               + day.strftime("%a").lower() + ".db")
+        try:
+            head = storage.head_object(key)
+        except Exception:
+            head = None
+        if head:
+            return key, head
+    return None
+
+
+@app.get("/owner/vault", response_class=HTMLResponse)
+async def owner_vault(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    cards = conn.execute(
+        "SELECT * FROM key_cards ORDER BY id DESC").fetchall()
+    conn.close()
+    backup = _latest_backup_key()
+    return render(request, "owner/vault.html", {
+        "cards": [dict(c) for c in cards],
+        "backup": ({"key": backup[0], "size": backup[1].get("size")}
+                   if backup else None),
+        "issued": None,
+        "msg": request.query_params.get("msg", "")})
+
+
+@app.get("/owner/vault/db")
+async def owner_vault_db(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    backup = _latest_backup_key()
+    if not backup:
+        return redir("/owner/vault?msg=" + "No database backup "
+                     "found in R2 yet — backups run daily.")
+    return RedirectResponse(storage.presign_get(backup[0],
+                                                expires=600))
+
+
+@app.post("/owner/keycard/issue", response_class=HTMLResponse)
+async def owner_keycard_issue(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    form = await request.form()
+    label = (form.get("label") or "Owner Key Card").strip()[:60] \
+        or "Owner Key Card"
+    card_no = "".join(secrets.choice("0123456789")
+                      for _ in range(10))
+    secret_digits = "".join(secrets.choice("0123456789")
+                            for _ in range(28))
+    conn = db()
+    conn.execute(
+        "INSERT INTO key_cards(label, card_no, token_hash, "
+        "created_at) VALUES(?,?,?,?)",
+        (label, card_no, _keycard_hash(card_no, secret_digits),
+         now_iso()))
+    conn.commit()
+    cards = conn.execute(
+        "SELECT * FROM key_cards ORDER BY id DESC").fetchall()
+    conn.close()
+    backup = _latest_backup_key()
+    issued = {"label": label, "card_no": card_no,
+              "secret": secret_digits,
+              **_keycard_tracks(card_no, secret_digits)}
+    return render(request, "owner/vault.html", {
+        "cards": [dict(c) for c in cards],
+        "backup": ({"key": backup[0], "size": backup[1].get("size")}
+                   if backup else None),
+        "issued": issued, "msg": ""})
+
+
+@app.post("/owner/keycard/{cid}/revoke")
+async def owner_keycard_revoke(request: Request, cid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute(
+        "UPDATE key_cards SET revoked_at=? WHERE id=? AND "
+        "revoked_at IS NULL", (now_iso(), cid))
+    conn.commit()
+    conn.close()
+    return redir("/owner/vault?msg=" + "Card revoked — it's just "
+                 "plastic now.")
 
 
 @app.get("/owner", response_class=HTMLResponse)
