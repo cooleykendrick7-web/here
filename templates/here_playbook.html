@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}THE HERE PLAY BOOK — How To Make Money On HERE{% endblock %}
+{% block content %}
+<div style="max-width:760px;margin:0 auto">
+  <div class="card" style="text-align:center;padding:28px 20px">
+    <img src="/static/here_play_book_cover.jpg" alt="THE HERE PLAY BOOK cover" style="width:min(320px,80%);border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.35)">
+    <h1 style="font-size:28px;margin-top:18px">THE HERE PLAY BOOK</h1>
+    <p style="color:var(--muted);margin-top:6px;font-size:16px"><em>How To Make Money On HERE</em></p>
+    <p style="color:var(--muted);margin-top:10px;line-height:1.55">The full 37-page book by <strong>Kendrick Cooley</strong>, founder of HERE. Every money pipe on this platform, laid out in plain words — with the exact steps at the end of every chapter. (This is the big book — a different book from the 7-page artist Playbook on the <a href="/invest">Invest page</a>.)</p>
+  </div>
+
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">📖 What the book teaches</div>
+    <ul style="margin-top:10px;line-height:1.75;padding-left:20px">
+      <li><strong>The Money Pipe</strong> — how a fan buys Live Tickets, gifts them, and how you cash out real dollars: about <strong>50¢ of every fan dollar</strong> to you, cash out from <strong>$10</strong> to your bank through Stripe.</li>
+      <li><strong>Creators: the 7 ways to get paid</strong> — live gifts, post &amp; Peep gifts, page gifts, ticket-door lives, locked content, live selling &amp; shops, and the 10% invite bonus. Plus Creator Mode and the First $10 Quest.</li>
+      <li><strong>Artists</strong> — track gifts vs streaming pennies, plays &amp; likes as your scoreboard, 40,000 plays = contract-ready, and the HERE Label deal where you keep <strong>100% of your music rights</strong>.</li>
+      <li><strong>Pages &amp; businesses</strong> — how page gifts work from both sides, profile &amp; page shops, Market boosts, and flat $10 ads.</li>
+      <li><strong>Regular users</strong> — you're not left out: selling in the Market, the invite bonus, and how gifting a page actually works.</li>
+      <li><strong>The $30 capture card guide</strong> — which card to buy yourself (exact models and real prices), who needs one, who doesn't, and the 5-step setup.</li>
+      <li><strong>Cash out, step by step</strong> — plus a 7-Day Money Week plan and the clean-money rules that keep you paid.</li>
+    </ul>
+  </div>
+
+  <div class="card" style="padding:22px 20px">
+    <div style="background:#141419;color:#f2f2f2;border-radius:12px;padding:14px 16px;line-height:1.6">
+      <strong style="color:#ffd400">The honest promise — read this before you buy:</strong>
+      <p style="margin-top:6px">The <strong>rate</strong> is guaranteed: no follower minimum, about half of every fan dollar, $10 cash-out. The <strong>amount</strong> is up to your work and your people — nobody can promise you a number, and this book never does. <strong>No capture card is included</strong> — this is a digital book; the card is a ~$30 tool you buy yourself, and the book tells you exactly which one. <strong>HERE itself is free to join</strong> — you're paying for the knowledge, not the app.</p>
+    </div>
+    {% if hp_owned %}
+    <p style="margin-top:16px;color:#1d9e50;font-weight:800">✅ You own THE HERE PLAY BOOK.</p>
+    <p style="margin-top:10px"><a class="btn" href="/here-playbook.pdf">⬇ Download THE HERE PLAY BOOK (PDF)</a></p>
+    {% elif user %}
+    <form action="/here-playbook/checkout" method="post" style="margin-top:16px">
+      <button type="submit" class="btn">Get THE HERE PLAY BOOK — {{ hp_price }}</button>
+    </form>
+    <p style="margin-top:8px;font-size:13px;color:var(--muted)">Checkout runs through Stripe, right here. The download unlocks the second your payment clears.</p>
+    {% else %}
+    <p style="margin-top:16px"><a class="btn" href="/signup?next=/here-playbook">Join free to get the book — {{ hp_price }}</a></p>
+    <p style="margin-top:8px;font-size:13px;color:var(--muted)">Buying takes a free HERE account — so your download is always here waiting for you.</p>
+    {% endif %}
+    {% if hp_bought and hp_owned %}<p style="margin-top:10px;color:#1d9e50;font-weight:800">🎉 Payment confirmed — your download is unlocked above.</p>{% endif %}
+    <p style="margin-top:14px;font-size:14px">Prefer Gumroad? <a href="{{ hp_gumroad }}" target="_blank" rel="noopener"><strong>Also on Gumroad — same book, same {{ hp_price }}</strong></a>.</p>
+  </div>
+
+  <div class="card" style="padding:22px 20px;text-align:center">
+    <p style="line-height:1.6">New here? <a href="/invest"><strong>Invest in HERE</strong></a> shows the live proof — real money already paid to real creators, on the Wall of Paid.</p>
+  </div>
+</div>
+{% endblock %}
