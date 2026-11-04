@@ -204,6 +204,16 @@ templates.env.filters["fancy_time"] = fancy_time
 def db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    try:
+        # Killer-fix (Nov 4, 2026): WAL + a real busy timeout. The
+        # default rollback journal + 5s timeout meant concurrent
+        # live polling could 500 the whole app with "database is
+        # locked" as the crowd grows. WAL persists on the DB file;
+        # busy_timeout is per-connection, so it is set here.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
+    except Exception:
+        pass
     return conn
 
 
@@ -396,6 +406,10 @@ def init_db():
         created_at TEXT NOT NULL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS sessions (
         token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS auth_attempts (
+        scope TEXT NOT NULL, akey TEXT NOT NULL, attempted_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_auth_attempts "
+              "ON auth_attempts(scope, akey, attempted_at)")
     c.execute("""CREATE TABLE IF NOT EXISTS posts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL, page_id INTEGER,
@@ -1798,6 +1812,9 @@ def init_db():
     if "fee_tickets" not in _pr_cols:
         c.execute("ALTER TABLE payout_requests ADD COLUMN "
                   "fee_tickets INTEGER DEFAULT 0")
+    if "sending_since" not in _pr_cols:
+        c.execute("ALTER TABLE payout_requests ADD COLUMN "
+                  "sending_since TEXT")
     # Auto-pay era (Oct 30): the owner may pay a creator BY HAND
     # on top of a still-queued request (Ken paid Sunflwr $20 by
     # hand; her $13 bank send still goes through). hand_note is
@@ -1848,12 +1865,70 @@ def get_user(uid):
     return dict(r) if r else None
 
 
+SESSION_TTL_DAYS = 30
+
+
+def _session_fresh(created_at, days=SESSION_TTL_DAYS):
+    """A session row older than the TTL is dead, server-side —
+    a stolen cookie used to work forever because only the
+    cookie's client-side age was ever checked."""
+    ts = _parse_ts(created_at)
+    if not ts:
+        return False
+    return ts > datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def _client_ip(request):
+    return request.client.host if request.client else ""
+
+
+def _too_many_attempts(scope, akey, limit, minutes):
+    """Count recent rows in auth_attempts (the password-reset
+    limiter pattern, generalised)."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(minutes=minutes)).isoformat()
+    conn = db()
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM auth_attempts WHERE scope=? "
+        "AND akey=? AND attempted_at>?",
+        (scope, akey, cutoff)).fetchone()["c"]
+    conn.close()
+    return n >= limit
+
+
+def _record_attempt(scope, akey):
+    conn = db()
+    conn.execute(
+        "INSERT INTO auth_attempts(scope, akey, attempted_at) "
+        "VALUES(?,?,?)", (scope, akey, now_iso()))
+    # Opportunistic cleanup so the table stays tiny.
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=2)).isoformat()
+    conn.execute("DELETE FROM auth_attempts WHERE attempted_at<?",
+                 (cutoff,))
+    conn.commit()
+    conn.close()
+
+
+def _clear_attempts(scope, akey):
+    conn = db()
+    conn.execute("DELETE FROM auth_attempts WHERE scope=? AND akey=?",
+                 (scope, akey))
+    conn.commit()
+    conn.close()
+
+
 def current_user(request: Request):
     token = request.cookies.get(SESSION_COOKIE, "")
     if not token:
         return None
     conn = db()
-    s = conn.execute("SELECT user_id FROM sessions WHERE token=?", (token,)).fetchone()
+    s = conn.execute("SELECT user_id, created_at FROM sessions "
+                     "WHERE token=?", (token,)).fetchone()
+    if s and not _session_fresh(s["created_at"]):
+        conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+        conn.commit()
+        s = None
     conn.close()
     if not s:
         return None
@@ -1868,7 +1943,13 @@ def is_owner(request: Request):
     if not token:
         return False
     conn = db()
-    s = conn.execute("SELECT token FROM owner_sessions WHERE token=?", (token,)).fetchone()
+    s = conn.execute("SELECT token, created_at FROM owner_sessions "
+                     "WHERE token=?", (token,)).fetchone()
+    if s and not _session_fresh(s["created_at"]):
+        conn.execute("DELETE FROM owner_sessions WHERE token=?",
+                     (token,))
+        conn.commit()
+        s = None
     conn.close()
     return bool(s)
 
@@ -2140,8 +2221,12 @@ def back(request: Request, fallback="/home"):
 
 
 def set_session_cookie(resp, token, cookie_name, days=30):
+    # Secure flag wherever the app is served over HTTPS in
+    # production (Render sets RENDER=true); left off for local
+    # http test runs so suites can still log in.
     resp.set_cookie(cookie_name, token, httponly=True, samesite="lax",
-                   max_age=days * 86400, path="/")
+                    secure=bool(os.environ.get("RENDER")),
+                    max_age=days * 86400, path="/")
     return resp
 
 
@@ -3745,6 +3830,13 @@ async def signup(request: Request):
     password = form.get("password") or ""
     if not name or not email or not password:
         return redir("/signup?error=" + "Name, email and password are required.")
+    if len(password) < 8:
+        return redir("/signup?error=" + "Password needs at least 8 characters.")
+    _sip = _client_ip(request)
+    if _too_many_attempts("signup", _sip, 20, 60):
+        return redir("/signup?error=" + "Too many new accounts from "
+                     "this connection — try again in a little while.")
+    _record_attempt("signup", _sip)
     pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     conn = db()
     try:
@@ -3824,11 +3916,17 @@ async def login(request: Request):
     form = await request.form()
     email = (form.get("email") or "").strip().lower()
     password = form.get("password") or ""
+    _lkey = f"{_client_ip(request)}|{email}"
+    if _too_many_attempts("login", _lkey, 10, 15):
+        return redir("/login?error=" + "Too many tries — wait a few "
+                     "minutes and try again.")
     conn = db()
     u = conn.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
     conn.close()
     if not u or not bcrypt.checkpw(password.encode(), u["pw_hash"].encode()):
+        _record_attempt("login", _lkey)
         return redir("/login?error=" + "Invalid email or password.")
+    _clear_attempts("login", _lkey)
     token = new_session(u["id"])
     resp = redir(_safe_next(form.get("next")) or "/home")
     return set_session_cookie(resp, token, SESSION_COOKIE)
@@ -4033,6 +4131,11 @@ async def reset_submit(request: Request, token: str):
         return render(request, "auth/reset.html",
                       {"dead": False, "token": token,
                        "error": "Enter a new password."})
+    if len(pw1) < 8:
+        return render(request, "auth/reset.html",
+                      {"dead": False, "token": token,
+                       "error": "Password needs at least 8 "
+                                "characters."})
     if pw1 != pw2:
         return render(request, "auth/reset.html",
                       {"dead": False, "token": token,
@@ -10497,6 +10600,23 @@ async def block_user(request: Request, uid: int):
         "DELETE FROM follows WHERE (follower_id=? AND followee_id=?) OR "
         "(follower_id=? AND followee_id=?)",
         (user["id"], uid, uid, user["id"]))
+    # Killer-fix (Nov 4, 2026): a block must also kill PENDING
+    # doors between the pair. Before this, a call request sent
+    # before the block could still be approved afterwards and
+    # put the blocked person on a live call — and a live-stage
+    # application could still be approved onto the panel.
+    conn.execute(
+        "UPDATE call_requests SET status='expired' WHERE "
+        "status='pending' AND ((requester_id=? AND target_id=?) OR "
+        "(requester_id=? AND target_id=?))",
+        (user["id"], uid, uid, user["id"]))
+    conn.execute(
+        "UPDATE live_join_requests SET status='declined', "
+        "decided_at=? WHERE status='pending' AND ("
+        "(user_id=? AND live_id IN (SELECT id FROM live_sessions "
+        "WHERE host_id=?)) OR (user_id=? AND live_id IN "
+        "(SELECT id FROM live_sessions WHERE host_id=?)))",
+        (now_iso(), uid, user["id"], user["id"], uid))
     conn.commit()
     conn.close()
     return redir("/home", f"You blocked {target['name']}. You won't see "
@@ -11475,6 +11595,8 @@ async def call_requests_incoming(request: Request):
         "status='pending' ORDER BY id DESC LIMIT 20",
         (user["id"],)).fetchall()
     conn.close()
+    rows = [r for r in rows
+            if not blocked_either_way(user["id"], r["requester_id"])]
     return JSONResponse({"ok": True,
                          "requests": [_call_request_json(dict(r))
                                       for r in rows]})
@@ -11512,6 +11634,16 @@ async def call_request_approve(request: Request, rid: int):
                if req["status"] == "expired"
                else "This call request was already answered.")
         return JSONResponse({"ok": False, "error": msg}, status_code=409)
+    if blocked_either_way(user["id"], req["requester_id"]):
+        conn = db()
+        conn.execute(
+            "UPDATE call_requests SET status='expired' WHERE id=?",
+            (rid,))
+        conn.commit()
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "You can't call this person."},
+            status_code=403)
     conn = db()
     _sweep_calls(conn)
     if _live_call_for(conn, user["id"]):
@@ -19225,6 +19357,17 @@ async def live_join_decide(request: Request, lid: int):
              "error": "That's an invite, not a join request."},
             status_code=400)
     if approve:
+        if _live_banned(conn, lid, req["user_id"]) or \
+                blocked_either_way(user["id"], req["user_id"]):
+            conn.execute(
+                "UPDATE live_join_requests SET status='declined', "
+                "decided_at=? WHERE id=?", (now_iso(), rid))
+            conn.commit()
+            conn.close()
+            return JSONResponse(
+                {"ok": False,
+                 "error": "That person can't join this stage."},
+                status_code=403)
         # Build X: two fullness gates, hard cap FIRST so its exact
         # long-standing message wins at the absolute limit, then
         # the host's own boxes allowance.
@@ -21200,7 +21343,7 @@ def stripe_enabled():
     return bool(os.environ.get("STRIPE_SECRET_KEY", "").strip())
 
 
-def _stripe_api(method, path, params=None):
+def _stripe_api(method, path, params=None, headers=None):
     """ONE raw-HTTPS call to api.stripe.com (form-encoded, no
     dependency). Tests monkeypatch this instead of touching Stripe.
     Raises on HTTP errors so callers can degrade honestly."""
@@ -21213,6 +21356,8 @@ def _stripe_api(method, path, params=None):
         body = urlencode(params).encode()
     req = urllib.request.Request(url, data=body, method=method)
     req.add_header("Authorization", "Bearer " + key)
+    for _hk, _hv in (headers or {}).items():
+        req.add_header(_hk, _hv)
     if body:
         req.add_header("Content-Type",
                        "application/x-www-form-urlencoded")
@@ -22273,6 +22418,13 @@ async def stripe_webhook(request: Request):
     if event.get("type") != "checkout.session.completed":
         return JSONResponse({"ok": True, "ignored": True})
     obj = (event.get("data") or {}).get("object") or {}
+    # Killer-fix (Nov 4, 2026): a completed session is not always
+    # a PAID session (delayed/async payment methods can complete
+    # unpaid). Every other crediting path already requires
+    # payment_status == "paid"; the webhook now does too.
+    if obj.get("payment_status") != "paid":
+        return JSONResponse({"ok": True, "ignored": True,
+                             "reason": "not paid"})
     meta = obj.get("metadata") or {}
     session_id = obj.get("id") or ""
     try:
@@ -23867,8 +24019,14 @@ async def owner_login_page(request: Request):
 async def owner_login(request: Request):
     form = await request.form()
     password = form.get("password") or ""
+    _okey = _client_ip(request)
+    if _too_many_attempts("owner_login", _okey, 10, 15):
+        return redir("/owner/login?error=" + "Too many tries — wait "
+                     "a few minutes and try again.")
     if not bcrypt.checkpw(password.encode(), OWNER_PW_HASH.encode()):
+        _record_attempt("owner_login", _okey)
         return redir("/owner/login?error=" + "Wrong password.")
+    _clear_attempts("owner_login", _okey)
     token = new_owner_session()
     resp = redir("/owner")
     return set_session_cookie(resp, token, OWNER_COOKIE)
@@ -24723,8 +24881,9 @@ def _payout_attempt(pid):
         conn.close()
         return "notready", {}
     cur = conn.execute(
-        "UPDATE payout_requests SET status='sending' WHERE id=? "
-        "AND status='pending'", (pid,))
+        "UPDATE payout_requests SET status='sending', "
+        "sending_since=? WHERE id=? AND status='pending'",
+        (now_iso(), pid))
     claimed = cur.rowcount == 1
     conn.commit()
     conn.close()
@@ -24739,7 +24898,8 @@ def _payout_attempt(pid):
             "currency": "usd",
             "destination": pr["acct"],
             "description": f"HERE payout request {pid}",
-        })
+            "metadata[payout_request]": str(pid),
+        }, headers={"Idempotency-Key": f"here-payout-{pid}"})
         transfer_id = tr.get("id")
     except RuntimeError as e:
         # _stripe_api only raises RuntimeError when Stripe ANSWERED
@@ -24752,8 +24912,9 @@ def _payout_attempt(pid):
     if refused is not None:
         conn = db()
         conn.execute(
-            "UPDATE payout_requests SET status='pending' WHERE "
-            "id=? AND status='sending'", (pid,))
+            "UPDATE payout_requests SET status='pending', "
+            "sending_since=NULL WHERE id=? AND status='sending'",
+            (pid,))
         conn.commit()
         conn.close()
         cls = _stripe_err_class(refused)
@@ -24769,8 +24930,8 @@ def _payout_attempt(pid):
     conn = db()
     conn.execute(
         "UPDATE payout_requests SET status='paid', method='stripe', "
-        "stripe_transfer_id=?, decided_at=? WHERE id=? AND "
-        "status='sending'", (transfer_id, stamp, pid))
+        "stripe_transfer_id=?, decided_at=?, sending_since=NULL "
+        "WHERE id=? AND status='sending'", (transfer_id, stamp, pid))
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, note, "
         "created_at) VALUES(?,?,?,?,?)",
@@ -24788,6 +24949,20 @@ def _payout_sweep():
     balance refusal — if HERE's Stripe balance can't cover one,
     it can't cover the rest; the remainder retry on the next
     pass. Returns how many requests were paid."""
+    # Killer-fix: a 'sending' claim older than an hour means the
+    # Stripe answer was lost. Release it back to 'pending' so the
+    # creator still gets paid; the retry is safe because every
+    # attempt for a request reuses the same Idempotency-Key, so
+    # Stripe returns the original transfer instead of paying twice.
+    _stale = (datetime.now(timezone.utc)
+              - timedelta(hours=1)).isoformat()
+    conn = db()
+    conn.execute(
+        "UPDATE payout_requests SET status='pending', "
+        "sending_since=NULL WHERE status='sending' AND "
+        "sending_since IS NOT NULL AND sending_since<?", (_stale,))
+    conn.commit()
+    conn.close()
     conn = db()
     rows = conn.execute(
         "SELECT pr.id FROM payout_requests pr JOIN users u "
@@ -25037,4 +25212,69 @@ async def owner_pwreset_hand_sent(request: Request, rid: int):
 # ---------------- health ----------------
 @app.get("/healthz")
 async def healthz():
+    try:
+        conn = db()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+    except Exception:
+        return JSONResponse({"ok": False}, status_code=503)
     return JSONResponse({"ok": True})
+
+
+# ---------------- DB backups (killer-fix, Nov 4, 2026) ----------------
+# The whole platform — accounts, ticket balances, the money
+# ledger — is ONE SQLite file on ONE disk, and nothing backed
+# it up. Now: a consistent snapshot (sqlite backup API, safe
+# under WAL) is uploaded to the same R2 bucket that already
+# holds HERE's media, under a per-weekday key, so the last 7
+# days are always kept and old copies overwrite themselves.
+# Runs in a daemon thread: once shortly after boot, then daily.
+# No R2 configured = no backup (and a loud log line), never a
+# crash.
+def _db_backup_once():
+    if not storage.r2_enabled():
+        print("[backups] R2 not configured — DB backup skipped. "
+              "The platform database has NO backup until R2 is set.")
+        return False
+    import tempfile
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".db", prefix="here-backup-")
+        os.close(fd)
+        src = db()
+        dst = sqlite3.connect(tmp)
+        src.backup(dst)
+        dst.close()
+        src.close()
+        size = os.path.getsize(tmp)
+        weekday = datetime.now(timezone.utc).strftime("%a").lower()
+        with open(tmp, "rb") as fh:
+            storage.put_object(f"backups/db/here-{weekday}.db", fh,
+                               content_type="application/octet-stream",
+                               size=size)
+        print(f"[backups] DB snapshot uploaded "
+              f"(backups/db/here-{weekday}.db, {size} bytes)")
+        return True
+    except Exception as e:
+        print(f"[backups] DB backup FAILED: {e!r}")
+        return False
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+
+
+def _db_backup_loop():
+    import time as _time
+    _time.sleep(90)
+    while True:
+        try:
+            _db_backup_once()
+        except Exception:
+            pass
+        _time.sleep(24 * 3600)
+
+
+threading.Thread(target=_db_backup_loop, daemon=True).start()
