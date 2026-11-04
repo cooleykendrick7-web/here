@@ -1534,6 +1534,13 @@ def init_db():
         session_id TEXT DEFAULT '',
         created_at TEXT,
         UNIQUE(user_id, kind))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS here_playbook_access (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'paid',
+        session_id TEXT DEFAULT '',
+        created_at TEXT,
+        UNIQUE(user_id, kind))""")
     c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
         user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
@@ -22457,6 +22464,150 @@ async def artist_playbook_pdf(request: Request):
     return FileResponse(PLAYBOOK_PDF,
                         media_type="application/pdf",
                         filename="HERE-Playbook.pdf")
+
+
+# ---------------- THE HERE PLAY BOOK (Ken's build, Nov 4, 2026) --
+# The full 37-page book: "THE HERE PLAY BOOK — How To Make Money
+# On HERE" ($35.99 via HERE's own Stripe, this door; also sold on
+# Gumroad). A DIFFERENT book from the 7-page artist Playbook on
+# /invest ($19.99, playbook_access): separate table, separate
+# grant — owning one never unlocks the other. Same proven pattern
+# as the invest playbook: checkout session + verify-on-return
+# grant (idempotent), download gated to buyers + the owner, the
+# PDF itself in private_assets/, never in public /static.
+
+HEREPLAYBOOK_CENTS = 3599
+HEREPLAYBOOK_PDF = os.path.join(BASE, "private_assets",
+                                "here_play_book.pdf")
+HEREPLAYBOOK_GUMROAD = ("https://cooley11.gumroad.com/l/"
+                        "here-play-book")
+
+
+def _here_playbook_owned(conn, uid):
+    if not uid:
+        return False
+    return bool(conn.execute(
+        "SELECT 1 FROM here_playbook_access WHERE user_id=? AND "
+        "kind='paid'", (uid,)).fetchone())
+
+
+def _here_playbook_grant(conn, uid, kind, session_id=""):
+    conn.execute(
+        "INSERT OR IGNORE INTO here_playbook_access(user_id, "
+        "kind, session_id, created_at) VALUES(?,?,?,?)",
+        (uid, kind, session_id, now_iso()))
+
+
+@app.get("/here-playbook", response_class=HTMLResponse)
+async def here_playbook_page(request: Request):
+    user = current_user(request)
+    conn = db()
+    owned = _here_playbook_owned(conn, user["id"]) if user else False
+    conn.close()
+    return render(request, "here_playbook.html", {
+        "hp_price": "$%.2f" % (HEREPLAYBOOK_CENTS / 100),
+        "hp_owned": owned,
+        "hp_bought": request.query_params.get("bought") or "",
+        "hp_gumroad": HEREPLAYBOOK_GUMROAD})
+
+
+@app.post("/here-playbook/checkout")
+async def here_playbook_checkout(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    owned = _here_playbook_owned(conn, user["id"])
+    conn.close()
+    if owned:
+        return redir("/here-playbook", "You already own THE HERE "
+                                       "PLAY BOOK — the download "
+                                       "is yours below.")
+    if not stripe_enabled():
+        return redir("/here-playbook", "Payments aren't open right "
+                                       "this second — check back "
+                                       "soon.")
+    base = str(request.base_url).rstrip("/")
+    params = {
+        "mode": "payment",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]":
+            str(HEREPLAYBOOK_CENTS),
+        "line_items[0][price_data][product_data][name]":
+            "THE HERE PLAY BOOK — How To Make Money On HERE",
+        "line_items[0][quantity]": "1",
+        "metadata[user_id]": str(user["id"]),
+        "metadata[kind]": "here_playbook",
+        "success_url": base + "/here-playbook/return"
+                              "?session_id={CHECKOUT_SESSION_ID}",
+        "cancel_url": base + "/here-playbook",
+    }
+    try:
+        sess = _stripe_api("POST", "/v1/checkout/sessions", params)
+    except Exception as e:
+        return redir("/here-playbook", f"Stripe hiccup: {e}")
+    url = sess.get("url")
+    if not url:
+        return redir("/here-playbook", "Stripe didn't return a "
+                                       "checkout link — try again "
+                                       "in a moment.")
+    return RedirectResponse(url, status_code=303)
+
+
+@app.get("/here-playbook/return")
+async def here_playbook_return(request: Request):
+    """Stripe sends the buyer back here; verify the session with
+    Stripe (the same verify-on-return pattern as the invest
+    playbook) and grant the download. Idempotent by (user, kind).
+    """
+    user, err = require_login(request)
+    if err:
+        return err
+    session_id = (request.query_params.get("session_id")
+                  or "").strip()
+    if session_id and stripe_enabled():
+        try:
+            sess = _stripe_api(
+                "GET", f"/v1/checkout/sessions/{session_id}")
+            meta = sess.get("metadata") or {}
+            if (sess.get("payment_status") == "paid"
+                    and str(meta.get("user_id")) == str(user["id"])
+                    and meta.get("kind") == "here_playbook"):
+                conn = db()
+                _here_playbook_grant(conn, user["id"], "paid",
+                                     session_id)
+                conn.commit()
+                conn.close()
+        except Exception:
+            pass
+    return redir("/here-playbook?bought=1")
+
+
+@app.get("/here-playbook.pdf")
+async def here_playbook_pdf(request: Request):
+    """Buyers (and Ken, the owner) download here. Everyone else
+    lands back on the book's page — the file never sits in a
+    public path."""
+    user = current_user(request)
+    if not user:
+        return redir("/here-playbook", "THE HERE PLAY BOOK is a "
+                                       "paid download — join free, "
+                                       "then it's yours.")
+    conn = db()
+    ok = _here_playbook_owned(conn, user["id"]) \
+        or user["id"] == _owner_user_id(conn)
+    conn.close()
+    if not ok:
+        return redir("/here-playbook", "THE HERE PLAY BOOK is a "
+                                       "paid download — join free, "
+                                       "then it's yours.")
+    if not os.path.isfile(HEREPLAYBOOK_PDF):
+        return redir("/here-playbook", "The book file is being "
+                                       "restocked — check back "
+                                       "soon.")
+    return FileResponse(HEREPLAYBOOK_PDF,
+                        media_type="application/pdf",
+                        filename="THE-HERE-PLAY-BOOK.pdf")
 
 
 # ---------------- HERE Market: local buy/sell ----------------
