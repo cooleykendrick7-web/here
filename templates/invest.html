@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Invest in HERE — three honest ways in{% endblock %}
+{% block content %}
+<div style="max-width:760px;margin:0 auto">
+  <div class="card" style="text-align:center;padding:28px 20px">
+    <div style="font-size:40px">📈</div>
+    <h1 style="font-size:28px;margin-top:6px">Invest in HERE</h1>
+    <p style="color:var(--muted);margin-top:8px;line-height:1.55">Three ways in — your time, your knowledge, or the coin. Every one of them explained in plain words, with the real numbers in the open. No hype you have to take on faith: the proof below is pulled live, right now.</p>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px">
+      <span style="background:var(--glass,#f4f4f6);border:1px solid var(--border);border-radius:999px;padding:7px 14px;font-weight:800">💸 ${{ '%.2f'|format(paid_total_cents/100) }} paid to creators so far</span>
+      <span style="background:var(--glass,#f4f4f6);border:1px solid var(--border);border-radius:999px;padding:7px 14px;font-weight:800">👥 {{ creators_paid }} creators paid</span>
+      <span style="background:var(--glass,#f4f4f6);border:1px solid var(--border);border-radius:999px;padding:7px 14px;font-weight:800">🎟️ {{ '{:,}'.format(tickets_sold) }} tickets sold</span>
+    </div>
+    <p style="margin-top:12px;font-size:13.5px;color:var(--muted)">Every payout, name by name: <a href="/paidwall"><strong>the Wall of Paid</strong></a>.</p>
+  </div>
+
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">1️⃣ Become a creator — invest your time (FREE)</div>
+    <p style="margin-top:8px;line-height:1.6">This is the way most people here make money, and it costs nothing to start. Turn on <strong>Creator Mode</strong>, bring your people, go live and post — fans gift you <strong>Live Tickets</strong>, and every earned ticket is worth <strong>half a cent in real money, guaranteed as a rate</strong>. At 2,000 earned tickets ($10) you cash out to your own bank through <strong>Stripe</strong> — bank-ready cash-outs send themselves. No follower minimum. No approval line for your own money.</p>
+    <p style="margin-top:10px;line-height:1.6"><strong>The arithmetic (not a promise — an example):</strong> a ten-minute live, 25 fans watching, 10 of them gift an average of 200 tickets each = 2,000 tickets = <strong>$10 in ten minutes</strong>. On a streaming service, ten dollars takes roughly 2,500 plays. Your crowd decides your number — the rate never changes.</p>
+    <p style="margin-top:10px;line-height:1.6">You also earn a <strong>10% invite bonus</strong> on everything the people you bring in earn — paid by HERE, not out of their pockets.</p>
+    {% if user %}
+    <p style="margin-top:14px"><a class="btn" href="/settings/profile#creator-mode">Turn on Creator Mode</a> <a class="btn-ghost" href="/tickets" style="margin-left:8px">Open your wallet</a></p>
+    {% else %}
+    <p style="margin-top:14px"><a class="btn" href="/signup?next=/invest">Join HERE free</a> <a class="btn-ghost" href="/artists" style="margin-left:8px">See the artists</a></p>
+    {% endif %}
+  </div>
+
+  <div class="card" id="playbook" style="padding:22px 20px">
+    <div class="section-title">2️⃣ The Playbook — invest in yourself ({{ playbook_price }})</div>
+    <p style="margin-top:8px;line-height:1.6"><strong>The HERE Playbook</strong> is the 7-page money manual our own artists read: why streaming pays crumbs, the seven setup switches in order, <em>every</em> money pipe on HERE (live gifts, track gifts, ticket-door lives, locked content, the invite bonus), the what-if scale so you can run your own numbers, and the work rules that make it real. No secrets and no guru talk — the numbers and the work.</p>
+    <p style="margin-top:10px;line-height:1.6">One payment, yours to keep — download it as many times as you need. <strong>Artists in the Label program read it free</strong> in the artist door; it's their contract reading, and contracts are never paywalled here.</p>
+    {% if playbook_owned %}
+    <p style="margin-top:14px;color:#1d9e50;font-weight:800">✅ You own the Playbook.</p>
+    <p style="margin-top:10px"><a class="btn" href="/playbook.pdf">⬇ Download the Playbook (PDF)</a></p>
+    {% elif user %}
+    <form action="/invest/playbook/checkout" method="post" style="margin-top:14px">
+      <button type="submit" class="btn">Get the Playbook — {{ playbook_price }}</button>
+    </form>
+    <p style="margin-top:8px;font-size:13px;color:var(--muted)">Checkout runs through Stripe. The download unlocks the second your payment clears.</p>
+    {% else %}
+    <p style="margin-top:14px"><a class="btn" href="/signup?next=/invest">Join free to get the Playbook — {{ playbook_price }}</a></p>
+    {% endif %}
+    {% if bought and playbook_owned %}<p style="margin-top:10px;color:#1d9e50;font-weight:800">🎉 Payment confirmed — your download is unlocked above.</p>{% endif %}
+  </div>
+
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">3️⃣ Black Coin (BC) — the coin of HERE</div>
+    <p style="margin-top:8px;line-height:1.6"><strong>Black Coin</strong> is the cryptocurrency created by HERE's founder for this ecosystem — launched on the Base chain with a <strong>fixed supply of 1,000,000,000 BC</strong>. No more can ever be made: no mint, no tax, no admin keys. When people here say “investing in HERE,” this is the coin they mean — it is the ecosystem's coin, and it rides with the platform as HERE grows.</p>
+    <div style="margin-top:12px;background:#141419;color:#f2f2f2;border-radius:12px;padding:14px 16px;line-height:1.6">
+      <strong style="color:#ffd400">⚠️ Read this before you buy — the plain truth:</strong>
+      <p style="margin-top:6px">BC is <strong>not stock</strong>. It is not shares in the company: it gives you <strong>no ownership</strong> of HERE, no dividends, and no claim on HERE's money. Nobody — not the founder, not this page — can promise it will be worth more later. It is a brand-new, very small coin: its price can swing hard and <strong>can fall to zero</strong>. Only ever put in money you can afford to lose completely.</p>
+      <p style="margin-top:6px">What it honestly is: a fixed-supply coin tied to a real, growing platform with real payouts — created by the founder, traded in the open, and verifiable by anybody on the chain. That is the whole pitch. Check it yourself below before you spend a cent.</p>
+    </div>
+    <p style="margin-top:12px;line-height:1.6"><strong>Contract address</strong> (always check you have the real one):</p>
+    <p style="margin-top:6px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;word-break:break-all;background:var(--glass,#f4f4f6);border:1px solid var(--border);border-radius:10px;padding:10px 12px">{{ bc_contract }}</p>
+    <p style="margin-top:14px">
+      <a class="btn" href="{{ bc_buy_url }}" target="_blank" rel="noopener">Buy BC on Aerodrome</a>
+      <a class="btn-ghost" href="{{ bc_scan_url }}" target="_blank" rel="noopener" style="margin-left:8px">Verify on BaseScan</a>
+    </p>
+    <p style="margin-top:10px;font-size:13.5px;color:var(--muted);line-height:1.55">How to buy: open the Aerodrome link (that's the real BC pool), connect a wallet like Coinbase Wallet, swap a small amount of ETH on Base for BC. In Coinbase Wallet you can also search by pasting the contract address above. Never buy a “Black Coin” at any other address — copies are scams.</p>
+  </div>
+
+  <div class="card" style="padding:22px 20px;text-align:center">
+    <p style="line-height:1.6">Questions about any of this? <a href="/hearley"><strong>Ask Hearley</strong></a>, HERE's house helper — or read the <a href="/faq"><strong>FAQ</strong></a>. Straight answers, no sales talk.</p>
+  </div>
+</div>
+{% endblock %}

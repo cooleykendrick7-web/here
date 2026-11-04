@@ -1527,6 +1527,13 @@ def init_db():
         status TEXT NOT NULL DEFAULT 'new',
         created_at TEXT NOT NULL DEFAULT '',
         decided_at TEXT, source TEXT NOT NULL DEFAULT 'settings')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS playbook_access (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'paid',
+        session_id TEXT DEFAULT '',
+        created_at TEXT,
+        UNIQUE(user_id, kind))""")
     c.execute("""CREATE TABLE IF NOT EXISTS market_saves (
         user_id INTEGER NOT NULL, listing_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY(user_id, listing_id))""")
@@ -22271,6 +22278,187 @@ async def stripe_webhook(request: Request):
     return JSONResponse({"ok": True})
 
 
+
+
+# ---------------- Invest in HERE (Ken's build, Nov 4, 2026) -----
+# One hub, three honest ways in:
+#  1. Become a creator — free. Invest your time; fans gift you
+#     tickets; every earned ticket is half a cent, cash out from
+#     $10 through Stripe, bank-ready cash-outs pay themselves.
+#  2. The Playbook — the 7-page money manual ($19.99 via Stripe,
+#     download gated to buyers; artists read it free in the
+#     artist door, where it's their contract reading).
+#  3. Black Coin (BC) — the ecosystem coin Ken created on Base.
+#     NOT stock: no ownership, no dividends, no promised returns,
+#     and the page says so in plain words. It is the coin of the
+#     HERE ecosystem — fixed 1B supply, no mint — and the buy
+#     links go to the real pool.
+# The proof on the page is LIVE data: the public Wall of Paid
+# totals, so nobody has to take anybody's word for anything.
+
+PLAYBOOK_CENTS = 1999
+PLAYBOOK_PDF = os.path.join(BASE, "private_assets",
+                            "here-playbook.pdf")
+BC_CONTRACT = "0x0Ea794511a1864dFD4CFA85982a4C7fbAA6f1e88"
+BC_POOL = "0x7e953C84f1Dc95d7C94e777CA533c3570eD8590A"
+BC_BUY_URL = ("https://aerodrome.finance/swap"
+              "?from=0x4200000000000000000000000000000000000006"
+              "&to=" + BC_CONTRACT)
+BC_SCAN_URL = "https://basescan.org/token/" + BC_CONTRACT
+
+
+def _playbook_owned(conn, uid):
+    if not uid:
+        return False
+    return bool(conn.execute(
+        "SELECT 1 FROM playbook_access WHERE user_id=? AND "
+        "kind='paid'", (uid,)).fetchone())
+
+
+def _playbook_grant(conn, uid, kind, session_id=""):
+    conn.execute(
+        "INSERT OR IGNORE INTO playbook_access(user_id, kind, "
+        "session_id, created_at) VALUES(?,?,?,?)",
+        (uid, kind, session_id, now_iso()))
+
+
+@app.get("/invest", response_class=HTMLResponse)
+async def invest_page(request: Request):
+    user = current_user(request)
+    conn = db()
+    paid_cents = _paid_total_cents(conn)
+    creators_paid = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) c FROM payout_requests "
+        "WHERE status='paid'").fetchone()["c"]
+    tickets_sold = conn.execute(
+        "SELECT COALESCE(SUM(tickets),0) s FROM ticket_txns "
+        "WHERE kind='buy'").fetchone()["s"]
+    owned = _playbook_owned(conn, user["id"]) if user else False
+    conn.close()
+    return render(request, "invest.html", {
+        "paid_total_cents": paid_cents,
+        "creators_paid": creators_paid,
+        "tickets_sold": tickets_sold,
+        "playbook_price": "$%.2f" % (PLAYBOOK_CENTS / 100),
+        "playbook_owned": owned,
+        "bought": request.query_params.get("bought") or "",
+        "bc_contract": BC_CONTRACT, "bc_buy_url": BC_BUY_URL,
+        "bc_scan_url": BC_SCAN_URL, "bc_pool": BC_POOL})
+
+
+@app.post("/invest/playbook/checkout")
+async def playbook_checkout(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    owned = _playbook_owned(conn, user["id"])
+    conn.close()
+    if owned:
+        return redir("/invest", "You already own the Playbook — "
+                                "the download is yours below.")
+    if not stripe_enabled():
+        return redir("/invest", "Payments aren't open right this "
+                                "second — check back soon.")
+    base = str(request.base_url).rstrip("/")
+    params = {
+        "mode": "payment",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]":
+            str(PLAYBOOK_CENTS),
+        "line_items[0][price_data][product_data][name]":
+            "The HERE Playbook — how creators make real money here",
+        "line_items[0][quantity]": "1",
+        "metadata[user_id]": str(user["id"]),
+        "metadata[kind]": "playbook",
+        "success_url": base + "/invest/playbook/return"
+                              "?session_id={CHECKOUT_SESSION_ID}",
+        "cancel_url": base + "/invest",
+    }
+    try:
+        sess = _stripe_api("POST", "/v1/checkout/sessions", params)
+    except Exception as e:
+        return redir("/invest", f"Stripe hiccup: {e}")
+    url = sess.get("url")
+    if not url:
+        return redir("/invest", "Stripe didn't return a checkout "
+                                "link — try again in a moment.")
+    return RedirectResponse(url, status_code=303)
+
+
+@app.get("/invest/playbook/return")
+async def playbook_return(request: Request):
+    """Stripe sends the buyer back here; verify the session with
+    Stripe (the same verify-on-return pattern as tickets/Plus)
+    and grant the download. Idempotent by (user, kind)."""
+    user, err = require_login(request)
+    if err:
+        return err
+    session_id = (request.query_params.get("session_id")
+                  or "").strip()
+    if session_id and stripe_enabled():
+        try:
+            sess = _stripe_api(
+                "GET", f"/v1/checkout/sessions/{session_id}")
+            meta = sess.get("metadata") or {}
+            if (sess.get("payment_status") == "paid"
+                    and str(meta.get("user_id")) == str(user["id"])
+                    and meta.get("kind") == "playbook"):
+                conn = db()
+                _playbook_grant(conn, user["id"], "paid",
+                                session_id)
+                conn.commit()
+                conn.close()
+        except Exception:
+            pass
+    return redir("/invest?bought=1#playbook")
+
+
+@app.get("/playbook.pdf")
+async def playbook_pdf(request: Request):
+    """The storefront copy: buyers (and Ken / the IDM crew, who
+    review everything) download here. Artists use the door copy
+    below — same file, their contract reading stays free."""
+    user = current_user(request)
+    if not user:
+        return redir("/invest", "The Playbook is a paid download — "
+                                "join free, then it's yours.")
+    conn = db()
+    ok = _playbook_owned(conn, user["id"]) \
+        or bool(user.get("idm_member")) \
+        or user["id"] == _owner_user_id(conn)
+    conn.close()
+    if not ok:
+        return redir("/invest", "The Playbook is a paid download — "
+                                "join free, then it's yours.")
+    if not os.path.isfile(PLAYBOOK_PDF):
+        return redir("/invest", "The Playbook file is being "
+                                "restocked — check back soon.")
+    return FileResponse(PLAYBOOK_PDF,
+                        media_type="application/pdf",
+                        filename="HERE-Playbook.pdf")
+
+
+@app.get("/artist/playbook.pdf")
+async def artist_playbook_pdf(request: Request):
+    """The artist-door copy: any signed-in member walking the
+    Label door reads the Playbook free — it's the reading the
+    artist sign-off stands on, and contracts are never paywalled."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    _playbook_grant(conn, user["id"], "artist")
+    conn.commit()
+    conn.close()
+    if not os.path.isfile(PLAYBOOK_PDF):
+        return redir("/artist/start", "The Playbook file is being "
+                                      "restocked — check back soon.")
+    return FileResponse(PLAYBOOK_PDF,
+                        media_type="application/pdf",
+                        filename="HERE-Playbook.pdf")
+
+
 # ---------------- HERE Market: local buy/sell ----------------
 # In-app local buy/sell. A listing is a PUBLIC OFFER: it shows in
 # browse, on its detail page, and on the logged-out /m/{id} share page
@@ -24250,6 +24438,21 @@ HEARLEY_KB = [
     (["invite", "invite link", "referral", "invite friends"],
      "Your personal invite link is on the Invite page — share it anywhere. When somebody joins from your link, HERE knows they came through you (that's how the Invite Race counts you). Invited friends also earn you milestone rewards.",
      "/invite", "Get my invite link"),
+    (["invest in here", "investing in here", "how to invest", "buy into here", "invest", "investing", "investment"],
+     "There are three ways to invest in HERE, all on the Invest page. One: become a creator — free; your time is the investment, and fans pay you in tickets that cash out to your bank. Two: the Playbook ($19.99) — the money manual our artists read. Three: Black Coin (BC), the ecosystem's coin. Read the Invest page's honesty box before the coin: BC is not stock and nobody promises its price.",
+     "/invest", "Open the Invest page"),
+    (["black coin", "blackcoin", "buy bc", " bc ", "crypto", "coin"],
+     "Black Coin (BC) is the cryptocurrency HERE's founder created for this ecosystem — on the Base chain, fixed supply of 1,000,000,000, no more can ever be made. The Invest page has the real contract address and the buy link (Aerodrome). The plain truth, same as the page says: BC is NOT stock, gives no ownership of HERE, and nobody can promise its price — it can fall to zero. Only money you can afford to lose, and only ever buy at the contract address on the Invest page.",
+     "/invest", "See Black Coin on the Invest page"),
+    (["playbook", "the playbook", "buy the playbook", "get the playbook", "creator playbook", "money manual"],
+     "The HERE Playbook is the 7-page money manual: why streaming pays crumbs, the seven setup switches, every way creators earn here, the what-if scale, and the work rules. It's $19.99 on the Invest page — one payment, yours to keep, download unlocks the second you pay. Artists in the Label program read it free in the artist door (it's their contract reading).",
+     "/invest", "Get the Playbook"),
+    (["make money", "earn money", "become a creator", "be a creator", "creator mode"],
+     "Turn on Creator Mode in Settings — that's the master switch for earning. Fans then gift you Live Tickets on your lives, posts, Peeps, tracks and profile; every earned ticket is worth half a cent, and at 2,000 ($10) you cash out to your bank through Stripe — bank-ready cash-outs send themselves, no follower minimum. The Invest page shows the whole picture with live payout proof, and the Playbook walks the numbers step by step.",
+     "/invest", "See how creators earn"),
+    (["capture card", "stream my ps5", "stream my xbox", "console", "stream setup", "how to stream"],
+     "Streaming a console (that's how the founder does it): console into a capture card, capture card into your computer, open HERE in the computer's browser, tap Go Live, and pick the capture card as your camera in the Live Connect picker — your game fills the stage. Streaming from a phone needs no gear at all: Go Live and your camera is the stage.",
+     "/faq", "Read the FAQ"),
     (["private", "privacy", "who can see", "only me", "friends only"],
      "Every post picks its own audience: Public, Friends, or Only me. Want the whole profile locked down? Settings → Privacy makes your profile friends-only — strangers see the door, not the room. The owner can always see his own house.",
      "/settings/profile", "Open Settings"),

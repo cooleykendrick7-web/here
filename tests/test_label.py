@@ -308,7 +308,7 @@ make_artist(Dc, DEV)
 r = Dc.get("/artist/start")
 check("start page shows CEO video one",
       r.status_code == 200 and "ceo-welcome" in r.text
-      and "here-playbook.pdf" in r.text)
+      and "/artist/playbook.pdf" in r.text)
 r = Dc.post("/artist/start",
             data={"signed_name": "Dev Door"},
             follow_redirects=False)
