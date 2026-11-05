@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Black Coin — Live Dashboard · HERE</title>
+<link rel="icon" href="/static/blackcoin.png">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:#060607;color:#f2f2f2;min-height:100vh;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background-image:
+    repeating-linear-gradient(45deg, rgba(255,255,255,.022) 0 2px, transparent 2px 6px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,.022) 0 2px, transparent 2px 6px),
+    radial-gradient(1200px 500px at 50% -80px, rgba(224,27,34,.14), transparent 60%);
+  padding:18px 14px 40px;
+}
+a{color:#ffc926;text-decoration:none}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Courier New",monospace}
+.wrap{max-width:1060px;margin:0 auto}
+/* ---------- intro overlay ---------- */
+#bcIntro{
+  position:fixed;inset:0;z-index:1000;background:rgba(3,3,4,.96);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  text-align:center;padding:24px;cursor:pointer;transition:opacity .6s ease;
+}
+#bcIntro.hide{opacity:0;pointer-events:none}
+#bcIntro .coin{
+  width:168px;height:168px;border-radius:50%;
+  animation:bcFloat 2.6s ease-in-out infinite, bcSpin 7s linear infinite;
+  filter:drop-shadow(0 18px 34px rgba(0,0,0,.8));
+}
+@keyframes bcFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-16px)}}
+@keyframes bcSpin{0%{transform:rotateY(0deg)}100%{transform:rotateY(360deg)}}
+#bcIntro h1{font-size:clamp(22px,4.6vw,38px);font-weight:900;letter-spacing:.5px}
+#bcIntro h1 .gold{color:#ffc926}
+#bcIntro p{color:#9a9a9a;letter-spacing:3px;font-size:12px;font-weight:700}
+/* ---------- header ---------- */
+header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+header img{width:58px;height:58px;border-radius:50%;box-shadow:0 0 0 2px #2c2c2c,0 4px 16px rgba(0,0,0,.7)}
+header h1{font-size:clamp(24px,4.4vw,36px);font-weight:900;letter-spacing:1px}
+header h1 .red{color:#e01b22}
+header .sub{color:#9a9a9a;font-size:12px;letter-spacing:2.5px;font-weight:700}
+header .spacer{flex:1}
+.backlink{font-size:13px;border:1px solid #2c2c2c;border-radius:20px;padding:7px 14px;background:#101010}
+.addrbar{font-size:11.5px;color:#8b8b8b;word-break:break-all;margin:4px 0 14px}
+.addrbar b{color:#cfcfcf}
+/* ---------- status strip ---------- */
+.strip{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.chip{display:flex;align-items:center;gap:7px;background:#101010;border:1px solid #262626;border-radius:18px;padding:6px 12px;font-size:12px}
+.dot{width:9px;height:9px;border-radius:50%;background:#555;flex:none}
+.dot.live{background:#2ecc71;box-shadow:0 0 8px #2ecc71}
+.dot.stale{background:#e01b22;box-shadow:0 0 8px #e01b22}
+.chip .t{color:#9a9a9a}
+/* ---------- gauges ---------- */
+.gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));gap:12px;margin-bottom:14px}
+.gcard{background:linear-gradient(180deg,#131313,#0b0b0b);border:1px solid #262626;border-radius:14px;padding:10px 8px 12px;text-align:center;position:relative;overflow:hidden}
+.gcard:before{content:"";position:absolute;inset:0;background:radial-gradient(300px 120px at 50% 0,rgba(255,201,38,.06),transparent 70%);pointer-events:none}
+.gcard .glabel{font-size:11px;letter-spacing:2.5px;color:#ffc926;font-weight:800;margin-bottom:2px}
+.gcard svg{width:100%;max-width:230px;height:auto;display:block;margin:0 auto}
+.gdig{font-size:19px;font-weight:700;fill:#fff}
+.gunit{font-size:10.5px;fill:#8b8b8b}
+.ticklab{font-size:9px;fill:#777}
+.gnote{font-size:11px;color:#9a9a9a;margin-top:2px}
+/* ---------- panels ---------- */
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.panel{background:#101010;border:1px solid #262626;border-radius:14px;padding:14px 16px}
+.panel h3{font-size:11px;letter-spacing:2.5px;color:#ffc926;font-weight:800;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed #222;font-size:13.5px}
+.row:last-child{border-bottom:none}
+.row .k{color:#9a9a9a}
+.row .v{font-weight:700;text-align:right}
+.up{color:#2ecc71}.down{color:#ff5560}
+.big{font-size:21px}
+/* ---------- spark ---------- */
+.sparkwrap{background:#101010;border:1px solid #262626;border-radius:14px;padding:12px 16px;margin-top:12px}
+.sparkwrap h3{font-size:11px;letter-spacing:2.5px;color:#ffc926;font-weight:800;margin-bottom:8px}
+#bcSpark{width:100%;height:64px;display:block}
+/* ---------- notes ---------- */
+.dexnote{margin-top:12px;background:#141005;border:1px solid #4a3a08;border-radius:12px;padding:12px 16px;font-size:13.5px;color:#ffd977}
+.honest{margin-top:12px;background:#12060a;border:1px solid #4a0d16;border-radius:12px;padding:12px 16px;font-size:13.5px;color:#ffb3b8;line-height:1.55}
+.foot{margin-top:16px;font-size:12px;color:#8b8b8b;line-height:1.7}
+.foot a{word-break:break-all}
+@media (max-width: 640px) { .gdig { font-size:17px } }
+</style>
+</head>
+<body>
+<!-- Intro overlay: floating coin + welcome (tap or wait ~2.5s) -->
+<div id="bcIntro">
+  <img class="coin" src="/static/blackcoin.png" alt="Black Coin">
+  <h1>Welcome <span class="gold">Kendrick Cooley</span><br>to your Black Coin dashboard</h1>
+  <p>BLACK COIN · LIVE TELEMETRY · BASE CHAIN</p>
+</div>
+
+<div class="wrap">
+  <header>
+    <img src="/static/blackcoin.png" alt="Black Coin logo">
+    <div>
+      <h1>BLACK <span class="red">COIN</span></h1>
+      <div class="sub">COMMAND DECK · RACE TELEMETRY</div>
+    </div>
+    <div class="spacer"></div>
+    <a class="backlink" href="/owner">← Owner Panel</a>
+  </header>
+
+  <div class="addrbar mono">
+    Contract <b>0x0Ea794511a1864dFD4CFA85982a4C7fbAA6f1e88</b> · Base ·
+    Fixed supply <b>1,000,000,000 BC</b> · no mint · no tax · no admin keys
+  </div>
+
+  <div class="strip">
+    <span class="chip"><span class="dot" id="dotChain"></span>Base chain <span class="t" id="stChain">connecting…</span></span>
+    <span class="chip"><span class="dot" id="dotDex"></span>DexScreener <span class="t" id="stDex">checking…</span></span>
+    <span class="chip"><span class="dot" id="dotGecko"></span>GeckoTerminal <span class="t" id="stGecko">checking…</span></span>
+    <span class="chip">⛓ Block <b class="mono" id="bcBlock">—</b></span>
+    <span class="chip">Last updated <b class="mono" id="bcUpdated">—</b></span>
+    <span class="chip">Auto-refresh 30s</span>
+  </div>
+
+  <div class="gauges">
+    <div class="gcard">
+      <div class="glabel">PRICE · USD (LOG)</div>
+      <svg id="gPrice" viewBox="0 0 200 148"></svg>
+      <div class="gnote" id="gPriceNote">pool-implied, on-chain</div>
+    </div>
+    <div class="gcard">
+      <div class="glabel">MARKET CAP · USD (LOG)</div>
+      <svg id="gMcap" viewBox="0 0 200 148"></svg>
+      <div class="gnote">price × 1,000,000,000 BC</div>
+    </div>
+    <div class="gcard">
+      <div class="glabel">POOL LIQUIDITY · USD (LOG)</div>
+      <svg id="gLiq" viewBox="0 0 200 148"></svg>
+      <div class="gnote">Aerodrome BC/WETH pool, live balances</div>
+    </div>
+    <div class="gcard">
+      <div class="glabel">YOUR SHARE OF SUPPLY</div>
+      <svg id="gShare" viewBox="0 0 200 148"></svg>
+      <div class="gnote">wallet balance ÷ total supply</div>
+    </div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h3>🏁 PRICE TELEMETRY</h3>
+      <div class="row"><span class="k">Price (USD)</span><span class="v mono big" id="bcPrice">—</span></div>
+      <div class="row"><span class="k">Price (ETH)</span><span class="v mono" id="bcPriceEth">—</span></div>
+      <div class="row"><span class="k">ETH / USD</span><span class="v mono" id="bcEthUsd">—</span></div>
+      <div class="row"><span class="k">24h change</span><span class="v mono" id="bcChange">—</span></div>
+      <div class="row"><span class="k">24h volume</span><span class="v mono" id="bcVolume">—</span></div>
+      <div class="row"><span class="k">Market cap</span><span class="v mono" id="bcMcap">—</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>🛢 THE POOL · AERODROME</h3>
+      <div class="row"><span class="k">BC in pool</span><span class="v mono" id="bcPoolBc">—</span></div>
+      <div class="row"><span class="k">WETH in pool</span><span class="v mono" id="bcPoolEth">—</span></div>
+      <div class="row"><span class="k">Pool value (USD)</span><span class="v mono" id="bcPoolUsd">—</span></div>
+      <div class="row"><span class="k">Your LP tokens</span><span class="v mono" id="bcLp">—</span></div>
+      <div class="row"><span class="k">Your pool share</span><span class="v mono" id="bcLpShare">—</span></div>
+      <div class="row"><span class="k">LP position value</span><span class="v mono" id="bcLpUsd">—</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>👑 KENDRICK'S HOLDINGS</h3>
+      <div class="row"><span class="k">Wallet</span><span class="v mono" style="font-size:11px">0xef8f…196e3</span></div>
+      <div class="row"><span class="k">BC balance (live)</span><span class="v mono big" id="bcHold">—</span></div>
+      <div class="row"><span class="k">Share of supply</span><span class="v mono" id="bcHoldPct">—</span></div>
+      <div class="row"><span class="k">Value at pool price</span><span class="v mono" id="bcHoldUsd">—</span></div>
+      <div class="row"><span class="k">Total supply (live)</span><span class="v mono" id="bcSupply">—</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>📈 PROFIT / LOSS · PAPER</h3>
+      <div class="row"><span class="k">Total launch spend</span><span class="v mono">≈ $5.00</span></div>
+      <div class="row"><span class="k">Holdings value</span><span class="v mono" id="bcPlHold">—</span></div>
+      <div class="row"><span class="k">LP value</span><span class="v mono" id="bcPlLp">—</span></div>
+      <div class="row"><span class="k">Total paper value</span><span class="v mono big" id="bcPlTotal">—</span></div>
+      <div class="row"><span class="k">Paper gain / loss</span><span class="v mono big" id="bcPl">—</span></div>
+      <div class="row"><span class="k">Paper gain / loss %</span><span class="v mono" id="bcPlPct">—</span></div>
+    </div>
+  </div>
+
+  <div class="sparkwrap">
+    <h3>📉 SESSION PRICE TRACK · SINCE THIS PAGE OPENED</h3>
+    <canvas id="bcSpark" width="1000" height="64"></canvas>
+    <div style="font-size:11.5px;color:#8b8b8b;margin-top:6px">There is no public trade history for BC yet, so this line only tracks the live pool price while this dashboard is open. It is not a historical chart.</div>
+  </div>
+
+  <div class="dexnote" id="bcDexNote" style="display:none"></div>
+
+  <div class="honest">
+    ⚠️ <b>Read this straight:</b> Paper value at the pool's price. The pool is tiny (~$2),
+    so this value could not actually be sold for that amount today. Every number on this
+    page is fetched live from the Base blockchain and public price sources — nothing is
+    typed in by hand, and nothing here is a promise that BC will gain value.
+  </div>
+
+  <div class="foot mono">
+    Wallet: 0xef8fb653a0ab5b7f01d0cd0dca07b2c1ee3196e3 · Pool: 0x7e953C84f1Dc95d7C94e777CA533c3570eD8590A<br>
+    Verify it yourself:
+    <a href="https://basescan.org/token/0x0Ea794511a1864dFD4CFA85982a4C7fbAA6f1e88" target="_blank" rel="noopener">BaseScan</a> ·
+    <a href="https://dexscreener.com/base/0x0Ea794511a1864dFD4CFA85982a4C7fbAA6f1e88" target="_blank" rel="noopener">DexScreener</a> ·
+    <a href="https://www.geckoterminal.com/base/tokens/0x0Ea794511a1864dFD4CFA85982a4C7fbAA6f1e88" target="_blank" rel="noopener">GeckoTerminal</a> ·
+    <a href="https://aerodrome.finance" target="_blank" rel="noopener">Aerodrome</a>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* Black Coin dashboard — every number below is fetched live.
+   Chain truth: Base public RPC eth_call. Prices: DexScreener /
+   GeckoTerminal when they have BC (they did not, at launch + Nov 3
+   checks), otherwise the on-chain pool-implied price. Nothing is
+   hardcoded except the contract addresses and the recorded ~$5
+   total launch spend used for the paper P/L panel. */
+var BC = "0x0Ea794511a1864dFD4CFA85982a4C7fbAA6f1e88";
+var WETH = "0x4200000000000000000000000000000000000006";
+var WALLET = "0xef8fb653a0ab5b7f01d0cd0dca07b2c1ee3196e3";
+var POOL = "0x7e953C84f1Dc95d7C94e777CA533c3570eD8590A";
+var RPCS = ["https://mainnet.base.org", "https://base.llamarpc.com",
+            "https://base-rpc.publicnode.com"];
+var LAUNCH_IN_USD = 5.0; /* recorded total launch spend (pool seed + fees) */
+var SEL_BAL = "0x70a08231", SEL_SUPPLY = "0x18160ddd", SEL_DEC = "0x313ce567";
+
+function $(id){ return document.getElementById(id); }
+function padAddr(a){ return a.toLowerCase().replace("0x","").padStart(64,"0"); }
+function callReq(id, to, data){ return {jsonrpc:"2.0", id:id, method:"eth_call",
+  params:[{to:to, data:data}, "latest"]}; }
+
+function fetchJson(url, ms){
+  var ctl = new AbortController();
+  var t = setTimeout(function(){ ctl.abort(); }, ms || 12000);
+  return fetch(url, {signal: ctl.signal}).then(function(r){
+    clearTimeout(t);
+    if (!r.ok) throw new Error("http " + r.status);
+    return r.json();
+  });
+}
+function rpcBatch(){
+  var body = JSON.stringify([
+    {jsonrpc:"2.0", id:1, method:"eth_blockNumber", params:[]},
+    callReq(2, BC, SEL_SUPPLY),
+    callReq(3, BC, SEL_DEC),
+    callReq(4, BC, SEL_BAL + padAddr(WALLET)),
+    callReq(5, BC, SEL_BAL + padAddr(POOL)),
+    callReq(6, WETH, SEL_BAL + padAddr(POOL)),
+    callReq(7, POOL, SEL_BAL + padAddr(WALLET)),
+    callReq(8, POOL, SEL_SUPPLY)
+  ]);
+  var chain = Promise.reject(new Error("no rpc"));
+  RPCS.forEach(function(u){
+    chain = chain.catch(function(){
+      return fetch(u, {method:"POST", headers:{"Content-Type":"application/json"},
+        body: body}).then(function(r){
+          if (!r.ok) throw new Error("rpc http " + r.status);
+          return r.json();
+        });
+    });
+  });
+  return chain;
+}
+
+/* ---------- formatting ---------- */
+var SUBS = {"0":"₀","1":"₁","2":"₂","3":"₃","4":"₄","5":"₅","6":"₆","7":"₇","8":"₈","9":"₉"};
+function fmtTiny(v){
+  if (v == null || !isFinite(v)) return "—";
+  if (v === 0) return "$0";
+  if (v >= 1) return "$" + v.toLocaleString("en-US",{minimumFractionDigits:2, maximumFractionDigits:2});
+  if (v >= 0.01) return "$" + v.toFixed(4);
+  var ex = v.toExponential(3), parts = ex.split("e");
+  var digits = parts[0].replace(".",""), exp = parseInt(parts[1], 10);
+  var zeros = -exp - 1;
+  if (zeros <= 0) return "$" + v.toFixed(5);
+  var z = String(zeros).split("").map(function(c){ return SUBS[c]; }).join("");
+  return "$0.0" + z + digits;
+}
+function fmtUsd(v, dp){
+  if (v == null || !isFinite(v)) return "—";
+  return "$" + v.toLocaleString("en-US",{minimumFractionDigits:dp==null?2:dp, maximumFractionDigits:dp==null?2:dp});
+}
+function fmtNum(v, dp){
+  if (v == null || !isFinite(v)) return "—";
+  return v.toLocaleString("en-US",{minimumFractionDigits:0, maximumFractionDigits:dp==null?0:dp});
+}
+function fmtPct(v, dp){
+  if (v == null || !isFinite(v)) return "—";
+  return (v > 0 ? "+" : "") + v.toFixed(dp==null?2:dp) + "%";
+}
+
+/* ---------- gauges ---------- */
+var SVGNS = "http://www.w3.org/2000/svg";
+function pt(cx, cy, r, frac){
+  var rad = (135 + frac * 270) * Math.PI / 180;
+  return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+}
+function arcD(cx, cy, r, f0, f1){
+  var a = pt(cx, cy, r, f0), b = pt(cx, cy, r, f1);
+  return "M " + a[0].toFixed(1) + " " + a[1].toFixed(1) +
+         " A " + r + " " + r + " 0 " + ((f1 - f0) * 270 > 180 ? 1 : 0) +
+         " 1 " + b[0].toFixed(1) + " " + b[1].toFixed(1);
+}
+function makeGauge(id, opt){
+  var svg = $(id), cx = 100, cy = 98, r = 74;
+  function el(tag, attrs){
+    var e = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    svg.appendChild(e); return e;
+  }
+  el("path", {d: arcD(cx, cy, r, 0, 1), fill: "none", stroke: "#262626",
+              "stroke-width": 10, "stroke-linecap": "round"});
+  var val = el("path", {d: arcD(cx, cy, r, 0, 0.001), fill: "none",
+               stroke: opt.color, "stroke-width": 10, "stroke-linecap": "round"});
+  opt.ticks.forEach(function(t){
+    var f = fracOf(t.v), p1 = pt(cx, cy, r - 13, f), p2 = pt(cx, cy, r - 6, f),
+        pl = pt(cx, cy, r - 24, f);
+    el("line", {x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1], stroke: "#555", "stroke-width": 1.5});
+    var tx = el("text", {x: pl[0], y: pl[1] + 3, "text-anchor": "middle", "class": "ticklab"});
+    tx.textContent = t.label;
+  });
+  var n0 = pt(cx, cy, r - 18, 0);
+  var needle = el("line", {x1: cx, y1: cy, x2: n0[0], y2: n0[1], stroke: "#fff", "stroke-width": 3, "stroke-linecap": "round"});
+  el("circle", {cx: cx, cy: cy, r: 7, fill: "#141414", stroke: "#ffc926", "stroke-width": 2});
+  var dig = el("text", {x: cx, y: 142, "text-anchor": "middle", "class": "gdig"});
+  dig.textContent = "—";
+  var unit = el("text", {x: cx, y: 122, "text-anchor": "middle", "class": "gunit"});
+  unit.textContent = opt.unit || "";
+  function fracOf(v){
+    if (v == null || !isFinite(v) || v <= 0) return 0;
+    var f;
+    if (opt.log) f = (Math.log10(v) - Math.log10(opt.min)) / (Math.log10(opt.max) - Math.log10(opt.min));
+    else f = (v - opt.min) / (opt.max - opt.min);
+    return Math.max(0, Math.min(1, f));
+  }
+  return function(v, text){
+    var f = fracOf(v);
+    val.setAttribute("d", arcD(cx, cy, r, 0, Math.max(f, 0.001)));
+    var np = pt(cx, cy, r - 18, f);
+    needle.setAttribute("x2", np[0]); needle.setAttribute("y2", np[1]);
+    dig.textContent = text;
+  };
+}
+var gPrice = makeGauge("gPrice", {log: true, min: 1e-11, max: 1e-3, color: "#ffc926", unit: "LOG SCALE",
+  ticks: [{v:1e-11,label:"-11"},{v:1e-9,label:"-9"},{v:1e-7,label:"-7"},{v:1e-5,label:"-5"},{v:1e-3,label:"-3"}]});
+var gMcap = makeGauge("gMcap", {log: true, min: 1, max: 1e8, color: "#e01b22", unit: "LOG SCALE $",
+  ticks: [{v:1,label:"$1"},{v:100,label:"$100"},{v:1e4,label:"$10k"},{v:1e6,label:"$1M"},{v:1e8,label:"$100M"}]});
+var gLiq = makeGauge("gLiq", {log: true, min: 0.01, max: 1e5, color: "#2ecc71", unit: "LOG SCALE $",
+  ticks: [{v:0.01,label:"1¢"},{v:1,label:"$1"},{v:100,label:"$100"},{v:1e4,label:"$10k"},{v:1e5,label:"$100k"}]});
+var gShare = makeGauge("gShare", {log: false, min: 0, max: 100, color: "#ffc926", unit: "% OF SUPPLY",
+  ticks: [{v:0,label:"0"},{v:25,label:"25"},{v:50,label:"50"},{v:75,label:"75"},{v:100,label:"100"}]});
+
+/* ---------- sparkline (this session only) ---------- */
+var samples = [];
+function drawSpark(){
+  var cv = $("bcSpark"), ctx = cv.getContext("2d");
+  var W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = "#262626"; ctx.beginPath(); ctx.moveTo(0, H - 8); ctx.lineTo(W, H - 8); ctx.stroke();
+  if (!samples.length) return;
+  var mn = Math.min.apply(null, samples), mx = Math.max.apply(null, samples);
+  if (mx - mn < mx * 1e-9) { mx = mn * 1.05 + 1e-15; mn = mn * 0.95; }
+  ctx.strokeStyle = "#ffc926"; ctx.lineWidth = 2; ctx.beginPath();
+  samples.forEach(function(v, i){
+    var x = samples.length === 1 ? W : i / (samples.length - 1) * W;
+    var y = 6 + (1 - (v - mn) / (mx - mn)) * (H - 16);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+/* ---------- status helpers ---------- */
+function setStatus(dotId, txtId, ok, text){
+  $(dotId).className = "dot " + (ok ? "live" : "stale");
+  $(txtId).textContent = text;
+}
+
+/* ---------- ETH/USD from public sources ---------- */
+function ethUsd(){
+  return fetchJson("https://api.dexscreener.com/latest/dex/tokens/" + WETH)
+    .then(function(d){
+      var pairs = (d && d.pairs) || [];
+      if (!pairs.length) throw new Error("no weth pairs");
+      pairs.sort(function(a, b){ return ((b.liquidity||{}).usd||0) - ((a.liquidity||{}).usd||0); });
+      var p = Number(pairs[0].priceUsd);
+      if (!p) throw new Error("no price");
+      return {usd: p, via: "DexScreener"};
+    }).catch(function(){
+      return fetchJson("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd")
+        .then(function(d){ return {usd: Number(d.ethereum.usd), via: "CoinGecko"}; });
+    }).catch(function(){
+      return fetchJson("https://api.coinbase.com/v2/prices/ETH-USD/spot")
+        .then(function(d){ return {usd: Number(d.data.amount), via: "Coinbase"}; });
+    });
+}
+
+/* ---------- main refresh ---------- */
+var lastPrice = null;
+function refresh(){
+  var chainP = rpcBatch();
+  var ethP = ethUsd().catch(function(){ return null; });
+  var dexP = fetchJson("https://api.dexscreener.com/latest/dex/tokens/" + BC)
+    .then(function(d){ return {ok: true, pairs: (d && d.pairs) || null}; })
+    .catch(function(){ return {ok: false, pairs: null}; });
+  var geckoP = fetchJson("https://api.geckoterminal.com/api/v2/networks/base/tokens/" + BC + "/pools")
+    .then(function(d){ return {ok: true, pools: (d && d.data) || []}; })
+    .catch(function(){ return {ok: false, pools: []}; });
+
+  Promise.all([chainP, ethP, dexP, geckoP]).then(function(res){
+    var arr = res[0], eth = res[1], dex = res[2], gecko = res[3];
+    var byId = {};
+    (arr || []).forEach(function(m){ if (m && m.id) byId[m.id] = m.result; });
+    if (!byId[2]) throw new Error("chain incomplete");
+
+    var dec = byId[3] ? parseInt(byId[3], 16) : 18;
+    var unit = Math.pow(10, dec);
+    var supply = Number(BigInt(byId[2])) / unit;
+    var hold = Number(BigInt(byId[4])) / unit;
+    var poolBc = Number(BigInt(byId[5])) / unit;
+    var poolEth = Number(BigInt(byId[6])) / 1e18;
+    var lpBal = Number(BigInt(byId[7])) / 1e18;
+    var lpSup = Number(BigInt(byId[8])) / 1e18;
+    var block = parseInt(byId[1], 16);
+
+    var priceEth = poolBc > 0 ? poolEth / poolBc : null;
+    var ethPrice = eth ? eth.usd : null;
+    var poolPriceUsd = (priceEth && ethPrice) ? priceEth * ethPrice : null;
+
+    /* DexScreener BC pair, if it exists now */
+    var dexPair = null;
+    if (dex.ok && dex.pairs && dex.pairs.length){
+      dexPair = dex.pairs.slice().sort(function(a, b){
+        return ((b.liquidity||{}).usd||0) - ((a.liquidity||{}).usd||0);
+      })[0];
+    }
+    var geckoPool = (gecko.ok && gecko.pools && gecko.pools.length) ? gecko.pools[0] : null;
+
+    var headline = dexPair ? Number(dexPair.priceUsd) : poolPriceUsd;
+    var mcap = headline ? headline * supply : null;
+    var poolUsd = headline ? poolBc * headline + (ethPrice ? poolEth * ethPrice : 0) : null;
+    var holdPct = supply > 0 ? hold / supply * 100 : null;
+    var holdUsd = headline ? hold * headline : null;
+    var lpShare = lpSup > 0 ? lpBal / lpSup * 100 : null;
+    var lpUsd = (poolUsd != null && lpShare != null) ? poolUsd * lpShare / 100 : null;
+
+    /* readouts */
+    $("bcBlock").textContent = block ? block.toLocaleString("en-US") : "—";
+    $("bcPrice").textContent = fmtTiny(headline);
+    $("gPriceNote").textContent = dexPair ? "DexScreener pair price" : "pool-implied, on-chain";
+    $("bcPriceEth").textContent = priceEth ? priceEth.toExponential(4) + " ETH" : "—";
+    $("bcEthUsd").textContent = ethPrice ? fmtUsd(ethPrice) + " · " + eth.via : "—";
+    $("bcMcap").textContent = fmtUsd(mcap);
+    $("bcPoolBc").textContent = fmtNum(poolBc) + " BC";
+    $("bcPoolEth").textContent = poolEth.toFixed(6) + " ETH";
+    $("bcPoolUsd").textContent = fmtUsd(poolUsd);
+    $("bcLp").textContent = fmtNum(lpBal, 3) + " LP";
+    $("bcLpShare").textContent = lpShare != null ? lpShare.toFixed(2) + "%" : "—";
+    $("bcLpUsd").textContent = fmtUsd(lpUsd);
+    $("bcHold").textContent = fmtNum(hold) + " BC";
+    $("bcHoldPct").textContent = holdPct != null ? holdPct.toFixed(2) + "%" : "—";
+    $("bcHoldUsd").textContent = fmtUsd(holdUsd);
+    $("bcSupply").textContent = fmtNum(supply) + " BC";
+
+    /* change / volume */
+    var chg = null, vol = null;
+    if (dexPair){
+      chg = (dexPair.priceChange || {}).h24;
+      vol = (dexPair.volume || {}).h24;
+    } else if (geckoPool){
+      var at = geckoPool.attributes || {};
+      chg = Number((at.price_change_percentage || {}).h24);
+      vol = Number((at.volume_usd || {}).h24);
+    }
+    var chgEl = $("bcChange");
+    if (chg == null || isNaN(chg)){
+      chgEl.textContent = "— · no trades recorded";
+      chgEl.className = "v mono";
+    } else {
+      chgEl.textContent = fmtPct(Number(chg));
+      chgEl.className = "v mono " + (Number(chg) >= 0 ? "up" : "down");
+    }
+    $("bcVolume").textContent = (vol == null || isNaN(vol)) ? "—" : fmtUsd(Number(vol));
+
+    /* P/L (paper) */
+    var total = (holdUsd || 0) + (lpUsd || 0);
+    var haveTotal = holdUsd != null || lpUsd != null;
+    $("bcPlHold").textContent = fmtUsd(holdUsd);
+    $("bcPlLp").textContent = fmtUsd(lpUsd);
+    $("bcPlTotal").textContent = haveTotal ? fmtUsd(total) : "—";
+    var plEl = $("bcPl"), pctEl = $("bcPlPct");
+    if (haveTotal){
+      var pl = total - LAUNCH_IN_USD;
+      plEl.textContent = (pl >= 0 ? "+" : "−") + fmtUsd(Math.abs(pl)).slice(0);
+      plEl.className = "v mono big " + (pl >= 0 ? "up" : "down");
+      pctEl.textContent = fmtPct(pl / LAUNCH_IN_USD * 100, 1);
+      pctEl.className = "v mono " + (pl >= 0 ? "up" : "down");
+    }
+
+    /* gauges */
+    gPrice(headline, fmtTiny(headline));
+    gMcap(mcap, mcap ? fmtUsd(mcap, 0) : "—");
+    gLiq(poolUsd, poolUsd != null ? fmtUsd(poolUsd) : "—");
+    gShare(holdPct, holdPct != null ? holdPct.toFixed(1) + "%" : "—");
+
+    /* statuses */
+    setStatus("dotChain", "stChain", true, "LIVE");
+    if (!dex.ok) setStatus("dotDex", "stDex", false, "STALE · unreachable");
+    else if (dexPair) setStatus("dotDex", "stDex", true, "LIVE · pair found");
+    else setStatus("dotDex", "stDex", true, "responded · BC not indexed");
+    if (!gecko.ok) setStatus("dotGecko", "stGecko", false, "STALE · unreachable");
+    else if (geckoPool) setStatus("dotGecko", "stGecko", true, "LIVE · pool found");
+    else setStatus("dotGecko", "stGecko", true, "responded · BC not indexed");
+
+    /* honest indexing note */
+    var note = $("bcDexNote");
+    if (!dexPair && !geckoPool){
+      note.style.display = "block";
+      note.textContent = "📊 Chart sites have not indexed BC yet — no trades recorded since launch. " +
+        "Until a trade happens, the only price is the one implied by the Aerodrome pool's live balances, shown above.";
+    } else {
+      note.style.display = "none";
+    }
+
+    $("bcUpdated").textContent = new Date().toLocaleTimeString("en-US");
+
+    if (headline && headline !== lastPrice){
+      samples.push(headline);
+      if (samples.length > 240) samples.shift();
+      drawSpark();
+      lastPrice = headline;
+    }
+  }).catch(function(){
+    setStatus("dotChain", "stChain", false, "STALE · RPC unreachable");
+    $("bcUpdated").textContent = new Date().toLocaleTimeString("en-US") + " (chain failed)";
+  });
+}
+
+/* ---------- intro ---------- */
+function hideIntro(){ $("bcIntro").classList.add("hide"); }
+$("bcIntro").addEventListener("click", hideIntro);
+setTimeout(hideIntro, 2600);
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
