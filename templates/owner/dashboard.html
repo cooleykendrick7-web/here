@@ -479,6 +479,14 @@ table.admin tr:last-child td{border-bottom:none}
   </div>
 </section>
 
+<!-- Black Coin dashboard door (Ken's order, 2026-11-05): small coin,
+     fixed bottom-left, opens the public read-only /blackcoin telemetry page. -->
+<a href="/blackcoin" title="Black Coin — live dashboard" aria-label="Black Coin live dashboard"
+   style="position:fixed;left:14px;bottom:14px;z-index:9999;display:block;width:54px;height:54px;border-radius:50%;box-shadow:0 4px 18px rgba(0,0,0,.65)">
+  <img src="/static/blackcoin.png" alt="Black Coin"
+       style="width:54px;height:54px;border-radius:50%;display:block">
+</a>
+
 {% include "owner/_ajax.html" %}
 </body>
 </html>
