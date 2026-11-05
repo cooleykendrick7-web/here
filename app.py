@@ -24052,6 +24052,17 @@ async def owner_logout(request: Request):
     return resp
 
 
+@app.get("/blackcoin", response_class=HTMLResponse)
+async def blackcoin_dashboard(request: Request):
+    # Black Coin live dashboard (Ken's order, 2026-11-05): public,
+    # read-only, no password of its own — the door lives on the owner
+    # panel's bottom-left corner. The server invents NOTHING: every
+    # number on the page is fetched client-side, live, from the Base
+    # blockchain (public RPC eth_call) and public price sources
+    # (DexScreener / GeckoTerminal), with LIVE/STALE markers per source.
+    return render(request, "blackcoin.html", {})
+
+
 @app.get("/owner", response_class=HTMLResponse)
 async def owner_dashboard(request: Request):
     err = require_owner(request)
