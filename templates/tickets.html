@@ -37,6 +37,38 @@
 </div>
 
 <div class="card">
+  <div class="section-title">🪙 Black Coin Bonus — withdraw to your wallet</div>
+  <p style="font-size:14.5px;margin-top:8px">Your bonus balance: <strong style="color:#f5b301">{{ "{:,}".format(bc_balance) }} BC</strong>. Withdraw it to your own Base wallet and it's real Black Coin in your hands.</p>
+  <p style="color:var(--muted);font-size:13px;margin-top:6px">Ken sends Black Coin from his own wallet by hand — requests are batched, allow a few days. Minimum withdrawal {{ "{:,}".format(bc_withdraw_min) }} BC, one request at a time.</p>
+  {% if bc_pending %}
+  <p style="font-size:14.5px;margin-top:10px">⏳ You have a withdrawal on its way — its status is in your list below.</p>
+  {% elif bc_balance > 0 %}
+  <form method="post" action="/tickets/bc/withdraw" style="margin-top:12px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="text" name="address" required placeholder="Your Base wallet address (0x…)" autocomplete="off" spellcheck="false"
+        style="flex:2;min-width:220px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:14px">
+      <input type="number" name="amount" required min="{{ bc_withdraw_min }}" max="{{ bc_balance }}" step="1" value="{{ bc_balance }}" inputmode="numeric"
+        style="flex:1;min-width:120px;border:1px solid var(--border);border-radius:999px;padding:10px 14px;font-size:14px">
+      <button type="submit" class="btn">Request withdrawal</button>
+    </div>
+  </form>
+  {% else %}
+  <p style="color:var(--muted);font-size:13.5px;margin-top:8px">No bonus yet — every ticket pack adds free BC here (up to 25,000 BC on the biggest pack).</p>
+  {% endif %}
+  {% if bc_withdrawals %}
+  <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+    <div style="font-weight:800;font-size:14.5px">Your Black Coin withdrawals</div>
+    {% for w in bc_withdrawals %}
+    <div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span>{{ w.amount_fmt }} BC → {{ w.address_short|e }} — {% if w.status == 'sent' %}✅ Sent{% if w.tx_url %} · <a href="{{ w.tx_url }}" target="_blank" rel="noopener">View on BaseScan ↗</a>{% endif %}{% elif w.status == 'declined' %}↩️ Declined — the BC went back to your bonus balance{% else %}⏳ Pending — Ken sends by hand{% endif %}</span>
+      <span style="color:var(--muted);font-size:12.5px;white-space:nowrap">{{ w.when|e }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
   <div class="section-title">{{ ic('market') }} Get tickets</div>
   {% if stripe_on %}
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
@@ -46,6 +78,7 @@
       <button type="submit" class="btn-ghost" style="width:100%;padding:14px 10px;text-align:center">
         <span style="font-size:22px;font-weight:900;display:block">{{ p.tickets }} 🎟️</span>
         <span style="font-size:14px">{{ pack_prices[p.key]|e }}</span>
+        {% if pack_bonus[p.key] %}<span style="display:block;margin-top:5px;font-size:12px;font-weight:800;color:#f5b301">+ {{ "{:,}".format(pack_bonus[p.key]) }} BC FREE</span>{% endif %}
       </button>
     </form>
     {% endfor %}
