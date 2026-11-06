@@ -1647,6 +1647,38 @@ def init_db():
                 "ORDER BY id ASC").fetchall(), start=1):
             c.execute("UPDATE users SET founding_no=? WHERE id=?",
                       (_i, _r["id"]))
+    if "is_probe" not in _user_cols_lt:
+        # Panel Upgrade P2 (Probe Janitor): accounts the bug-check
+        # tooling creates for itself — stamped at signup when the
+        # form's probe_code matches the HERE_PROBE_CODE env secret,
+        # or by the owner from the Users table. The janitor sweeper
+        # deletes stamped accounts once they are 15+ minutes old,
+        # unless a money/message guard trips (see _janitor_sweep).
+        c.execute("ALTER TABLE users ADD COLUMN is_probe "
+                  "INTEGER DEFAULT 0")
+    c.execute("""CREATE TABLE IF NOT EXISTS janitor_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL, user_id INTEGER, name TEXT DEFAULT '',
+        action TEXT NOT NULL, detail TEXT DEFAULT '')""")
+    # Panel Upgrade P6 (Black Coin Bonus): promotional BC credited
+    # from the owner's own Black Coin stack when a ticket pack is
+    # bought. bc_balances is the per-user total; bc_txns is the
+    # audit ledger. Display-only in v1 — no withdrawal path.
+    c.execute("""CREATE TABLE IF NOT EXISTS bc_balances (
+        user_id INTEGER PRIMARY KEY,
+        balance INTEGER NOT NULL DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS bc_txns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL, user_id INTEGER NOT NULL,
+        delta INTEGER NOT NULL, reason TEXT DEFAULT '',
+        ref TEXT DEFAULT '')""")
+    # Panel Upgrade P7 (Talk to Milli): the owner's chat with Milli
+    # inside the panel. from_who is 'ken' or 'milli'; handled marks
+    # Ken's messages Milli has picked up (set by /api/milli/reply).
+    c.execute("""CREATE TABLE IF NOT EXISTS milli_msgs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL, from_who TEXT NOT NULL,
+        body TEXT NOT NULL, handled INTEGER DEFAULT 0)""")
     if "stripe_acct_id" not in _user_cols_lt:
         # Build R: the streamer's Stripe Connect (Express) account
         # id, created by POST /payouts/setup; payout_ready is the
@@ -3860,6 +3892,14 @@ async def signup(request: Request):
             "WHERE id=? AND "
             "(SELECT COUNT(*) FROM users WHERE founding=1) < 100",
             (uid,))
+        # Probe Janitor (P2): the bug-check tooling stamps its own
+        # throwaway accounts by sending probe_code matching the
+        # HERE_PROBE_CODE env secret. No env set = the field is
+        # inert, so a guessed code can never stamp a real signup.
+        _probe_env = os.environ.get("HERE_PROBE_CODE", "")
+        if _probe_env and (form.get("probe_code") or "") == _probe_env:
+            conn.execute("UPDATE users SET is_probe=1 WHERE id=?",
+                         (uid,))
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
@@ -15469,6 +15509,7 @@ async def live_page(request: Request, lid: int):
             # sheet, and the gift catalog for the tray (prices are
             # still enforced server-side from GIFT_CATALOG).
             "tickets": (dict(user).get("tickets_balance") or 0),
+            "earned": (dict(user).get("gift_earned") or 0),
             "gifts": [GIFT_CATALOG[k] for k in GIFT_ORDER],
             "shout_cost": SHOUT_COST_TICKETS,
             # Platforms branding: the host's backdrop + shelf.
@@ -16537,9 +16578,10 @@ async def live_state(request: Request, lid: int):
          "expires_at": shout_row["expires_at"]}
         if shout_row else None)
     _me = conn.execute(
-        "SELECT tickets_balance FROM users WHERE id=?",
+        "SELECT tickets_balance, gift_earned FROM users WHERE id=?",
         (user["id"],)).fetchone()
     out["my_tickets"] = (_me["tickets_balance"] or 0) if _me else 0
+    out["my_earned"] = (_me["gift_earned"] or 0) if _me else 0
     # Build W2: the Showdown block (shared scoreboard from this
     # room's point of view) + — host only — who they could challenge
     # right now. _sweep_lives above already finished any battle
@@ -17121,6 +17163,7 @@ def _page_gift_ctx(user, endpoint, recipient_name):
                       "anim": g["anim"]})
     return {"endpoint": endpoint, "recipient_name": recipient_name,
             "balance": me.get("tickets_balance") or 0,
+            "earned": me.get("gift_earned") or 0,
             "gifts": gifts}
 
 
@@ -17194,8 +17237,45 @@ def _paid_total_cents(conn):
     return int(row["s"] or 0)
 
 
+def _gift_move(conn, user_id, recipient_id, cost, echo):
+    """The debit+credit half of every gift, shared by all four
+    gift cores (page / post / track / live). echo=False (normal):
+    guarded debit of the sender's tickets_balance, credit the
+    recipient's gift_earned AND gift_lifetime. echo=True (Pass It
+    On — Panel Upgrade P5): guarded debit of the sender's
+    gift_earned, credit the recipient's gift_earned ONLY —
+    gift_lifetime never moves, so streamer levels can't be farmed
+    with recycled tickets, and the system-wide gift_earned total
+    is conserved exactly (an echo creates nothing). Returns False
+    when the guarded debit fails (insufficient funds in the
+    chosen wallet); the caller rolls back."""
+    if echo:
+        cur = conn.execute(
+            "UPDATE users SET gift_earned = "
+            "COALESCE(gift_earned,0) - ? WHERE id=? AND "
+            "COALESCE(gift_earned,0) >= ?", (cost, user_id, cost))
+        if cur.rowcount != 1:
+            return False
+        conn.execute(
+            "UPDATE users SET gift_earned = "
+            "COALESCE(gift_earned,0) + ? WHERE id=?",
+            (cost, recipient_id))
+        return True
+    cur = conn.execute(
+        "UPDATE users SET tickets_balance = "
+        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
+        "COALESCE(tickets_balance,0) >= ?", (cost, user_id, cost))
+    if cur.rowcount != 1:
+        return False
+    conn.execute(
+        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ?, "
+        "gift_lifetime = COALESCE(gift_lifetime,0) + ? WHERE id=?",
+        (cost, cost, recipient_id))
+    return True
+
+
 def _page_gift_core(user, recipient_id, recipient_name, page_id,
-                    gift):
+                    gift, source="balance"):
     """The one money-moving transaction for a page gift, entered
     only after every view/self/block gate has passed. Returns
     (status_code, payload) — the routes just JSON it."""
@@ -17217,20 +17297,15 @@ def _page_gift_core(user, recipient_id, recipient_name, page_id,
             return 429, {"ok": False,
                          "error": "Easy — one free gift every "
                                   "couple of seconds 💜"}
-    cur = conn.execute(
-        "UPDATE users SET tickets_balance = "
-        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
-        "COALESCE(tickets_balance,0) >= ?", (cost, user["id"], cost))
-    if cur.rowcount != 1:
+    echo = source == "earned" and cost > 0
+    if not _gift_move(conn, user["id"], recipient_id, cost, echo):
         conn.rollback()
         conn.close()
         return 400, {"ok": False,
-                     "error": "Not enough tickets — grab a pack "
-                              "first 🎟️"}
-    conn.execute(
-        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ?, "
-        "gift_lifetime = COALESCE(gift_lifetime,0) + ? WHERE id=?",
-        (cost, cost, recipient_id))
+                     "error": ("Not enough earned tickets to "
+                               "Pass It On 🔁" if echo else
+                               "Not enough tickets — grab a pack "
+                               "first 🎟️")}
     stamp = now_iso()
     cur = conn.execute(
         "INSERT INTO page_gifts(sender_id, recipient_id, page_id, "
@@ -17241,33 +17316,39 @@ def _page_gift_core(user, recipient_id, recipient_name, page_id,
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
-        (user["id"], "gift_send", -cost, None, gift["key"], "page",
-         stamp))
+        (user["id"], "gift_echo" if echo else "gift_send", -cost,
+         None, gift["key"], "page", stamp))
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
-        (recipient_id, "gift_receive", cost, None, gift["key"],
-         "page", stamp))
-    _invite_bonus(conn, recipient_id, cost, stamp)
+        (recipient_id, "gift_echo" if echo else "gift_receive", cost,
+         None, gift["key"], "page", stamp))
+    if not echo:
+        _invite_bonus(conn, recipient_id, cost, stamp)
     conn.commit()
-    bal = conn.execute(
-        "SELECT tickets_balance FROM users WHERE id=?",
-        (user["id"],)).fetchone()["tickets_balance"]
+    _bal_row = conn.execute(
+        "SELECT tickets_balance, gift_earned FROM users WHERE id=?",
+        (user["id"],)).fetchone()
+    bal = _bal_row["tickets_balance"]
     conn.close()
     notify(recipient_id, "page_gift",
            f"{user['name']} sent you {gift['name']} 🎁",
            f"/user/{user['id']}", actor_id=user["id"])
     return 200, {"ok": True, "balance": bal or 0,
+                 "earned": _bal_row["gift_earned"] or 0,
+                 "source": "earned" if echo else "balance",
                  "gift_id": gift_id, "recipient_id": recipient_id,
                  "recipient_name": recipient_name}
 
 
 async def _page_gift_parse(request):
-    """(user, gift) or (None, error_response) — the shared front
-    door of both page-gift routes: login + a known catalog key."""
+    """(user, gift, source, error_response) — the shared front
+    door of the gift routes: login + a known catalog key + the
+    Pass It On source choice ('earned' spends the sender's
+    gift_earned; anything else is the classic tickets_balance)."""
     user = current_user(request)
     if not user:
-        return None, None, JSONResponse(
+        return None, None, "balance", JSONResponse(
             {"ok": False, "error": "Log in first."},
             status_code=401)
     try:
@@ -17277,10 +17358,12 @@ async def _page_gift_parse(request):
     gift_key = str((data or {}).get("gift_key") or "")
     gift = GIFT_CATALOG.get(gift_key)
     if not gift:
-        return None, None, JSONResponse(
+        return None, None, "balance", JSONResponse(
             {"ok": False, "error": "Unknown gift."},
             status_code=400)
-    return user, gift, None
+    source = "earned" if (data or {}).get("source") == "earned" \
+        else "balance"
+    return user, gift, source, None
 
 
 @app.post("/user/{uid}/gift")
@@ -17291,7 +17374,7 @@ async def user_page_gift(request: Request, uid: int):
     unavailable answer, a private profile is friends-only (the
     owner context sees through both, like the steal-look
     route)."""
-    user, gift, err = await _page_gift_parse(request)
+    user, gift, source, err = await _page_gift_parse(request)
     if err:
         return err
     prof = get_user(uid)
@@ -17322,7 +17405,7 @@ async def user_page_gift(request: Request, uid: int):
                       "friends can send them gifts."},
             status_code=403)
     code, payload = _page_gift_core(user, uid, prof["name"], None,
-                                    gift)
+                                    gift, source=source)
     return JSONResponse(payload, status_code=code)
 
 
@@ -17340,10 +17423,11 @@ def _post_gift_ctx(user):
                       "category": g["category"], "img": g["img"],
                       "anim": g["anim"]})
     return {"balance": me.get("tickets_balance") or 0,
+            "earned": me.get("gift_earned") or 0,
             "gifts": gifts}
 
 
-def _post_gift_core(user, post, gift):
+def _post_gift_core(user, post, gift, source="balance"):
     """The money move for a post/Peep gift — the page-gift
     transaction with a post attached: guarded debit, the AUTHOR
     earns into gift_earned (+lifetime), a post_gifts row, and the
@@ -17365,20 +17449,15 @@ def _post_gift_core(user, post, gift):
             return 429, {"ok": False,
                          "error": "Easy — one free gift every "
                                   "couple of seconds 💜"}
-    cur = conn.execute(
-        "UPDATE users SET tickets_balance = "
-        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
-        "COALESCE(tickets_balance,0) >= ?", (cost, user["id"], cost))
-    if cur.rowcount != 1:
+    echo = source == "earned" and cost > 0
+    if not _gift_move(conn, user["id"], recipient_id, cost, echo):
         conn.rollback()
         conn.close()
         return 400, {"ok": False,
-                     "error": "Not enough tickets — grab a pack "
-                              "first 🎟️"}
-    conn.execute(
-        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) "
-        "+ ?, gift_lifetime = COALESCE(gift_lifetime,0) + ? "
-        "WHERE id=?", (cost, cost, recipient_id))
+                     "error": ("Not enough earned tickets to "
+                               "Pass It On 🔁" if echo else
+                               "Not enough tickets — grab a pack "
+                               "first 🎟️")}
     stamp = now_iso()
     cur = conn.execute(
         "INSERT INTO post_gifts(sender_id, recipient_id, post_id, "
@@ -17389,24 +17468,28 @@ def _post_gift_core(user, post, gift):
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
-        (user["id"], "gift_send", -cost, None, gift["key"], "post",
-         stamp))
+        (user["id"], "gift_echo" if echo else "gift_send", -cost,
+         None, gift["key"], "post", stamp))
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, note, created_at) VALUES(?,?,?,?,?,?,?)",
-        (recipient_id, "gift_receive", cost, None, gift["key"],
-         "post", stamp))
-    _invite_bonus(conn, recipient_id, cost, stamp)
+        (recipient_id, "gift_echo" if echo else "gift_receive", cost,
+         None, gift["key"], "post", stamp))
+    if not echo:
+        _invite_bonus(conn, recipient_id, cost, stamp)
     conn.commit()
-    bal = conn.execute(
-        "SELECT tickets_balance FROM users WHERE id=?",
-        (user["id"],)).fetchone()["tickets_balance"]
+    _bal_row = conn.execute(
+        "SELECT tickets_balance, gift_earned FROM users WHERE id=?",
+        (user["id"],)).fetchone()
+    bal = _bal_row["tickets_balance"]
     conn.close()
     author = get_user(recipient_id) or {}
     notify(recipient_id, "post_gift",
            f"{user['name']} sent you {gift['name']} on your post 🎁",
            f"/post/{post['id']}", actor_id=user["id"])
     return 200, {"ok": True, "balance": bal or 0,
+                 "earned": _bal_row["gift_earned"] or 0,
+                 "source": "earned" if echo else "balance",
                  "gift_id": gift_id,
                  "recipient_id": recipient_id,
                  "recipient_name": author.get("name") or "them"}
@@ -17418,7 +17501,7 @@ async def post_gift(request: Request, pid: int):
     the post itself (can_view_post) plus the profile-gift rules:
     the author must run Creator Mode, no self-gifts, no gifts
     across a block either way."""
-    user, gift, err = await _page_gift_parse(request)
+    user, gift, source, err = await _page_gift_parse(request)
     if err:
         return err
     conn = db()
@@ -17466,7 +17549,8 @@ async def post_gift(request: Request, pid: int):
         return JSONResponse(
             {"ok": False, "error": "That post isn't available."},
             status_code=400)
-    code, payload = _post_gift_core(user, post, gift)
+    code, payload = _post_gift_core(user, post, gift,
+                                    source=source)
     return JSONResponse(payload, status_code=code)
 
 
@@ -18270,7 +18354,7 @@ async def media_like(request: Request, tid: int):
                          "likes": n})
 
 
-def _track_gift_core(user, track, owner, gift):
+def _track_gift_core(user, track, owner, gift, source="balance"):
     """The money move for a track gift — the post-gift
     transaction aimed at a song: guarded debit, the ARTIST
     earns, a track_gifts row, twin ledger lines note='track',
@@ -18291,21 +18375,15 @@ def _track_gift_core(user, track, owner, gift):
             return 429, {"ok": False,
                          "error": "Easy — one free gift every "
                                   "couple of seconds 💜"}
-    cur = conn.execute(
-        "UPDATE users SET tickets_balance = "
-        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
-        "COALESCE(tickets_balance,0) >= ?",
-        (cost, user["id"], cost))
-    if cur.rowcount != 1:
+    echo = source == "earned" and cost > 0
+    if not _gift_move(conn, user["id"], recipient_id, cost, echo):
         conn.rollback()
         conn.close()
         return 400, {"ok": False,
-                     "error": "Not enough tickets — grab a pack "
-                              "first 🎟️"}
-    conn.execute(
-        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) "
-        "+ ?, gift_lifetime = COALESCE(gift_lifetime,0) + ? "
-        "WHERE id=?", (cost, cost, recipient_id))
+                     "error": ("Not enough earned tickets to "
+                               "Pass It On 🔁" if echo else
+                               "Not enough tickets — grab a pack "
+                               "first 🎟️")}
     stamp = now_iso()
     cur = conn.execute(
         "INSERT INTO track_gifts(sender_id, recipient_id, "
@@ -18318,25 +18396,28 @@ def _track_gift_core(user, track, owner, gift):
         "INSERT INTO ticket_txns(user_id, kind, tickets, "
         "live_id, gift_key, note, created_at) "
         "VALUES(?,?,?,?,?,?,?)",
-        (user["id"], "gift_send", -cost, None, gift["key"],
-         "track", stamp))
+        (user["id"], "gift_echo" if echo else "gift_send", -cost,
+         None, gift["key"], "track", stamp))
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, "
         "live_id, gift_key, note, created_at) "
         "VALUES(?,?,?,?,?,?,?)",
-        (recipient_id, "gift_receive", cost, None, gift["key"],
-         "track", stamp))
-    if cost > 0:
+        (recipient_id, "gift_echo" if echo else "gift_receive", cost,
+         None, gift["key"], "track", stamp))
+    if cost > 0 and not echo:
         _invite_bonus(conn, recipient_id, cost, stamp)
     conn.commit()
     conn.close()
-    bal = (get_user(user["id"]) or {}).get("tickets_balance", 0)
+    _me_now = get_user(user["id"]) or {}
+    bal = _me_now.get("tickets_balance", 0)
     if cost > 0:
         notify(recipient_id, "track_gift",
                f"{user['name']} gifted your track "
                f"“{track['title']}” (+{cost} 🎟️)",
                f"/user/{recipient_id}", user["id"])
     return 200, {"ok": True, "balance": bal,
+                 "earned": _me_now.get("gift_earned", 0) or 0,
+                 "source": "earned" if echo else "balance",
                  "gift_id": gift_id,
                  "recipient_id": recipient_id,
                  "recipient_name": track["title"]}
@@ -18344,7 +18425,7 @@ def _track_gift_core(user, track, owner, gift):
 
 @app.post("/media/{tid}/gift")
 async def media_gift(request: Request, tid: int):
-    user, gift, err = await _page_gift_parse(request)
+    user, gift, source, err = await _page_gift_parse(request)
     if err:
         return err
     conn = db()
@@ -18383,7 +18464,7 @@ async def media_gift(request: Request, tid: int):
                              "error": "Not available."},
                             status_code=400)
     code, payload = _track_gift_core(
-        user, dict(track), owner, gift)
+        user, dict(track), owner, gift, source=source)
     return JSONResponse(payload, status_code=code)
 
 
@@ -18460,7 +18541,7 @@ async def page_page_gift(request: Request, pid: int):
     OWNER's flag. A Page has no privacy gate (anyone signed in
     can view one), so the view gate is existence, plus the
     shared block rule against the owner."""
-    user, gift, err = await _page_gift_parse(request)
+    user, gift, source, err = await _page_gift_parse(request)
     if err:
         return err
     conn = db()
@@ -18489,7 +18570,7 @@ async def page_page_gift(request: Request, pid: int):
             {"ok": False, "error": "That page isn't available."},
             status_code=400)
     code, payload = _page_gift_core(user, owner_id, pg["name"], pid,
-                                    gift)
+                                    gift, source=source)
     return JSONResponse(payload, status_code=code)
 
 
@@ -18606,21 +18687,18 @@ async def live_gift(request: Request, lid: int):
                  "error": "Easy — one free gift every couple of "
                           "seconds 💜"},
                 status_code=429)
-    cur = conn.execute(
-        "UPDATE users SET tickets_balance = "
-        "COALESCE(tickets_balance,0) - ? WHERE id=? AND "
-        "COALESCE(tickets_balance,0) >= ?", (cost, user["id"], cost))
-    if cur.rowcount != 1:
+    # Pass It On (P5): source='earned' spends the sender's
+    # gift_earned instead of bought tickets — see _gift_move.
+    echo = (data or {}).get("source") == "earned" and cost > 0
+    if not _gift_move(conn, user["id"], recipient_id, cost, echo):
         conn.rollback()
         conn.close()
         return JSONResponse(
             {"ok": False,
-             "error": "Not enough tickets — grab a pack first 🎟️"},
+             "error": ("Not enough earned tickets to Pass It On 🔁"
+                       if echo else
+                       "Not enough tickets — grab a pack first 🎟️")},
             status_code=400)
-    conn.execute(
-        "UPDATE users SET gift_earned = COALESCE(gift_earned,0) + ?, "
-        "gift_lifetime = COALESCE(gift_lifetime,0) + ? WHERE id=?",
-        (cost, cost, recipient_id))
     stamp = now_iso()
     cur = conn.execute(
         "INSERT INTO live_gifts(live_id, sender_id, host_id, "
@@ -18632,12 +18710,15 @@ async def live_gift(request: Request, lid: int):
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, created_at) VALUES(?,?,?,?,?,?)",
-        (user["id"], "gift_send", -cost, lid, gift_key, stamp))
+        (user["id"], "gift_echo" if echo else "gift_send", -cost,
+         lid, gift_key, stamp))
     conn.execute(
         "INSERT INTO ticket_txns(user_id, kind, tickets, live_id, "
         "gift_key, created_at) VALUES(?,?,?,?,?,?)",
-        (recipient_id, "gift_receive", cost, lid, gift_key, stamp))
-    _invite_bonus(conn, recipient_id, cost, stamp)
+        (recipient_id, "gift_echo" if echo else "gift_receive", cost,
+         lid, gift_key, stamp))
+    if not echo:
+        _invite_bonus(conn, recipient_id, cost, stamp)
     # Build W2: Showdown scoring — inside THIS gift's transaction,
     # so a gift scores exactly once, by exactly its ticket cost
     # (the free gift costs 0 = cheers only, scores nothing). The
@@ -18663,11 +18744,14 @@ async def live_gift(request: Request, lid: int):
                 f"UPDATE live_battles SET {_col}={_col}+? WHERE id=? "
                 "AND status='active'", (cost, _bb["id"]))
     conn.commit()
-    bal = conn.execute(
-        "SELECT tickets_balance FROM users WHERE id=?",
-        (user["id"],)).fetchone()["tickets_balance"]
+    _bal_row = conn.execute(
+        "SELECT tickets_balance, gift_earned FROM users WHERE id=?",
+        (user["id"],)).fetchone()
+    bal = _bal_row["tickets_balance"]
     conn.close()
     return JSONResponse({"ok": True, "balance": bal or 0,
+                         "earned": _bal_row["gift_earned"] or 0,
+                         "source": "earned" if echo else "balance",
                          "gift_id": gift_id,
                          "recipient_id": recipient_id,
                          "recipient_name": recipient_name})
@@ -21006,11 +21090,16 @@ async def page_promote_status(request: Request, pid: int, aid: int):
 # (−); gift_earned is credited by 'gift_receive' (+) and moved by
 # 'cashout_hold' (−)/'cashout_return' (+). 'cashout_paid' rows are
 # 0-delta audit markers — the tickets left at hold time.
+# Pass It On (Owner Pack P5): 'gift_echo' rows move gift_earned
+# between two users 1:1 (sender −, recipient +) — total gift_earned
+# is conserved exactly, and echo rows are EXCLUDED from gifter-rank
+# and streamer-level progression (both aggregate gift_send /
+# gift_receive only).
 # Invariant (asserted by tests/test_gifts.py):
 #   tickets_balance == SUM(tickets) WHERE kind IN
 #       ('buy','gift_send','shout')
 #   gift_earned == SUM(tickets) WHERE kind IN
-#       ('gift_receive','cashout_hold','cashout_return')
+#       ('gift_receive','cashout_hold','cashout_return','gift_echo')
 
 def _gift(key, name, tickets, category, anim):
     return {"key": key, "name": name, "tickets": tickets,
@@ -21380,6 +21469,37 @@ def _stripe_api(method, path, params=None, headers=None):
             f"Stripe error {e.code}")
 
 
+# Panel Upgrade P6 — Black Coin Bonus: BC granted per ticket pack,
+# keyed by the pack's ticket count (TICKET_PACKS above). A
+# promotional credit from the owner's own Black Coin stack — the
+# label is always exactly "Black Coin Bonus". Custom-amount buys
+# (any other ticket count) earn no bonus in v1.
+PACK_BC_BONUS = {100: 1000, 500: 7500, 1500: 25000}
+BC_BONUS_REASON = "Black Coin Bonus"
+
+
+def _bc_credit(conn, user_id, delta, reason, ref):
+    """Credit (or debit, delta<0) a user's Black Coin Bonus balance
+    and write the bc_txns ledger row. Caller owns the transaction."""
+    conn.execute(
+        "INSERT INTO bc_balances(user_id, balance) VALUES(?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?",
+        (user_id, delta, delta))
+    conn.execute(
+        "INSERT INTO bc_txns(ts, user_id, delta, reason, ref) "
+        "VALUES(?,?,?,?,?)",
+        (now_iso(), user_id, delta, reason, ref or ""))
+
+
+def _bc_balance(user_id):
+    conn = db()
+    row = conn.execute(
+        "SELECT balance FROM bc_balances WHERE user_id=?",
+        (user_id,)).fetchone()
+    conn.close()
+    return (row["balance"] or 0) if row else 0
+
+
 def credit_purchase(user_id, tickets, session_id):
     """Idempotent purchase crediting — the ONLY buy path. Inserts
     the buy txn first (partial unique index on stripe_session), and
@@ -21401,6 +21521,13 @@ def credit_purchase(user_id, tickets, session_id):
         "UPDATE users SET tickets_balance = "
         "COALESCE(tickets_balance,0) + ? WHERE id=?",
         (tickets, user_id))
+    # Black Coin Bonus rides the SAME transaction, so the purchase
+    # idempotency above covers it too: a duplicate session returns
+    # False before this point and can never double-grant.
+    _bonus = PACK_BC_BONUS.get(tickets)
+    if _bonus:
+        _bc_credit(conn, user_id, _bonus, BC_BONUS_REASON,
+                   session_id)
     conn.commit()
     conn.close()
     return True
@@ -21659,6 +21786,14 @@ def _txn_line(t):
                     f"(+{t['tickets']} 🎟️)")
         face = (g["emoji"] + " ") if g["emoji"] else ""
         return f"Received {face}{g['name']} (+{t['tickets']} 🎟️)"
+    if k == "gift_echo":
+        g = _gift_public(t["gift_key"])
+        face = (g["emoji"] + " ") if g["emoji"] else ""
+        if t["tickets"] < 0:
+            return (f"Passed on {face}{g['name']} "
+                    f"(−{abs(t['tickets'])} 🎟️ from your earnings)")
+        return (f"Received a passed-on gift {face}{g['name']} "
+                f"(+{t['tickets']} 🎟️ to your earnings)")
     if k == "invite_bonus":
         return (f"Invite bonus (+{t['tickets']} 🎟️) — "
                 f"someone you invited is earning")
@@ -21795,6 +21930,7 @@ async def tickets_page(request: Request):
     _tc.close()
     return render(request, "tickets.html", {
         "balance": balance, "earned": earned,
+        "bc_balance": _bc_balance(user["id"]),
         "earned_dollars": _money(_earned_dollars(earned)),
         "earned_worth": _money2(_earned_dollars(earned)),
         "cashout_min": CASHOUT_MIN_TICKETS,
@@ -24081,7 +24217,8 @@ async def owner_dashboard(request: Request):
                       "posts": posts_n, "friends": friends_n,
                       "is_verified_user": bool(u["is_verified_user"]),
                       "is_verified_vendor": bool(u["is_verified_vendor"]),
-                      "idm_member": bool(u["idm_member"])})
+                      "idm_member": bool(u["idm_member"]),
+                      "is_probe": bool(u["is_probe"])})
 
     fact = conn.execute(
         "SELECT f.*, a.name AS req_name, b.name AS tgt_name FROM friendships f "
@@ -24369,7 +24506,23 @@ async def owner_dashboard(request: Request):
             "eligible": (ge >= CASHOUT_MIN_TICKETS
                          and bool(r["payout_ready"]))})
     conn.close()
+    # --- Owner's Cockpit (Panel Upgrade P1): a time-of-day
+    # greeting on Chicago time for the redesigned dash header.
+    # Additive context only — every pre-existing var is unchanged.
+    _hr = _chicago_now().hour
+    if _hr < 5:
+        _greeting = "Up late"
+    elif _hr < 12:
+        _greeting = "Good morning"
+    elif _hr < 17:
+        _greeting = "Good afternoon"
+    elif _hr < 22:
+        _greeting = "Good evening"
+    else:
+        _greeting = "Good night"
+    cockpit = {"greeting": _greeting}
     return render(request, "owner/dashboard.html", {
+        "cockpit": cockpit,
         "race_summary": race_summary,
         "money_users": money_users,
         "users": users, "friend_activity": friend_activity,
@@ -24450,11 +24603,14 @@ async def owner_post_delete(request: Request, pid: int):
     return redir("/owner")
 
 
-@app.post("/owner/user/{uid}/remove")
-async def owner_user_remove(request: Request, uid: int):
-    err = require_owner(request)
-    if err:
-        return err
+def _purge_user(uid):
+    """Delete a user and ALL their content — the exact cascade the
+    owner Remove User button has always run (posts via _delete_post,
+    then comments/likes/hides/tags, messages, friendships, taps,
+    notifications, page memberships, sessions, their flags, and the
+    user row itself). Extracted verbatim (Panel Upgrade P2) so the
+    Probe Janitor deletes probe accounts IDENTICALLY — no second,
+    drift-prone copy of the cascade."""
     conn = db()
     pids = [r["id"] for r in conn.execute("SELECT id FROM posts WHERE user_id=?",
                                           (uid,)).fetchall()]
@@ -24476,9 +24632,572 @@ async def owner_user_remove(request: Request, uid: int):
     conn.execute("DELETE FROM users WHERE id=?", (uid,))
     conn.commit()
     conn.close()
+
+
+@app.post("/owner/user/{uid}/remove")
+async def owner_user_remove(request: Request, uid: int):
+    err = require_owner(request)
+    if err:
+        return err
+    _purge_user(uid)
     if _oa(request):
         return _oa_json("User removed, with all their content.")
     return redir("/owner")
+
+
+# ---------------- Probe Janitor (Panel Upgrade P2) ----------------
+# Stamped probe accounts (users.is_probe=1) are the bug-check
+# tooling's own throwaways. A daemon sweeper (mirroring the DB
+# backup loop) deletes them once they are 15+ minutes old, through
+# the SAME _purge_user cascade as the owner's Remove button. A
+# probe that touches real value is NEVER auto-deleted: the guards
+# below freeze it and write a janitor_log row for the owner's eyes
+# instead. Every decision lands in janitor_log (a skip is logged
+# once per account, not on every pass).
+JANITOR_MIN_AGE_MINUTES = 15
+
+
+def _probe_guard_reason(conn, uid):
+    """Why this probe must NOT be auto-deleted, or "" when clean."""
+    u = conn.execute(
+        "SELECT tickets_balance, gift_earned FROM users WHERE id=?",
+        (uid,)).fetchone()
+    if u is None:
+        return ""
+    bal = u["tickets_balance"] or 0
+    earn = u["gift_earned"] or 0
+    if bal > 0 or earn > 0:
+        return f"holds tickets (balance {bal}, earned {earn})"
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM payout_requests WHERE user_id=?",
+        (uid,)).fetchone()["c"]
+    if n:
+        return f"has {n} cash-out/payout row(s)"
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM messages m "
+        "LEFT JOIN users o ON o.id = CASE WHEN m.sender_id=? "
+        "THEN m.receiver_id ELSE m.sender_id END "
+        "WHERE (m.sender_id=? OR m.receiver_id=?) "
+        "AND COALESCE(o.is_probe,0)=0", (uid, uid, uid)).fetchone()["c"]
+    if n:
+        return f"has {n} message(s) with a non-probe user"
+    return ""
+
+
+def _janitor_sweep():
+    """One janitor pass: delete clean probes aged 15+ minutes,
+    freeze + log guarded ones. Returns (deleted, skipped)."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(minutes=JANITOR_MIN_AGE_MINUTES)).isoformat()
+    conn = db()
+    rows = conn.execute(
+        "SELECT id, name FROM users WHERE COALESCE(is_probe,0)=1 "
+        "AND created_at<? ORDER BY id", (cutoff,)).fetchall()
+    conn.close()
+    deleted = skipped = 0
+    for r in rows:
+        uid = r["id"]
+        conn = db()
+        reason = _probe_guard_reason(conn, uid)
+        if reason:
+            already = conn.execute(
+                "SELECT COUNT(*) c FROM janitor_log WHERE user_id=? "
+                "AND action='skipped_guard'", (uid,)).fetchone()["c"]
+            if not already:
+                conn.execute(
+                    "INSERT INTO janitor_log(ts, user_id, name, "
+                    "action, detail) VALUES(?,?,?,?,?)",
+                    (now_iso(), uid, r["name"], "skipped_guard",
+                     reason))
+                conn.commit()
+            skipped += 1
+            conn.close()
+            continue
+        conn.execute(
+            "INSERT INTO janitor_log(ts, user_id, name, action, "
+            "detail) VALUES(?,?,?,?,?)",
+            (now_iso(), uid, r["name"], "deleted",
+             "probe older than 15 minutes; no guards tripped"))
+        conn.commit()
+        conn.close()
+        _purge_user(uid)
+        deleted += 1
+    return deleted, skipped
+
+
+def _janitor_loop():
+    import time as _time
+    _time.sleep(60)
+    while True:
+        try:
+            _janitor_sweep()
+        except Exception:
+            pass
+        _time.sleep(60)
+
+
+threading.Thread(target=_janitor_loop, daemon=True).start()
+
+
+@app.post("/owner/users/{uid}/probe")
+async def owner_user_probe_toggle(request: Request, uid: int):
+    """Owner switch: stamp (or unstamp) an account as a PROBE for
+    the Janitor — how Ken retires the legacy bug-check accounts
+    that predate signup stamping."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute(
+        "SELECT COALESCE(is_probe,0) AS f, name FROM users "
+        "WHERE id=?", (uid,)).fetchone()
+    if row:
+        newv = 0 if row["f"] else 1
+        conn.execute("UPDATE users SET is_probe=? WHERE id=?",
+                     (newv, uid))
+        conn.commit()
+    conn.close()
+    if _oa(request):
+        if not row:
+            return _oa_fail("That user is gone.")
+        return _oa_json(
+            f"Probe stamp {'ON' if newv else 'OFF'} for "
+            f"{row['name']}.", on=bool(newv))
+    return redir("/owner")
+
+
+# ---------------- Money Desk (Panel Upgrade P3) ----------------
+# /owner/money: read-only reporting over the EXISTING ledgers
+# (ticket_txns for sales, payout_requests for cash-outs) — no new
+# money tables, no parallel ledger. Gross per sale is reconstructed
+# by the same _buy_amount_sql the owner money panel uses, so the
+# Desk and the dashboard can never disagree. Ranges run on Chicago
+# days, like every other money number on the panel.
+
+
+def _money_range(request):
+    """(start_iso, end_iso, preset, from_s, to_s) for the Desk.
+    Explicit from/to (YYYY-MM-DD, Chicago days) win; otherwise the
+    range preset: today / 7d / 30d / all (default 30d). start/end
+    are UTC ISO bounds for created_at, or None for unbounded."""
+    qp = request.query_params
+    from_s = (qp.get("from") or "").strip()
+    to_s = (qp.get("to") or "").strip()
+    start = end = None
+    if from_s and to_s:
+        try:
+            d0 = datetime.strptime(from_s, "%Y-%m-%d").date()
+            d1 = datetime.strptime(to_s, "%Y-%m-%d").date()
+            if d1 >= d0:
+                start = _chicago_day_start_utc(d0)
+                end = _chicago_day_start_utc(d1 + timedelta(days=1))
+                return start, end, "custom", from_s, to_s
+        except ValueError:
+            pass
+    preset = (qp.get("range") or "30d").strip()
+    today = _today_chicago()
+    if preset == "today":
+        start = _chicago_day_start_utc(today)
+        end = _chicago_day_start_utc(today + timedelta(days=1))
+    elif preset == "7d":
+        start = _chicago_day_start_utc(today - timedelta(days=6))
+        end = _chicago_day_start_utc(today + timedelta(days=1))
+    elif preset == "all":
+        start = end = None
+    else:
+        preset = "30d"
+        start = _chicago_day_start_utc(today - timedelta(days=29))
+        end = _chicago_day_start_utc(today + timedelta(days=1))
+    return start, end, preset, "", ""
+
+
+def _money_sales_rows(conn, start, end, limit=500):
+    amt = _buy_amount_sql()
+    sql = ("SELECT t.id, t.created_at, t.tickets, t.stripe_session, "
+           "u.name AS buyer_name, (" + amt + ") AS amount_cents "
+           "FROM ticket_txns t LEFT JOIN users u ON u.id=t.user_id "
+           "WHERE t.kind='buy'")
+    args = []
+    if start is not None:
+        sql += " AND t.created_at>=?"
+        args.append(start)
+    if end is not None:
+        sql += " AND t.created_at<?"
+        args.append(end)
+    sql += " ORDER BY t.id DESC LIMIT ?"
+    args.append(limit)
+    return conn.execute(sql, args).fetchall()
+
+
+@app.get("/owner/money", response_class=HTMLResponse)
+async def owner_money(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    start, end, preset, from_s, to_s = _money_range(request)
+    conn = db()
+    sales_count, gross_c, fee_c = _buy_aggregates(conn, start, end)
+    sales = [{"when": fancy_time(r["created_at"]),
+              "buyer": r["buyer_name"] or "Deleted user",
+              "tickets": r["tickets"],
+              "amount": _money2(r["amount_cents"]),
+              "session": r["stripe_session"] or ""}
+             for r in _money_sales_rows(conn, start, end)]
+    # cash-outs: requested inside the range (by created_at) and
+    # paid inside the range (by decided_at), from the same
+    # payout_requests table the Payouts desk acts on.
+    wsel = ""
+    wargs = []
+    if start is not None:
+        wsel += " AND created_at>=?"
+        wargs.append(start)
+    if end is not None:
+        wsel += " AND created_at<?"
+        wargs.append(end)
+    req_n = conn.execute(
+        "SELECT COUNT(*) c FROM payout_requests WHERE 1=1" + wsel,
+        wargs).fetchone()["c"]
+    dsel = ""
+    dargs = []
+    if start is not None:
+        dsel += " AND decided_at>=?"
+        dargs.append(start)
+    if end is not None:
+        dsel += " AND decided_at<?"
+        dargs.append(end)
+    paid_rows = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(dollars_cents),0) s FROM "
+        "payout_requests WHERE status='paid'" + dsel,
+        dargs).fetchone()
+    payouts = [{"when": fancy_time(r["created_at"]),
+                "name": r["user_name"] or "Deleted user",
+                "tickets": r["tickets"],
+                "dollars": _money2(r["dollars_cents"]),
+                "status": r["status"]}
+               for r in conn.execute(
+                   "SELECT pr.*, u.name AS user_name FROM "
+                   "payout_requests pr LEFT JOIN users u "
+                   "ON u.id=pr.user_id WHERE 1=1"
+                   + wsel.replace("created_at", "pr.created_at") +
+                   " ORDER BY pr.id DESC LIMIT 100", wargs).fetchall()]
+    # owed right now (not range-bound): the dashboard's own math —
+    # earned tickets still in wallets at 0.5c + cash-outs in flight
+    # at the dollars locked when they were requested.
+    earned_out = conn.execute(
+        "SELECT COALESCE(SUM(gift_earned),0) s FROM users"
+    ).fetchone()["s"]
+    held_dollars = conn.execute(
+        "SELECT COALESCE(SUM(dollars_cents),0) s FROM "
+        "payout_requests WHERE status IN ('pending','sending')"
+    ).fetchone()["s"]
+    owed_now = _earned_dollars(earned_out) + held_dollars
+    all_count, all_gross, _af = _buy_aggregates(conn)
+    all_paid = conn.execute(
+        "SELECT COALESCE(SUM(dollars_cents),0) s FROM "
+        "payout_requests WHERE status='paid'").fetchone()["s"]
+    # Black Coin Bonuses granted, all time (P6 ledger total).
+    bc_total = conn.execute(
+        "SELECT COALESCE(SUM(delta),0) s FROM bc_txns "
+        "WHERE reason=?", (BC_BONUS_REASON,)).fetchone()["s"]
+    conn.close()
+    if from_s and to_s:
+        qs = f"from={from_s}&to={to_s}"
+    else:
+        qs = f"range={preset}"
+    return render(request, "owner/money.html", {
+        "preset": preset, "from_s": from_s, "to_s": to_s, "qs": qs,
+        "sales": sales, "sales_count": sales_count,
+        "sales_gross": _money2(gross_c), "fee_est": _money2(fee_c),
+        "sales_capped": sales_count > len(sales),
+        "payouts": payouts, "cashouts_requested": req_n,
+        "cashouts_paid": paid_rows["c"],
+        "paid_in_range": _money2(paid_rows["s"]),
+        "owed_now": _money2(owed_now),
+        "all_sales_count": all_count, "all_gross": _money2(all_gross),
+        "all_paid_out": _money2(all_paid),
+        "bc_total": f"{bc_total:,}"})
+
+
+@app.get("/owner/money.csv")
+async def owner_money_csv(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    start, end, _preset, _f, _t = _money_range(request)
+    conn = db()
+    rows = _money_sales_rows(conn, start, end, limit=5000)
+    conn.close()
+    import csv
+    import io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["created_at", "buyer", "tickets", "amount_usd",
+                "stripe_session"])
+    for r in rows:
+        w.writerow([r["created_at"], r["buyer_name"] or "",
+                    r["tickets"],
+                    f"{(r['amount_cents'] or 0) / 100:.2f}",
+                    r["stripe_session"] or ""])
+    return Response(
+        buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition":
+                 'attachment; filename="here-ticket-sales.csv"'})
+
+
+# ---------------- Talk to Milli (Panel Upgrade P7) ----------------
+# /owner/milli: Ken's chat with Milli inside the owner panel. Ken
+# posts from the page (owner session); Milli reads the unhandled
+# Ken messages through a token-gated machine endpoint and replies
+# through its pair. Honest contract, printed on the page: Milli
+# checks this inbox regularly and replies here — nothing about it
+# is instant or automated on the page itself.
+
+
+def _milli_history(limit=100):
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM milli_msgs ORDER BY id DESC LIMIT ?",
+        (limit,)).fetchall()
+    conn.close()
+    return [{"id": r["id"], "ts": r["ts"], "from": r["from_who"],
+             "body": r["body"], "handled": bool(r["handled"]),
+             "when": fancy_time(r["ts"])}
+            for r in reversed(rows)]
+
+
+def _milli_token_ok(request):
+    """Machine-endpoint gate: the shared token lives ONLY in the
+    MILLI_PANEL_TOKEN env var. Unset env = the endpoints do not
+    exist (404), wrong/missing header = 404 too."""
+    want = os.environ.get("MILLI_PANEL_TOKEN") or ""
+    if not want:
+        return False
+    got = request.headers.get("x-milli-token") or ""
+    import hmac as _hmac
+    return _hmac.compare_digest(got, want)
+
+
+@app.get("/owner/milli", response_class=HTMLResponse)
+async def owner_milli_page(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    return render(request, "owner/milli.html",
+                  {"msgs": _milli_history()})
+
+
+@app.get("/api/owner/milli/history")
+async def owner_milli_history(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    return JSONResponse({"ok": True, "msgs": _milli_history()})
+
+
+@app.post("/api/owner/milli/send")
+async def owner_milli_send(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    body = str((data or {}).get("body") or "").strip()
+    if not body:
+        return JSONResponse({"ok": False, "error": "Type a message "
+                             "first."}, status_code=400)
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO milli_msgs(ts, from_who, body, handled) "
+        "VALUES(?,?,?,0)", (now_iso(), "ken", body[:4000]))
+    mid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "id": mid})
+
+
+@app.get("/api/milli/inbox")
+async def milli_machine_inbox(request: Request):
+    if not _milli_token_ok(request):
+        return JSONResponse({"ok": False}, status_code=404)
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM milli_msgs WHERE from_who='ken' AND "
+        "handled=0 ORDER BY id").fetchall()
+    conn.close()
+    return JSONResponse({"ok": True, "msgs": [
+        {"id": r["id"], "ts": r["ts"], "body": r["body"]}
+        for r in rows]})
+
+
+@app.post("/api/milli/reply")
+async def milli_machine_reply(request: Request):
+    if not _milli_token_ok(request):
+        return JSONResponse({"ok": False}, status_code=404)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    body = str((data or {}).get("body") or "").strip()
+    if not body:
+        return JSONResponse({"ok": False, "error": "Empty reply."},
+                            status_code=400)
+    conn = db()
+    conn.execute(
+        "INSERT INTO milli_msgs(ts, from_who, body, handled) "
+        "VALUES(?,?,?,1)", (now_iso(), "milli", body[:4000]))
+    cur = conn.execute(
+        "UPDATE milli_msgs SET handled=1 WHERE from_who='ken' AND "
+        "handled=0")
+    marked = cur.rowcount
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "marked_handled": marked})
+
+
+# ---------------- One Inbox (Panel Upgrade P4) ----------------
+# /owner/inbox: ONE page aggregating every pending owner queue
+# with counts — verification requests, content flags, pending
+# cash-outs, IDM applications, new suggestions, Match Here face
+# checks. Read-only aggregation: each section deep-links to the
+# existing page where Ken already acts (the dashboard, /owner/idm,
+# /owner/suggestions, /owner/match). No action handlers are
+# rebuilt here, so nothing about deciding changes.
+
+
+@app.get("/owner/inbox", response_class=HTMLResponse)
+async def owner_inbox(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    # --- verification requests (pending) ---
+    verifs = []
+    for r in conn.execute(
+            "SELECT vr.*, ru.name AS requester_name FROM "
+            "verification_requests vr LEFT JOIN users ru "
+            "ON ru.id=vr.requester_id WHERE vr.status='pending' "
+            "ORDER BY vr.created_at ASC LIMIT 25").fetchall():
+        if r["kind"] in ("user", "vuser", "vvendor"):
+            tgt = conn.execute("SELECT name FROM users WHERE id=?",
+                               (r["target_id"],)).fetchone()
+            link = f"/user/{r['target_id']}"
+        else:
+            tgt = conn.execute("SELECT name FROM pages WHERE id=?",
+                               (r["target_id"],)).fetchone()
+            link = f"/page/{r['target_id']}"
+        verifs.append({
+            "kind": r["kind"], "name": tgt["name"] if tgt else "Deleted",
+            "link": link,
+            "requester": r["requester_name"] or "Deleted user",
+            "when": fancy_time(r["created_at"])})
+    n_verif = conn.execute(
+        "SELECT COUNT(*) c FROM verification_requests "
+        "WHERE status='pending'").fetchone()["c"]
+    # --- content flags (pending) ---
+    flags = [{"item_type": r["item_type"], "item_id": r["item_id"],
+              "author": r["author_name"] or "Deleted user",
+              "reasons": r["reasons"], "excerpt": r["excerpt"],
+              "when": fancy_time(r["created_at"])}
+             for r in conn.execute(
+                 "SELECT mf.*, u.name AS author_name FROM "
+                 "moderation_flags mf LEFT JOIN users u "
+                 "ON u.id=mf.author_id WHERE mf.status='pending' "
+                 "ORDER BY mf.created_at ASC LIMIT 25").fetchall()]
+    n_flags = conn.execute(
+        "SELECT COUNT(*) c FROM moderation_flags "
+        "WHERE status='pending'").fetchone()["c"]
+    # --- cash-outs waiting (pending/sending) ---
+    cashouts = [{"user_id": r["user_id"],
+                 "name": r["user_name"] or "Deleted user",
+                 "tickets": r["tickets"],
+                 "dollars": _money2(r["dollars_cents"]),
+                 "status": r["status"],
+                 "when": fancy_time(r["created_at"])}
+                for r in conn.execute(
+                    "SELECT pr.*, u.name AS user_name FROM "
+                    "payout_requests pr LEFT JOIN users u "
+                    "ON u.id=pr.user_id WHERE pr.status IN "
+                    "('pending','sending') ORDER BY pr.created_at "
+                    "ASC LIMIT 25").fetchall()]
+    n_cash = conn.execute(
+        "SELECT COUNT(*) c FROM payout_requests WHERE status IN "
+        "('pending','sending')").fetchone()["c"]
+    # --- IDM applications (pending) ---
+    idm_apps = [{"user_id": r["user_id"],
+                 "name": r["user_name"] or "Deleted user",
+                 "note": r["note"],
+                 "when": fancy_time(r["created_at"])}
+                for r in conn.execute(
+                    "SELECT ir.*, u.name AS user_name FROM "
+                    "idm_requests ir LEFT JOIN users u "
+                    "ON u.id=ir.user_id WHERE ir.status='pending' "
+                    "ORDER BY ir.created_at ASC LIMIT 25").fetchall()]
+    n_idm = conn.execute(
+        "SELECT COUNT(*) c FROM idm_requests "
+        "WHERE status='pending'").fetchone()["c"]
+    # --- new suggestions ---
+    suggs = [{"user_id": r["user_id"],
+              "name": r["user_name"] or "Deleted user",
+              "text": r["text"], "source": r["source"],
+              "when": fancy_time(r["created_at"])}
+             for r in conn.execute(
+                 "SELECT s.*, u.name AS user_name FROM "
+                 "app_suggestions s LEFT JOIN users u "
+                 "ON u.id=s.user_id WHERE s.status='new' "
+                 "ORDER BY s.created_at DESC LIMIT 25").fetchall()]
+    n_sugg = conn.execute(
+        "SELECT COUNT(*) c FROM app_suggestions "
+        "WHERE status='new'").fetchone()["c"]
+    # --- Match Here face checks (pending) ---
+    faces = [{"user_id": r["user_id"],
+              "name": r["name"] or "Deleted user",
+              "city": r["city"], "state": r["state"],
+              "when": fancy_time(r["updated_at"])}
+             for r in conn.execute(
+                 "SELECT mp.*, u.name FROM match_profiles mp "
+                 "LEFT JOIN users u ON u.id=mp.user_id "
+                 "WHERE mp.face_status='pending' "
+                 "ORDER BY mp.updated_at ASC LIMIT 25").fetchall()]
+    n_face = conn.execute(
+        "SELECT COUNT(*) c FROM match_profiles "
+        "WHERE face_status='pending'").fetchone()["c"]
+    conn.close()
+    total = n_verif + n_flags + n_cash + n_idm + n_sugg + n_face
+    return render(request, "owner/inbox.html", {
+        "total": total,
+        "verifs": verifs, "n_verif": n_verif,
+        "flags": flags, "n_flags": n_flags,
+        "cashouts": cashouts, "n_cash": n_cash,
+        "idm_apps": idm_apps, "n_idm": n_idm,
+        "suggs": suggs, "n_sugg": n_sugg,
+        "faces": faces, "n_face": n_face})
+
+
+@app.get("/owner/janitor", response_class=HTMLResponse)
+async def owner_janitor(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    logs = [{"ts": fancy_time(r["ts"]), "user_id": r["user_id"],
+             "name": r["name"], "action": r["action"],
+             "detail": r["detail"]}
+            for r in conn.execute(
+                "SELECT * FROM janitor_log ORDER BY id DESC "
+                "LIMIT 200").fetchall()]
+    probes = []
+    for r in conn.execute(
+            "SELECT * FROM users WHERE COALESCE(is_probe,0)=1 "
+            "ORDER BY created_at ASC").fetchall():
+        probes.append({
+            "id": r["id"], "name": r["name"], "email": r["email"],
+            "created_at": fancy_time(r["created_at"]),
+            "guard": _probe_guard_reason(conn, r["id"])})
+    conn.close()
+    return render(request, "owner/janitor.html",
+                  {"logs": logs, "probes": probes})
 
 
 # ---------------- verification ----------------
