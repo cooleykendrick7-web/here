@@ -19,10 +19,12 @@
       <div style="font-size:30px;font-weight:900">{{ earned }} 🎟️</div>
       <div style="color:var(--muted);font-size:13px">Earned from your lives</div>
     </div>
+    {% if bc_enabled %}
     <div>
       <div style="font-size:30px;font-weight:900;color:#f5b301">{{ "{:,}".format(bc_balance) }} BC</div>
       <div style="color:var(--muted);font-size:13px">Black Coin Bonus — free BC added with ticket packs</div>
     </div>
+    {% endif %}
   </div>
   <p style="font-size:13.5px;margin-top:12px">
     <a href="/earnings" style="font-weight:700">Earned tickets: {{ earned }} — worth {{ earned_worth|e }}{% if can_cashout %} — ready to cash out →{% else %} · cash out at {{ "{:,}".format(cashout_min) }} 🎟️{% endif %}</a>
@@ -36,6 +38,7 @@
   </p>
 </div>
 
+{% if bc_enabled %}
 <div class="card">
   <div class="section-title">🪙 Black Coin Bonus — withdraw to your wallet</div>
   <p style="font-size:14.5px;margin-top:8px">Your bonus balance: <strong style="color:#f5b301">{{ "{:,}".format(bc_balance) }} BC</strong>. Withdraw it to your own Base wallet and it's real Black Coin in your hands.</p>
@@ -67,6 +70,7 @@
   </div>
   {% endif %}
 </div>
+{% endif %}
 
 <div class="card">
   <div class="section-title">{{ ic('market') }} Get tickets</div>
