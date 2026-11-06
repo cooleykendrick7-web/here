@@ -1151,6 +1151,9 @@ function liveRoomDiff(prev, next){
   var lastGame = null;            /* state payload's last_game */
   /* ---- Live Tickets state ---- */
   var myTickets = B.tickets || 0; /* my spendable balance */
+  var myEarned = B.earned || 0;   /* Pass It On: my earned tickets */
+  var giftSource = 'balance';     /* 'balance' | 'earned' */
+  function giftAvail(){ return giftSource === 'earned' ? myEarned : myTickets; }
   var lastGiftId = 0;             /* recent_gifts cursor (anim dedupe) */
   var seenGiftIds = {};           /* Build RICH: per-send dedupe set —
                                      the sender renders their gift locally
@@ -6944,19 +6947,21 @@ function liveRoomDiff(prev, next){
     var now = Date.now();
     if (now - boostLastAt < 150) return;   /* double-tap lockout */
     boostLastAt = now;
-    if (myTickets < g.tickets){
-      toast('Not enough tickets — grab a pack 🎟️');
+    if (giftAvail() < g.tickets){
+      toast(giftSource === 'earned'
+        ? 'Not enough earned tickets to Pass It On 🔁'
+        : 'Not enough tickets — grab a pack 🎟️');
       hideBoostChip();
       return;
     }
     boostBusy = true;
     $('gift-boost').disabled = true;
-    post('/gift', {gift_key: g.key, target_user_id: giftTargetId}).then(function(d){
+    post('/gift', {gift_key: g.key, target_user_id: giftTargetId, source: giftSource}).then(function(d){
       boostBusy = false;
       var chip = $('gift-boost');
       if (chip) chip.disabled = false;
       if (d && d.ok){
-        myTickets = d.balance;
+        myTickets = d.balance; if (typeof d.earned === 'number') myEarned = d.earned;
         paintTickets();
         renderLocalGift(g, d.gift_id, d);
         showBoostChip(g, boostCount + 1);
@@ -7254,9 +7259,12 @@ function renderTopGifters(list){
   }
   function sendGift(g){
     if (ended) return;
-    if (myTickets < g.tickets){
-      toast('Not enough tickets — grab a pack 🎟️');
-      window.open('/tickets', '_blank');
+    if (giftAvail() < g.tickets){
+      toast(giftSource === 'earned'
+        ? 'Not enough earned tickets to Pass It On 🔁'
+        : 'Not enough tickets — grab a pack 🎟️');
+      if (giftSource === 'balance')
+        window.open('/tickets', '_blank');
       return;
     }
     if (g.tickets >= 500){
@@ -7268,9 +7276,9 @@ function renderTopGifters(list){
       }
       armedGiftKey = null;
     }
-    post('/gift', {gift_key: g.key, target_user_id: giftTargetId}).then(function(d){
+    post('/gift', {gift_key: g.key, target_user_id: giftTargetId, source: giftSource}).then(function(d){
       if (d && d.ok){
-        myTickets = d.balance;
+        myTickets = d.balance; if (typeof d.earned === 'number') myEarned = d.earned;
         paintTickets();
         renderLocalGift(g, d.gift_id, d);
         toast('Sent ' + g.name + ' to '
@@ -7290,10 +7298,38 @@ function renderTopGifters(list){
     var bal = document.createElement('div');
     bal.style.cssText = 'padding:10px 8px;font-size:14px';
     bal.innerHTML = '🎟️ Your tickets: <strong id="gift-balance">'
-      + myTickets + '</strong> · <a href="/tickets" target="_blank" '
+      + myTickets + '</strong> · 🔁 Earned: <strong>' + myEarned
+      + '</strong> · <a href="/tickets" target="_blank" '
       + 'rel="noopener" style="color:#ffd97a;font-weight:700">'
       + 'Get tickets 🎟️</a>';
     sheetActions.appendChild(bal);
+    var srcRow = document.createElement('div');
+    srcRow.style.cssText = 'display:flex;gap:6px;padding:0 8px 8px';
+    [['balance', '🎟️ My tickets'], ['earned', '🔁 Pass It On']
+    ].forEach(function(pair){
+      var sb = document.createElement('button');
+      sb.type = 'button';
+      sb.textContent = pair[1] + ' ('
+        + (pair[0] === 'earned' ? myEarned : myTickets) + ')';
+      sb.style.cssText = 'flex:1;padding:7px 4px;border-radius:999px;'
+        + 'font-weight:700;font-size:13px;cursor:pointer;color:#fff;'
+        + 'border:1px solid '
+        + (giftSource === pair[0] ? '#d41f2e' : 'rgba(255,255,255,.25)')
+        + ';background:'
+        + (giftSource === pair[0] ? '#d41f2e' : 'rgba(255,255,255,.06)');
+      sb.addEventListener('click', function(){
+        giftSource = pair[0]; armedGiftKey = null; renderGiftSheet();
+      });
+      srcRow.appendChild(sb);
+    });
+    sheetActions.appendChild(srcRow);
+    var srcHint = document.createElement('div');
+    srcHint.style.cssText = 'padding:0 8px 8px;font-size:12.5px;'
+      + 'color:#ffd97a;font-weight:700';
+    srcHint.textContent = giftSource === 'earned'
+      ? '🔁 Pass It On — gift from my earned tickets: spends tickets YOU earned; they land as earnings for them.'
+      : '🎟️ Gifts spend from your ticket balance.';
+    sheetActions.appendChild(srcHint);
     var tline = document.createElement('div');
     tline.style.cssText = 'padding:0 8px 8px;font-size:13px;'
       + 'color:#ffd97a;font-weight:700';
@@ -7338,7 +7374,7 @@ function renderTopGifters(list){
       var armed = g.tickets >= 500 && armedGiftKey === g.key
         && (Date.now() - armedGiftAt) <= 3000;
       if (armed) cell.className += ' armed';
-      if (g.tickets > myTickets) cell.className += ' cant';
+      if (g.tickets > giftAvail()) cell.className += ' cant';
       if (g.img){
         var im = document.createElement('img');
         im.className = 'g-art'; im.src = g.img; im.alt = g.name;
@@ -7384,7 +7420,7 @@ function renderTopGifters(list){
       if (!body) return;
       post('/shout', {body: body}).then(function(d){
         if (d && d.ok){
-          myTickets = d.balance;
+          myTickets = d.balance; if (typeof d.earned === 'number') myEarned = d.earned;
           paintTickets();
           inp.value = '';
           toast('📌 Shout pinned for 60 seconds!');
@@ -8069,6 +8105,9 @@ function renderTopGifters(list){
         if (typeof d.my_tickets === 'number'){
           myTickets = d.my_tickets;
           try{ paintTickets(); }catch(_e){}
+        }
+        if (typeof d.my_earned === 'number'){
+          myEarned = d.my_earned;
         }
         (d.recent_gifts || []).forEach(function(g){
           try{ handleGiftEvent(g); }catch(_e){}
