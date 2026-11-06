@@ -107,6 +107,12 @@ check("a logged-in member is not the owner",
 print("== 1. Zero balance: no form ==")
 here.credit_purchase(AID, 1500, "cs_w_1500")   # +25,000 BC
 here.credit_purchase(BID, 500, "cs_w_500")     # +7,500 BC
+# Black Coin participation is opt-in now (deep Settings toggle,
+# users.bc_enabled, default off): A and B flip it on through the
+# real settings flow, like members, before using the door. C
+# never does — her no-form check below holds either way.
+A.post("/settings/blackcoin", data={"bc_enabled": "1"})
+B.post("/settings/blackcoin", data={"bc_enabled": "1"})
 check("A funded 25,000", bal(AID) == 25000)
 check("B funded 7,500", bal(BID) == 7500)
 html = C.get("/tickets").text
@@ -248,6 +254,7 @@ check("desk liability back to balances only (22,500)",
 print("== 7. Minimum boundary ==")
 here.credit_purchase(CID, 100, "cs_w_100")   # exactly 1,000 BC
 check("C funded exactly 1,000", bal(CID) == 1000)
+C.post("/settings/blackcoin", data={"bc_enabled": "1"})
 r = try_withdraw(C, address=ADDR, amount="1000")
 check("a 1,000 BC request is allowed", r.status_code == 303)
 check("C reserved to 0", bal(CID) == 0)
