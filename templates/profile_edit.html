@@ -470,6 +470,25 @@
   </details>
 </div>
 
+<div class="card" id="blackcoin">
+  <details{% if bc_flash %} open{% endif %}>
+    <summary style="cursor:pointer;font-weight:800;font-size:15px">🚪 More doors — the quiet end of Settings</summary>
+    <p style="margin-top:10px;color:var(--muted)">You scrolled all the way down here. Most people never do — the doors past this point are for members who study HERE.</p>
+    {% if bc_flash == 'on' %}<p style="font-weight:700;color:#1d9e50;margin-top:8px">✅ Black Coin is on — your bonus balance and the withdrawal door are waiting on your wallet page.</p>
+    {% elif bc_flash == 'off' %}<p style="font-weight:700;color:#c0392b;margin-top:8px">Black Coin is off. Your bonus still adds up with every ticket pack — flip this on whenever you're ready to see it.</p>{% endif %}
+    <div style="margin-top:14px">
+      <div style="font-weight:800;font-size:15px">🪙 Black Coin</div>
+      <p style="margin-top:6px;color:var(--muted)">HERE's own coin on the Base chain. Turn this on to see your Black Coin Bonus balance and withdraw it to your own wallet.</p>
+      <form action="/settings/blackcoin" method="post" style="margin-top:10px">
+        <div class="field">
+          <label style="font-weight:500"><input type="checkbox" name="bc_enabled" value="1" {% if bc_enabled %}checked{% endif %}> Black Coin — show my bonus balance and let me withdraw it</label>
+        </div>
+        <button type="submit" class="btn">Save Black Coin</button>
+      </form>
+    </div>
+  </details>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
