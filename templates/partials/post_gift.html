@@ -130,6 +130,9 @@
       sentEl = $('togift-sent'), fxLayer = $('togift-fx-layer');
   if (!sheet || !PG) return;
   var myTickets = TG.balance || 0;
+  var myEarned = TG.earned || 0;
+  var giftSource = 'balance';
+  function giftAvail(){ return giftSource === 'earned' ? myEarned : myTickets; }
   var curPost = null, curName = 'them';
   var giftCat = 'money';
   var armedKey = null, armedAt = 0;
@@ -305,7 +308,7 @@
     var bal = document.createElement('div');
     bal.className = 'togift-bal';
     bal.innerHTML = '🎟️ Your tickets: <strong id="togift-balance">'
-      + myTickets + '</strong> · <a href="/tickets" target="_blank" '
+      + myTickets + '</strong> · 🔁 Earned: <strong>' + myEarned + '</strong> · <a href="/tickets" target="_blank" '
       + 'rel="noopener" style="font-weight:700">Get tickets 🎟️</a>';
     actionsEl.appendChild(bal);
     var tline = document.createElement('div');
@@ -313,6 +316,34 @@
     tline.textContent = '🎯 Gifting: ' + curName
       + ' — they earn every ticket, same as on a live';
     actionsEl.appendChild(tline);
+    var srcRow = document.createElement('div');
+    srcRow.style.cssText = 'display:flex;gap:6px;padding:2px 2px 4px';
+    [['balance', '🎟️ My tickets'], ['earned', '🔁 Pass It On']
+    ].forEach(function(pair){
+      var sb = document.createElement('button');
+      sb.type = 'button';
+      sb.textContent = pair[1] + ' ('
+        + (pair[0] === 'earned' ? myEarned : myTickets) + ')';
+      sb.style.cssText = 'flex:1;padding:7px 4px;border-radius:999px;'
+        + 'font-weight:700;font-size:13px;cursor:pointer;color:inherit;'
+        + 'border:1px solid '
+        + (giftSource === pair[0] ? 'var(--red)' : 'var(--border)')
+        + ';background:'
+        + (giftSource === pair[0] ? 'var(--red)' : 'rgba(127,127,127,.10)')
+        + (giftSource === pair[0] ? ';color:#fff' : '');
+      sb.addEventListener('click', function(){
+        giftSource = pair[0]; armedKey = null; renderSheet();
+      });
+      srcRow.appendChild(sb);
+    });
+    actionsEl.appendChild(srcRow);
+    var srcHint = document.createElement('div');
+    srcHint.style.cssText = 'padding:0 2px 6px;font-size:12.5px;'
+      + 'color:#b8860b;font-weight:700';
+    srcHint.textContent = giftSource === 'earned'
+      ? '🔁 Pass It On — gift from my earned tickets: spends tickets YOU earned; they land as earnings for them.'
+      : '🎟️ This gift spends from your ticket balance.';
+    actionsEl.appendChild(srcHint);
     var tabs = document.createElement('div');
     tabs.className = 'togift-tabs';
     [['money', '💰 Money'], ['love', '❤️ Love'],
@@ -336,7 +367,7 @@
       var cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'togift-cell'
-        + (myTickets < g.tickets ? ' cant' : '')
+        + (giftAvail() < g.tickets ? ' cant' : '')
         + (armedKey === g.key ? ' armed' : '');
       var im = document.createElement('img');
       im.className = 'g-art'; im.src = g.img; im.alt = g.name || '';
@@ -358,8 +389,10 @@
   function sendGift(g){
     var now = Date.now();
     if (toBusy || now - toLastAt < 150) return;  /* in-flight lock */
-    if (myTickets < g.tickets){
-      showToError('Not enough tickets — grab a pack first 🎟️');
+    if (giftAvail() < g.tickets){
+      showToError(giftSource === 'earned'
+        ? 'Not enough earned tickets to Pass It On 🔁'
+        : 'Not enough tickets — grab a pack first 🎟️');
       return;
     }
     if (g.tickets >= 500){
@@ -374,12 +407,12 @@
     fetch('/post/' + curPost + '/gift', {
       method: 'POST', credentials: 'same-origin',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({gift_key: g.key})
+      body: JSON.stringify({gift_key: g.key, source: giftSource})
     }).then(function(r){ return r.json(); })
       .then(function(d){
         toBusy = false;
         if (d && d.ok){
-          myTickets = d.balance;
+          myTickets = d.balance; if (typeof d.earned === 'number') myEarned = d.earned;
           playToGift(g, d.recipient_name || curName);
           showToSent('Sent ' + g.name + ' to '
             + (d.recipient_name || curName) + '!');
