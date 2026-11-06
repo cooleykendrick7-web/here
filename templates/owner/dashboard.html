@@ -513,7 +513,7 @@ a.readout .r-lbl::after{content:" →";color:#ff4757}
         {% for u in users %}
         <tr>
           <td>{{ u.id }}</td>
-          <td><a href="/user/{{ u.id }}">{{ u.name|e }}</a></td>
+          <td><a href="/user/{{ u.id }}">{{ u.name|e }}</a>{% if u.bc_enabled %} <span title="Black Coin member — opted in from deep Settings">🪙</span>{% endif %}</td>
           <td>{{ u.email|e }}</td>
           <td>{{ u.created_at|e }}</td>
           <td>{{ u.posts }}</td>
