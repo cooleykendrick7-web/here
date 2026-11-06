@@ -1663,7 +1663,9 @@ def init_db():
     # Panel Upgrade P6 (Black Coin Bonus): promotional BC credited
     # from the owner's own Black Coin stack when a ticket pack is
     # bought. bc_balances is the per-user total; bc_txns is the
-    # audit ledger. Display-only in v1 — no withdrawal path.
+    # audit ledger. The withdrawal door (bc_withdrawals) lets a
+    # user reserve BC out of their balance to be sent real Black
+    # Coin from the owner's own wallet by hand.
     c.execute("""CREATE TABLE IF NOT EXISTS bc_balances (
         user_id INTEGER PRIMARY KEY,
         balance INTEGER NOT NULL DEFAULT 0)""")
@@ -1672,6 +1674,16 @@ def init_db():
         ts TEXT NOT NULL, user_id INTEGER NOT NULL,
         delta INTEGER NOT NULL, reason TEXT DEFAULT '',
         ref TEXT DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS bc_withdrawals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        amount INTEGER NOT NULL,
+        address TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        decided_at TEXT DEFAULT '',
+        tx_hash TEXT DEFAULT '',
+        note TEXT DEFAULT '')""")
     # Panel Upgrade P7 (Talk to Milli): the owner's chat with Milli
     # inside the panel. from_who is 'ken' or 'milli'; handled marks
     # Ken's messages Milli has picked up (set by /api/milli/reply).
@@ -21477,6 +21489,26 @@ def _stripe_api(method, path, params=None, headers=None):
 PACK_BC_BONUS = {100: 1000, 500: 7500, 1500: 25000}
 BC_BONUS_REASON = "Black Coin Bonus"
 
+# BC Bonus withdrawal door: a user reserves BC out of their bonus
+# balance to their own Base wallet; the owner sends real Black
+# Coin from his own wallet by hand (his signature, off-platform)
+# and marks the request sent with the tx hash. Declining refunds
+# the reservation. Every balance move is a bc_txns row written by
+# _bc_credit, so bc_balances.balance always equals the sum of the
+# user's bc_txns deltas, and total granted always equals
+# balances + pending reservations + sent withdrawals.
+BC_WITHDRAW_MIN = 1000
+BC_STACK_TOTAL = 500_000_000  # the owner's own Black Coin stack
+BC_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+BC_TXHASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
+BC_WITHDRAW_REASON = "withdraw_request"
+BC_REFUND_REASON = "withdraw_refund"
+
+
+def _bc_short(address):
+    a = address or ""
+    return (a[:6] + "…" + a[-4:]) if len(a) > 12 else a
+
 
 def _bc_credit(conn, user_id, delta, reason, ref):
     """Credit (or debit, delta<0) a user's Black Coin Bonus balance
@@ -21910,7 +21942,22 @@ async def tickets_page(request: Request):
     txns = conn.execute(
         "SELECT * FROM ticket_txns WHERE user_id=? ORDER BY id DESC "
         "LIMIT 30", (user["id"],)).fetchall()
+    bc_wd_rows = conn.execute(
+        "SELECT * FROM bc_withdrawals WHERE user_id=? "
+        "ORDER BY id DESC LIMIT 10", (user["id"],)).fetchall()
     conn.close()
+    bc_withdrawals = [{
+        "id": w["id"], "amount_fmt": f"{w['amount']:,}",
+        "address": w["address"],
+        "address_short": _bc_short(w["address"]),
+        "status": w["status"],
+        "when": fancy_time(w["created_at"]),
+        "tx_hash": w["tx_hash"] or "",
+        "tx_url": (f"https://basescan.org/tx/{w['tx_hash']}"
+                   if w["tx_hash"] else "")}
+        for w in bc_wd_rows]
+    bc_pending = any(w["status"] == "pending"
+                     for w in bc_withdrawals)
     payouts_history = [{
         "id": p["id"], "paid": p["status"] == "paid",
         "tickets": p["tickets"],
@@ -21931,6 +21978,11 @@ async def tickets_page(request: Request):
     return render(request, "tickets.html", {
         "balance": balance, "earned": earned,
         "bc_balance": _bc_balance(user["id"]),
+        "bc_withdrawals": bc_withdrawals,
+        "bc_pending": bc_pending,
+        "bc_withdraw_min": BC_WITHDRAW_MIN,
+        "pack_bonus": {k: PACK_BC_BONUS.get(v["tickets"], 0)
+                       for k, v in TICKET_PACKS.items()},
         "earned_dollars": _money(_earned_dollars(earned)),
         "earned_worth": _money2(_earned_dollars(earned)),
         "cashout_min": CASHOUT_MIN_TICKETS,
@@ -21955,6 +22007,69 @@ async def tickets_page(request: Request):
         "setup_q": setup_q,
         "payouts_history": payouts_history,
         "quest": quest})
+
+
+@app.post("/tickets/bc/withdraw")
+async def tickets_bc_withdraw(request: Request):
+    """Reserve Black Coin Bonus BC for withdrawal to the user's
+    own Base wallet. The amount leaves bc_balances immediately
+    (bc_txns 'withdraw_request', ref = the withdrawal id) and sits
+    reserved in a pending bc_withdrawals row; the owner sends real
+    Black Coin from his own wallet by hand and marks it sent, or
+    declines and the reservation is refunded. One pending request
+    per user at a time."""
+    user, err = require_login(request)
+    if err:
+        return err
+    try:
+        form = await request.form()
+    except Exception:
+        form = {}
+    address = (form.get("address") or "").strip()
+    raw_amount = (form.get("amount") or "").strip()
+    if not BC_ADDRESS_RE.match(address):
+        return redir("/tickets",
+                     "That wallet address doesn't look right — "
+                     "a Base address starts with 0x and is 42 "
+                     "characters long.")
+    try:
+        amount = int(raw_amount)
+    except (TypeError, ValueError):
+        amount = 0
+    conn = db()
+    row = conn.execute(
+        "SELECT balance FROM bc_balances WHERE user_id=?",
+        (user["id"],)).fetchone()
+    balance = (row["balance"] or 0) if row else 0
+    if amount < BC_WITHDRAW_MIN:
+        conn.close()
+        return redir("/tickets",
+                     f"Withdrawals start at "
+                     f"{BC_WITHDRAW_MIN:,} BC.")
+    if amount > balance:
+        conn.close()
+        return redir("/tickets",
+                     f"You only have {balance:,} BC in your "
+                     "Black Coin Bonus balance.")
+    if conn.execute(
+            "SELECT 1 FROM bc_withdrawals WHERE user_id=? AND "
+            "status='pending'", (user["id"],)).fetchone():
+        conn.close()
+        return redir("/tickets",
+                     "You already have a Black Coin withdrawal "
+                     "on its way — one at a time.")
+    cur = conn.execute(
+        "INSERT INTO bc_withdrawals(user_id, amount, address, "
+        "status, created_at) VALUES(?,?,?,'pending',?)",
+        (user["id"], amount, address, now_iso()))
+    wid = cur.lastrowid
+    _bc_credit(conn, user["id"], -amount, BC_WITHDRAW_REASON,
+               str(wid))
+    conn.commit()
+    conn.close()
+    return redir("/tickets",
+                 f"Withdrawal requested — {amount:,} BC is "
+                 "reserved and on its way to your wallet.")
 
 
 @app.post("/tickets/buy")
@@ -25060,7 +25175,8 @@ async def milli_machine_reply(request: Request):
 # /owner/inbox: ONE page aggregating every pending owner queue
 # with counts — verification requests, content flags, pending
 # cash-outs, IDM applications, new suggestions, Match Here face
-# checks. Read-only aggregation: each section deep-links to the
+# checks, Black Coin withdrawals. Read-only aggregation: each
+# section deep-links to the
 # existing page where Ken already acts (the dashboard, /owner/idm,
 # /owner/suggestions, /owner/match). No action handlers are
 # rebuilt here, so nothing about deciding changes.
@@ -25163,8 +25279,23 @@ async def owner_inbox(request: Request):
     n_face = conn.execute(
         "SELECT COUNT(*) c FROM match_profiles "
         "WHERE face_status='pending'").fetchone()["c"]
+    # --- Black Coin withdrawals (pending) ---
+    bc_wds = [{"user_id": r["user_id"],
+               "name": r["user_name"] or "Deleted user",
+               "amount": f"{r['amount']:,}",
+               "address": r["address"],
+               "when": fancy_time(r["created_at"])}
+              for r in conn.execute(
+                  "SELECT w.*, u.name AS user_name FROM "
+                  "bc_withdrawals w LEFT JOIN users u "
+                  "ON u.id=w.user_id WHERE w.status='pending' "
+                  "ORDER BY w.created_at ASC LIMIT 25").fetchall()]
+    n_bc = conn.execute(
+        "SELECT COUNT(*) c FROM bc_withdrawals "
+        "WHERE status='pending'").fetchone()["c"]
     conn.close()
-    total = n_verif + n_flags + n_cash + n_idm + n_sugg + n_face
+    total = (n_verif + n_flags + n_cash + n_idm + n_sugg + n_face
+             + n_bc)
     return render(request, "owner/inbox.html", {
         "total": total,
         "verifs": verifs, "n_verif": n_verif,
@@ -25172,7 +25303,8 @@ async def owner_inbox(request: Request):
         "cashouts": cashouts, "n_cash": n_cash,
         "idm_apps": idm_apps, "n_idm": n_idm,
         "suggs": suggs, "n_sugg": n_sugg,
-        "faces": faces, "n_face": n_face})
+        "faces": faces, "n_face": n_face,
+        "bc_wds": bc_wds, "n_bc": n_bc})
 
 
 @app.get("/owner/janitor", response_class=HTMLResponse)
@@ -25198,6 +25330,134 @@ async def owner_janitor(request: Request):
     conn.close()
     return render(request, "owner/janitor.html",
                   {"logs": logs, "probes": probes})
+
+
+# ---------------- Black Coin Withdrawals Desk ----------------
+# /owner/bc: the owner works the BC Bonus withdrawal queue here.
+# A request reserved its BC out of the user's bc_balances when it
+# was filed (bc_txns 'withdraw_request'); the owner sends real
+# Black Coin from his own wallet by hand — his signature, outside
+# HERE — then pastes the transaction hash here to mark it sent.
+# Declining refunds the reservation (bc_txns 'withdraw_refund').
+# Outstanding liability = BC still sitting in member balances +
+# BC reserved in pending withdrawals, all of it owed out of the
+# owner's own 500,000,000 BC stack.
+
+
+@app.get("/owner/bc", response_class=HTMLResponse)
+async def owner_bc(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    granted = conn.execute(
+        "SELECT COALESCE(SUM(delta),0) s FROM bc_txns "
+        "WHERE reason=?", (BC_BONUS_REASON,)).fetchone()["s"]
+    balances_total = conn.execute(
+        "SELECT COALESCE(SUM(balance),0) s FROM bc_balances"
+    ).fetchone()["s"]
+    pend_rows = conn.execute(
+        "SELECT w.*, u.name AS user_name FROM bc_withdrawals w "
+        "LEFT JOIN users u ON u.id=w.user_id "
+        "WHERE w.status='pending' ORDER BY w.id ASC").fetchall()
+    pending_amount = sum(r["amount"] for r in pend_rows)
+    sent_total = conn.execute(
+        "SELECT COALESCE(SUM(amount),0) s FROM bc_withdrawals "
+        "WHERE status='sent'").fetchone()["s"]
+    hist_rows = conn.execute(
+        "SELECT w.*, u.name AS user_name FROM bc_withdrawals w "
+        "LEFT JOIN users u ON u.id=w.user_id "
+        "WHERE w.status!='pending' ORDER BY w.id DESC "
+        "LIMIT 50").fetchall()
+    conn.close()
+
+    def _wrow(r):
+        return {"id": r["id"], "user_id": r["user_id"],
+                "name": r["user_name"] or "Deleted user",
+                "amount_fmt": f"{r['amount']:,}",
+                "address": r["address"],
+                "status": r["status"],
+                "when": fancy_time(r["created_at"]),
+                "decided": (fancy_time(r["decided_at"])
+                            if r["decided_at"] else ""),
+                "tx_hash": r["tx_hash"] or "",
+                "tx_url": (f"https://basescan.org/tx/{r['tx_hash']}"
+                           if r["tx_hash"] else "")}
+
+    liability = balances_total + pending_amount
+    return render(request, "owner/bc.html", {
+        "granted_fmt": f"{granted:,}",
+        "sent_fmt": f"{sent_total:,}",
+        "balances_fmt": f"{balances_total:,}",
+        "pending_amount_fmt": f"{pending_amount:,}",
+        "liability_fmt": f"{liability:,}",
+        "stack_fmt": f"{BC_STACK_TOTAL:,}",
+        "n_pending": len(pend_rows),
+        "pending": [_wrow(r) for r in pend_rows],
+        "history": [_wrow(r) for r in hist_rows]})
+
+
+@app.post("/owner/bc/{wid}/sent")
+async def owner_bc_sent(request: Request, wid: int):
+    """Owner marks a withdrawal sent after sending real Black
+    Coin from his own wallet; the pasted tx hash is stored and
+    shown to the user with a BaseScan link."""
+    err = require_owner(request)
+    if err:
+        return err
+    try:
+        form = await request.form()
+    except Exception:
+        form = {}
+    tx_hash = (form.get("tx_hash") or "").strip()
+    if not BC_TXHASH_RE.match(tx_hash):
+        return redir("/owner/bc",
+                     "Paste the full transaction hash first "
+                     "(0x plus 64 characters, from the send).")
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM bc_withdrawals WHERE id=?",
+        (wid,)).fetchone()
+    if not row or row["status"] != "pending":
+        conn.close()
+        return redir("/owner/bc",
+                     "That withdrawal was already decided.")
+    conn.execute(
+        "UPDATE bc_withdrawals SET status='sent', decided_at=?, "
+        "tx_hash=? WHERE id=?", (now_iso(), tx_hash, wid))
+    conn.commit()
+    conn.close()
+    return redir("/owner/bc",
+                 f"Marked sent — {row['amount']:,} BC to "
+                 f"{row['address']}.")
+
+
+@app.post("/owner/bc/{wid}/decline")
+async def owner_bc_decline(request: Request, wid: int):
+    """Owner declines a withdrawal: the reserved BC goes straight
+    back into the user's bonus balance (bc_txns
+    'withdraw_refund')."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM bc_withdrawals WHERE id=?",
+        (wid,)).fetchone()
+    if not row or row["status"] != "pending":
+        conn.close()
+        return redir("/owner/bc",
+                     "That withdrawal was already decided.")
+    conn.execute(
+        "UPDATE bc_withdrawals SET status='declined', "
+        "decided_at=? WHERE id=?", (now_iso(), wid))
+    _bc_credit(conn, row["user_id"], row["amount"],
+               BC_REFUND_REASON, str(wid))
+    conn.commit()
+    conn.close()
+    return redir("/owner/bc",
+                 f"Declined — {row['amount']:,} BC went back to "
+                 "their bonus balance.")
 
 
 # ---------------- verification ----------------
