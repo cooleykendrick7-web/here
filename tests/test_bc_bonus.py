@@ -107,6 +107,10 @@ check("bc_balances total equals the ledger sum",
       bc(UID) == sum(r["delta"] for r in rows))
 
 print("== 5. Displays ==")
+# The wallet's BC displays sit behind the deep-Settings opt-in
+# (users.bc_enabled): the member flips it on through the real
+# settings flow, then the label + balance show.
+U.post("/settings/blackcoin", data={"bc_enabled": "1"})
 html = U.get("/tickets").text
 check("wallet shows the Black Coin Bonus label",
       "Black Coin Bonus" in html)
