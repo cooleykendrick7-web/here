@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Money Desk — HERE Owner</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#05070c;color:#f0f0f0;padding:20px;min-height:100vh}
+a{color:#ff8f98;text-decoration:none}
+h1{font-size:24px;font-weight:900;margin-bottom:6px}
+.sub{color:#9a9a9a;font-size:14px;margin-bottom:18px;max-width:760px;line-height:1.55}
+.sub strong{color:#e8e8e8}
+section{margin-bottom:28px}
+section>h2{font-size:18px;margin-bottom:10px;color:#ffd400}
+.back{display:inline-block;margin-bottom:16px;background:#2a2a2a;color:#f0f0f0;border-radius:6px;padding:7px 13px;font-size:13px;font-weight:600}
+.presets{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.preset{display:inline-block;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);color:#f0f0f0;border-radius:999px;padding:7px 15px;font-size:13.5px;font-weight:700}
+.preset.on{background:#d41f2e;border-color:#d41f2e;color:#fff}
+.dates{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:20px}
+.dates input{background:#14141c;border:1px solid #2a2a2a;color:#f0f0f0;border-radius:6px;padding:7px 9px;font-size:13.5px}
+.dates button{background:#d41f2e;color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:13.5px;font-weight:700;cursor:pointer}
+.stat-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:22px}
+.stat-card{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:16px;text-align:center}
+.stat-card .num{font-size:26px;font-weight:900;color:#ff4757}
+.stat-card .lbl{font-size:12.5px;color:#9a9a9a;font-weight:600;margin-top:4px}
+.table-wrap{overflow-x:auto;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:10px}
+table.admin{width:100%;border-collapse:collapse;font-size:13px}
+table.admin th{background:#1f1f1f;color:#ffd400;text-align:left;padding:9px 10px;font-size:12px;white-space:nowrap}
+table.admin td{padding:8px 10px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+table.admin tr:last-child td{border-bottom:none}
+.pill{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 9px;background:#333;color:#fff}
+.pill.paid{background:#1d9e50}
+.pill.pending{background:#d41f2e}
+.empty{color:#9a9a9a;font-size:14px;padding:14px}
+.csvbtn{display:inline-block;background:#2a2a2a;color:#f0f0f0;border-radius:6px;padding:8px 14px;font-size:13.5px;font-weight:700;margin-bottom:12px}
+.mono{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<a class="back" href="/owner">← Owner Panel</a>
+<h1>💰 Money Desk</h1>
+<p class="sub">Every dollar, from the real ledgers — ticket sales from <strong>ticket_txns</strong>,
+cash-outs from <strong>payout_requests</strong>. Gross per sale is rebuilt from the pack prices,
+exactly like the dashboard, so the two never disagree. Ranges run on <strong>Chicago days</strong>.
+Stripe's cut is an estimate (2.9% + 30¢ per sale — Stripe doesn't report exact per-sale fees to the app).</p>
+
+<div class="presets">
+  <a class="preset {{ 'on' if preset == 'today' }}" href="/owner/money?range=today">Today</a>
+  <a class="preset {{ 'on' if preset == '7d' }}" href="/owner/money?range=7d">Last 7 days</a>
+  <a class="preset {{ 'on' if preset == '30d' }}" href="/owner/money?range=30d">Last 30 days</a>
+  <a class="preset {{ 'on' if preset == 'all' }}" href="/owner/money?range=all">All time</a>
+  {% if preset == 'custom' %}<span class="preset on">{{ from_s }} → {{ to_s }}</span>{% endif %}
+</div>
+<form class="dates" method="get" action="/owner/money">
+  <label>From <input type="date" name="from" value="{{ from_s }}"></label>
+  <label>To <input type="date" name="to" value="{{ to_s }}"></label>
+  <button type="submit">Backdate / jump →</button>
+</form>
+
+<div class="stat-cards">
+  <div class="stat-card"><div class="num">{{ sales_gross }}</div><div class="lbl">Ticket sales in range ({{ sales_count }} sales)</div></div>
+  <div class="stat-card"><div class="num">{{ fee_est }}</div><div class="lbl">Stripe's cut (estimate)</div></div>
+  <div class="stat-card"><div class="num">{{ paid_in_range }}</div><div class="lbl">Paid out in range ({{ cashouts_paid }} cash-outs)</div></div>
+  <div class="stat-card"><div class="num">{{ cashouts_requested }}</div><div class="lbl">Cash-outs requested in range</div></div>
+  <div class="stat-card"><div class="num">{{ owed_now }}</div><div class="lbl">Owed to streamers RIGHT NOW</div></div>
+  <div class="stat-card"><div class="num">{{ all_gross }}</div><div class="lbl">All-time money in ({{ all_sales_count }} sales)</div></div>
+  <div class="stat-card"><div class="num">{{ all_paid_out }}</div><div class="lbl">All-time paid out to streamers</div></div>
+  <div class="stat-card"><div class="num" id="bc-bonus-total">{{ bc_total|default('—') }}</div><div class="lbl">Black Coin Bonuses granted (all time, BC)</div></div>
+</div>
+
+<section>
+  <h2>🎟️ Ticket sales in range</h2>
+  <a class="csvbtn" href="/owner/money.csv?{{ qs }}">⬇ Download these sales as CSV</a>
+  {% if sales_capped %}<p class="sub">Showing the latest {{ sales|length }} of {{ sales_count }} sales in this range — the CSV carries up to 5,000.</p>{% endif %}
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>When</th><th>Buyer</th><th>Tickets</th><th>Amount</th><th>Stripe session</th></tr></thead>
+      <tbody>
+        {% for s in sales %}
+        <tr>
+          <td class="mono">{{ s.when|e }}</td>
+          <td>{{ s.buyer|e }}</td>
+          <td class="mono">{{ s.tickets }} 🎟️</td>
+          <td class="mono"><strong>{{ s.amount }}</strong></td>
+          <td class="mono" style="color:#9a9a9a">{{ s.session|e }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No ticket sales in this range yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>💵 Cash-outs requested in range</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>Requested</th><th>Streamer</th><th>Tickets</th><th>Amount</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for p in payouts %}
+        <tr>
+          <td class="mono">{{ p.when|e }}</td>
+          <td>{{ p.name|e }}</td>
+          <td class="mono">{{ p.tickets }} 🎟️</td>
+          <td class="mono"><strong>{{ p.dollars }}</strong></td>
+          <td><span class="pill {{ p.status|e }}">{{ p.status|e }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No cash-outs requested in this range.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="sub" style="margin-top:10px">Act on a cash-out from the <a href="/owner">Payouts desk on the Owner Panel</a> — this page is the read-only history.</p>
+</section>
+</body>
+</html>

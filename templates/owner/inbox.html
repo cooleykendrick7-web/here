@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>One Inbox — HERE Owner</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#05070c;color:#f0f0f0;padding:20px;min-height:100vh}
+a{color:#ff8f98;text-decoration:none}
+h1{font-size:24px;font-weight:900;margin-bottom:6px}
+.sub{color:#9a9a9a;font-size:14px;margin-bottom:20px;max-width:760px;line-height:1.55}
+.sub strong{color:#e8e8e8}
+section{margin-bottom:26px}
+section>h2{font-size:18px;margin-bottom:4px;color:#ffd400}
+.cnt{display:inline-block;background:#d41f2e;color:#fff;border-radius:999px;padding:1px 10px;font-size:13px;font-weight:900;vertical-align:2px}
+.cnt.zero{background:#2a2a2a;color:#9a9a9a}
+.door{display:inline-block;margin:6px 0 10px;background:#d41f2e;color:#fff;border-radius:6px;padding:7px 13px;font-size:13px;font-weight:700}
+.back{display:inline-block;margin-bottom:16px;background:#2a2a2a;color:#f0f0f0;border-radius:6px;padding:7px 13px;font-size:13px;font-weight:600}
+.table-wrap{overflow-x:auto;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:10px}
+table.admin{width:100%;border-collapse:collapse;font-size:13px}
+table.admin th{background:#1f1f1f;color:#ffd400;text-align:left;padding:9px 10px;font-size:12px;white-space:nowrap}
+table.admin td{padding:8px 10px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+table.admin tr:last-child td{border-bottom:none}
+.empty{color:#7ee2a0;font-size:14px;padding:12px 14px}
+.excerpt{color:#9a9a9a;font-style:italic}
+.reasons{color:#ff8f98;font-weight:600}
+.total{display:inline-block;background:linear-gradient(90deg,#d41f2e,#a8151f);border-radius:12px;padding:10px 18px;font-size:17px;font-weight:900;margin-bottom:18px}
+.total.zero{background:#1d2b1f;color:#7ee2a0}
+</style>
+</head>
+<body>
+<a class="back" href="/owner">← Owner Panel</a>
+<h1>📥 One Inbox</h1>
+<p class="sub">Everything waiting on <strong>you</strong>, in one place. This page only gathers —
+you decide each item on the page where you already act (one tap away under each list).</p>
+{% if total %}
+<div class="total">🔔 {{ total }} thing{{ 's' if total != 1 }} waiting on you</div>
+{% else %}
+<div class="total zero">✅ All clear — nothing is waiting on you.</div>
+{% endif %}
+
+<section>
+  <h2>⭐ Verification requests <span class="cnt {{ 'zero' if not n_verif }}">{{ n_verif }}</span></h2>
+  <a class="door" href="/owner">Decide on the Owner Panel →</a>
+  {% if verifs %}
+  <div class="table-wrap"><table class="admin">
+    <thead><tr><th>Kind</th><th>Target</th><th>Requested by</th><th>When</th></tr></thead>
+    <tbody>
+      {% for v in verifs %}
+      <tr><td>{{ v.kind|e }}</td><td><a href="{{ v.link }}">{{ v.name|e }}</a></td><td>{{ v.requester|e }}</td><td>{{ v.when|e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">✓ Nothing waiting.</p>{% endif %}
+</section>
+
+<section>
+  <h2>🚩 Flagged content <span class="cnt {{ 'zero' if not n_flags }}">{{ n_flags }}</span></h2>
+  <a class="door" href="/owner">Decide on the Owner Panel →</a>
+  {% if flags %}
+  <div class="table-wrap"><table class="admin">
+    <thead><tr><th>Type</th><th>Author</th><th>Reasons</th><th>Excerpt</th><th>When</th></tr></thead>
+    <tbody>
+      {% for f in flags %}
+      <tr><td>{{ f.item_type|e }} #{{ f.item_id }}</td><td>{{ f.author|e }}</td><td class="reasons">{{ f.reasons|e }}</td><td class="excerpt">{{ f.excerpt|e }}</td><td>{{ f.when|e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">✓ Nothing waiting.</p>{% endif %}
+</section>
+
+<section>
+  <h2>💵 Cash-outs waiting <span class="cnt {{ 'zero' if not n_cash }}">{{ n_cash }}</span></h2>
+  <a class="door" href="/owner">Decide on the Owner Panel →</a>
+  {% if cashouts %}
+  <div class="table-wrap"><table class="admin">
+    <thead><tr><th>Streamer</th><th>Tickets</th><th>Amount</th><th>Status</th><th>Requested</th></tr></thead>
+    <tbody>
+      {% for p in cashouts %}
+      <tr><td><a href="/user/{{ p.user_id }}">{{ p.name|e }}</a></td><td>{{ p.tickets }} 🎟️</td><td><strong>{{ p.dollars }}</strong></td><td>{{ p.status|e }}</td><td>{{ p.when|e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">✓ Nothing waiting.</p>{% endif %}
+</section>
+
+<section>
+  <h2>💡 IDM applications <span class="cnt {{ 'zero' if not n_idm }}">{{ n_idm }}</span></h2>
+  <a class="door" href="/owner/idm">Decide on the IDM desk →</a>
+  {% if idm_apps %}
+  <div class="table-wrap"><table class="admin">
+    <thead><tr><th>Member</th><th>Note</th><th>When</th></tr></thead>
+    <tbody>
+      {% for a in idm_apps %}
+      <tr><td><a href="/user/{{ a.user_id }}">{{ a.name|e }}</a></td><td>{{ a.note|e }}</td><td>{{ a.when|e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">✓ Nothing waiting.</p>{% endif %}
+</section>
+
+<section>
+  <h2>💬 New suggestions <span class="cnt {{ 'zero' if not n_sugg }}">{{ n_sugg }}</span></h2>
+  <a class="door" href="/owner/suggestions">Decide on the Suggestions desk →</a>
+  {% if suggs %}
+  <div class="table-wrap"><table class="admin">
+    <thead><tr><th>From</th><th>Suggestion</th><th>Source</th><th>When</th></tr></thead>
+    <tbody>
+      {% for s in suggs %}
+      <tr><td><a href="/user/{{ s.user_id }}">{{ s.name|e }}</a></td><td>{{ s.text|truncate(140)|e }}</td><td>{{ s.source|e }}</td><td>{{ s.when|e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">✓ Nothing waiting.</p>{% endif %}
+</section>
+
+<section>
+  <h2>💘 Match Here face checks <span class="cnt {{ 'zero' if not n_face }}">{{ n_face }}</span></h2>
+  <a class="door" href="/owner/match">Decide on the Match desk →</a>
+  {% if faces %}
+  <div class="table-wrap"><table class="admin">
+    <thead><tr><th>Member</th><th>Where</th><th>Waiting since</th></tr></thead>
+    <tbody>
+      {% for f in faces %}
+      <tr><td><a href="/user/{{ f.user_id }}">{{ f.name|e }}</a></td><td>{{ f.city|e }}{% if f.state %}, {{ f.state|e }}{% endif %}</td><td>{{ f.when|e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">✓ Nothing waiting.</p>{% endif %}
+</section>
+</body>
+</html>

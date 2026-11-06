@@ -6,7 +6,7 @@
 <title>Owner Panel — HERE</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-body{background:#0a0a0a;color:#f0f0f0;padding:20px}
+body{background:#05070c;background-image:radial-gradient(1100px 520px at 75% -10%,rgba(212,31,46,.16),rgba(5,7,12,0) 60%),radial-gradient(900px 500px at 0% 0%,rgba(255,212,0,.05),rgba(5,7,12,0) 55%);color:#f0f0f0;padding:20px;min-height:100vh}
 a{color:#ff8f98;text-decoration:none}
 .topbar{display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap}
 .brand{font-size:34px;font-weight:900;color:#ffd400}
@@ -35,6 +35,37 @@ table.admin tr:last-child td{border-bottom:none}
 .btn-ghost:hover{background:#3a3a3a}
 .inline-form{display:inline}
 .empty{color:#9a9a9a;font-size:14px;padding:14px}
+/* ===== Owner's Cockpit (Panel Upgrade P1): digital dash =====
+   Dark glass, neon red HERE accents, gauge cluster up top.
+   Every panel below inherits the glass through these overrides. */
+.table-wrap, .stat-card{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.cockpit{background:linear-gradient(160deg,rgba(255,255,255,.055),rgba(255,255,255,.015));border:1px solid rgba(255,255,255,.10);border-radius:18px;padding:22px 22px 18px;margin-bottom:24px;box-shadow:0 18px 50px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.08);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.cp-greet{font-size:34px;font-weight:900;letter-spacing:.2px;line-height:1.1}
+.cp-greet .cp-name{background:linear-gradient(90deg,#ffd400,#ff8f3c);-webkit-background-clip:text;background-clip:text;color:transparent}
+.cp-sub{font-size:16.5px;color:#e8e8e8;margin-top:6px;font-weight:600}
+.cp-sub strong{color:#ff4757}
+.cp-clock{font-size:13px;color:#9a9a9a;margin-top:4px;font-variant-numeric:tabular-nums;letter-spacing:.4px}
+.cp-doors{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 6px}
+.cp-door{display:inline-flex;align-items:center;gap:7px;background:rgba(212,31,46,.13);border:1px solid rgba(255,71,87,.45);color:#fff;border-radius:999px;padding:9px 16px;font-size:14px;font-weight:800;box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.cp-door:hover{background:rgba(212,31,46,.28);color:#fff}
+.gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-top:16px}
+.gauge{background:radial-gradient(120px 120px at 50% 42%,rgba(255,255,255,.05),rgba(0,0,0,.28));border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:10px 8px 12px;text-align:center}
+.g-svg{width:118px;height:118px;display:block;margin:0 auto}
+.g-track{fill:none;stroke:#23232d;stroke-width:9;stroke-linecap:round}
+.g-arc{fill:none;stroke:#ff2438;stroke-width:9;stroke-linecap:round;filter:drop-shadow(0 0 6px rgba(255,36,56,.75))}
+.g-needle{stroke:#ffd400;stroke-width:3;stroke-linecap:round;filter:drop-shadow(0 0 4px rgba(255,212,0,.8))}
+.g-hub{fill:#14141c;stroke:#ffd400;stroke-width:2}
+.g-num{font-size:24px;font-weight:900;color:#fff;margin-top:-38px;font-variant-numeric:tabular-nums;text-shadow:0 2px 10px rgba(0,0,0,.7)}
+.g-lbl{font-size:12px;color:#b9b9c4;font-weight:700;margin-top:2px;text-transform:uppercase;letter-spacing:.8px}
+.readouts{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:14px}
+.readout{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 14px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.readout .r-num{font-size:22px;font-weight:900;color:#ff4757;font-variant-numeric:tabular-nums}
+.readout .r-lbl{font-size:12px;color:#9a9a9a;font-weight:600;margin-top:3px}
+a.readout{display:block}
+a.readout:hover{border-color:rgba(255,71,87,.55);background:rgba(212,31,46,.08)}
+a.readout .r-lbl{color:#c9c9d2}
+a.readout .r-lbl::after{content:" →";color:#ff4757}
+@media (max-width:640px){ .cp-greet{font-size:27px} .g-svg{width:104px;height:104px} }
 </style>
 </head>
 <body>
@@ -51,18 +82,92 @@ table.admin tr:last-child td{border-bottom:none}
   <a class="logout" href="/owner/logout">Logout</a>
 </div>
 
-<div class="stat-cards">
-  <div class="stat-card"><div class="num">{{ stats.users }}</div><div class="lbl">Users</div></div>
-  <div class="stat-card"><div class="num">{{ stats.posts_today }}</div><div class="lbl">Posts today</div></div>
-  <div class="stat-card"><div class="num">{{ stats.msgs_today }}</div><div class="lbl">Messages today</div></div>
-  <div class="stat-card"><div class="num">{{ stats.taps_today }}</div><div class="lbl">Taps today</div></div>
-  <div class="stat-card"><div class="num">{{ stats.flags_pending }}</div><div class="lbl">Pending flags</div></div>
-  <div class="stat-card"><div class="num">{{ stats.verify_pending }}</div><div class="lbl">Verify requests</div></div>
-  <div class="stat-card"><div class="num">{{ money_stats.tickets_sold }} 🎟️</div><div class="lbl">Tickets sold (all time)</div></div>
-  <div class="stat-card"><div class="num">{{ money_stats.liability }}</div><div class="lbl">Owed to streamers if all cashed out</div></div>
-  <div class="stat-card"><div class="num">{{ money_stats.payouts_pending }}</div><div class="lbl">Payouts waiting</div></div>
-  <div class="stat-card"><div class="num">{{ pw_help_pending }}</div><div class="lbl">Password help waiting</div></div>
+<div class="cockpit">
+  <div class="cp-greet">{{ cockpit.greeting }}, <span class="cp-name">Kendrick Cooley</span></div>
+  <div class="cp-sub">Welcome to your Owner's Cockpit — <strong>your empire is live.</strong> 🏁</div>
+  <div class="cp-clock">🕐 <span id="cp-clock">—</span> · Chicago · HERE HQ</div>
+  <nav class="cp-doors">
+    <a class="cp-door" href="/owner/money">💰 Money Desk</a>
+    <a class="cp-door" href="/owner/inbox">📥 One Inbox</a>
+    <a class="cp-door" href="/owner/milli">🤖 Talk to Milli</a>
+    <a class="cp-door" href="/owner/janitor">🧹 Janitor</a>
+    <a class="cp-door" href="/blackcoin">🪙 Black Coin</a>
+  </nav>
+  <div class="gauges">
+    <div class="gauge" data-value="{{ stats.users }}" data-max="200">
+      <svg viewBox="0 0 120 120" class="g-svg" aria-hidden="true"><path class="g-track" d=""/><path class="g-arc" d=""/><line class="g-needle" x1="60" y1="66" x2="60" y2="32"/><circle class="g-hub" cx="60" cy="66" r="5"/></svg>
+      <div class="g-num">{{ stats.users }}</div><div class="g-lbl">Members</div>
+    </div>
+    <div class="gauge" data-value="{{ stats.posts_today }}" data-max="50">
+      <svg viewBox="0 0 120 120" class="g-svg" aria-hidden="true"><path class="g-track" d=""/><path class="g-arc" d=""/><line class="g-needle" x1="60" y1="66" x2="60" y2="32"/><circle class="g-hub" cx="60" cy="66" r="5"/></svg>
+      <div class="g-num">{{ stats.posts_today }}</div><div class="g-lbl">Posts today</div>
+    </div>
+    <div class="gauge" data-value="{{ money_stats.tickets_sold }}" data-max="25000" data-scale="sqrt">
+      <svg viewBox="0 0 120 120" class="g-svg" aria-hidden="true"><path class="g-track" d=""/><path class="g-arc" d=""/><line class="g-needle" x1="60" y1="66" x2="60" y2="32"/><circle class="g-hub" cx="60" cy="66" r="5"/></svg>
+      <div class="g-num">{{ money_stats.tickets_sold }}</div><div class="g-lbl">Tickets sold 🎟️</div>
+    </div>
+    <div class="gauge" data-value="{{ money_panel.floating }}" data-max="25000" data-scale="sqrt">
+      <svg viewBox="0 0 120 120" class="g-svg" aria-hidden="true"><path class="g-track" d=""/><path class="g-arc" d=""/><line class="g-needle" x1="60" y1="66" x2="60" y2="32"/><circle class="g-hub" cx="60" cy="66" r="5"/></svg>
+      <div class="g-num">{{ money_panel.floating }}</div><div class="g-lbl">Tickets floating</div>
+    </div>
+  </div>
+  <div class="readouts">
+    <a class="readout" href="/owner/money?range=all"><div class="r-num">{{ money_panel.profit }}</div><div class="r-lbl">HERE profit (all time)</div></a>
+    <a class="readout" href="/owner/money?range=today"><div class="r-num">{{ money_panel.gross_today }}</div><div class="r-lbl">Money in today</div></a>
+    <a class="readout" href="/owner/money?range=30d"><div class="r-num">{{ money_panel.gross_month }}</div><div class="r-lbl">Money in this month</div></a>
+    <a class="readout" href="/owner/money?range=all"><div class="r-num">{{ money_stats.liability }}</div><div class="r-lbl">Owed to streamers if all cashed out</div></a>
+    <div class="readout"><div class="r-num">{{ money_stats.payouts_pending }}</div><div class="r-lbl">Payouts waiting</div></div>
+    <a class="readout" href="/owner/inbox"><div class="r-num">{{ stats.flags_pending }}</div><div class="r-lbl">Pending flags</div></a>
+    <a class="readout" href="/owner/inbox"><div class="r-num">{{ stats.verify_pending }}</div><div class="r-lbl">Verify requests</div></a>
+    <div class="readout"><div class="r-num">{{ pw_help_pending }}</div><div class="r-lbl">Password help waiting</div></div>
+    <div class="readout"><div class="r-num">{{ stats.msgs_today }}</div><div class="r-lbl">Messages today</div></div>
+    <div class="readout"><div class="r-num">{{ stats.taps_today }}</div><div class="r-lbl">Taps today</div></div>
+  </div>
 </div>
+<script>
+(function(){
+  function polar(cx, cy, r, deg){
+    var rad = deg * Math.PI / 180;
+    return [cx + r * Math.sin(rad), cy - r * Math.cos(rad)];
+  }
+  function arcD(cx, cy, r, a0, a1){
+    var p0 = polar(cx, cy, r, a0), p1 = polar(cx, cy, r, a1);
+    var laf = (a1 - a0) > 180 ? 1 : 0;
+    return "M " + p0[0].toFixed(1) + " " + p0[1].toFixed(1)
+      + " A " + r + " " + r + " 0 " + laf + " 1 "
+      + p1[0].toFixed(1) + " " + p1[1].toFixed(1);
+  }
+  document.querySelectorAll(".gauge").forEach(function(g){
+    var v = parseFloat(g.getAttribute("data-value")) || 0;
+    var mx = parseFloat(g.getAttribute("data-max")) || 100;
+    var frac = Math.min(1, v / mx);
+    if (g.getAttribute("data-scale") === "sqrt")
+      frac = Math.sqrt(frac);
+    var track = g.querySelector(".g-track");
+    var arc = g.querySelector(".g-arc");
+    var needle = g.querySelector(".g-needle");
+    if (track) track.setAttribute("d", arcD(60, 66, 42, -120, 120));
+    if (arc) arc.setAttribute("d",
+      arcD(60, 66, 42, -120, -120 + 240 * Math.max(frac, 0.001)));
+    if (needle) needle.setAttribute("transform",
+      "rotate(" + (-120 + 240 * frac).toFixed(1) + " 60 66)");
+    var num = g.querySelector(".g-num");
+    if (num) num.textContent = Math.round(v).toLocaleString("en-US");
+  });
+  var clockEl = document.getElementById("cp-clock");
+  function tickClock(){
+    if (!clockEl) return;
+    try {
+      clockEl.textContent = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Chicago", weekday: "short",
+        hour: "numeric", minute: "2-digit", second: "2-digit"
+      }).format(new Date());
+    } catch (e) { clockEl.textContent = ""; }
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+})();
+</script>
 
 <section>
   <h2>🏁 $100 Invite Race <span style="font-size:13px;color:#9a9a9a">({{ race_summary.phase }} · Oct 30 – Nov 15)</span></h2>
@@ -421,6 +526,9 @@ table.admin tr:last-child td{border-bottom:none}
             </form>
             <form class="inline-form" action="/owner/users/{{ u.id }}/idm" method="post">
               <button type="submit" class="btn-ghost" title="Instant Developer Mode: white avatar ring, HERE IDM badge, and the private ? door in their Settings">💡 IDM: {{ 'ON' if u.idm_member else 'OFF' }}</button>
+            </form>
+            <form class="inline-form" action="/owner/users/{{ u.id }}/probe" method="post">
+              <button type="submit" class="btn-ghost" title="Probe Janitor stamp: stamped accounts delete themselves 15 minutes after a bug check — unless they hold tickets, cash-outs, or messages with real users">🧹 Probe: {{ 'ON' if u.is_probe else 'OFF' }}</button>
             </form>
             <form class="inline-form" action="/owner/user/{{ u.id }}/remove" method="post" onsubmit="return confirm('Remove user {{ u.name|e }} and ALL their content?');">
               <button type="submit" class="btn">Remove User</button>

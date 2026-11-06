@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Probe Janitor — HERE Owner</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#05070c;color:#f0f0f0;padding:20px;min-height:100vh}
+a{color:#ff8f98;text-decoration:none}
+h1{font-size:24px;font-weight:900;margin-bottom:6px}
+.sub{color:#9a9a9a;font-size:14px;margin-bottom:20px;max-width:720px;line-height:1.55}
+.sub strong{color:#e8e8e8}
+section{margin-bottom:28px}
+section>h2{font-size:18px;margin-bottom:10px;color:#ffd400}
+.table-wrap{overflow-x:auto;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:10px}
+table.admin{width:100%;border-collapse:collapse;font-size:13px}
+table.admin th{background:#1f1f1f;color:#ffd400;text-align:left;padding:9px 10px;font-size:12px;white-space:nowrap}
+table.admin td{padding:8px 10px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+table.admin tr:last-child td{border-bottom:none}
+.pill{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 9px;background:#333;color:#fff}
+.pill.deleted{background:#1d9e50}
+.pill.skipped_guard{background:#d41f2e}
+.pill.guard{background:#d41f2e}
+.pill.clean{background:#1d9e50}
+.empty{color:#9a9a9a;font-size:14px;padding:14px}
+.back{display:inline-block;margin-bottom:16px;background:#2a2a2a;color:#f0f0f0;border-radius:6px;padding:7px 13px;font-size:13px;font-weight:600}
+</style>
+</head>
+<body>
+<a class="back" href="/owner">← Owner Panel</a>
+<h1>🧹 Probe Janitor</h1>
+<p class="sub">Bug-check accounts stamped <strong>🧹 Probe</strong> delete themselves once they are
+<strong>15 minutes old</strong> — through the exact same cascade as the Remove User button.
+A probe that holds tickets, has cash-out rows, or has messages with a real (non-probe) user is
+<strong>never</strong> auto-deleted: the Janitor freezes it and writes a red row in this log instead.
+Stamp a legacy test account from the <a href="/owner">Users table</a> with its 🧹 Probe switch.</p>
+
+<section>
+  <h2>Stamped probes still on the site</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Created</th><th>Janitor verdict</th></tr></thead>
+      <tbody>
+        {% for p in probes %}
+        <tr>
+          <td>{{ p.id }}</td>
+          <td>{{ p.name|e }}</td>
+          <td>{{ p.email|e }}</td>
+          <td>{{ p.created_at|e }}</td>
+          <td>{% if p.guard %}<span class="pill guard">⛔ FROZEN — {{ p.guard|e }}</span>{% else %}<span class="pill clean">✓ clean — will auto-delete at 15 min</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No stamped probes right now — the floor is clean.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Janitor log (latest 200)</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>When</th><th>Account</th><th>Action</th><th>Detail</th></tr></thead>
+      <tbody>
+        {% for l in logs %}
+        <tr>
+          <td>{{ l.ts|e }}</td>
+          <td>{{ l.name|e }} <span style="color:#9a9a9a">(#{{ l.user_id }})</span></td>
+          <td><span class="pill {{ l.action|e }}">{{ l.action|e }}</span></td>
+          <td>{{ l.detail|e }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">Nothing swept yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+</body>
+</html>

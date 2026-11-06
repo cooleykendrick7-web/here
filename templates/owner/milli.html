@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Talk to Milli — HERE Owner</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#05070c;color:#f0f0f0;padding:20px;min-height:100vh}
+a{color:#ff8f98;text-decoration:none}
+h1{font-size:24px;font-weight:900;margin-bottom:6px}
+.sub{color:#9a9a9a;font-size:14px;margin-bottom:20px;max-width:720px;line-height:1.55}
+.sub strong{color:#e8e8e8}
+.back{display:inline-block;margin-bottom:16px;background:#2a2a2a;color:#f0f0f0;border-radius:6px;padding:7px 13px;font-size:13px;font-weight:600}
+.chat{max-width:720px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:16px}
+.msg{max-width:82%;padding:10px 13px;border-radius:14px;margin-bottom:10px;line-height:1.5;font-size:14.5px;white-space:pre-wrap;word-wrap:break-word}
+.msg .who{display:block;font-size:11px;font-weight:800;letter-spacing:.4px;margin-bottom:3px;opacity:.75}
+.msg.ken{margin-left:auto;background:#d41f2e;color:#fff;border-bottom-right-radius:4px}
+.msg.milli{margin-right:auto;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-bottom-left-radius:4px}
+.empty{color:#9a9a9a;font-size:14px;padding:10px 2px}
+form{display:flex;gap:8px;max-width:720px;margin-top:14px}
+textarea{flex:1;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:10px;color:#f0f0f0;padding:11px 12px;font-size:14.5px;min-height:52px;resize:vertical;font-family:inherit}
+button{background:#d41f2e;color:#fff;border:none;border-radius:10px;padding:0 20px;font-size:14.5px;font-weight:800;cursor:pointer}
+button:disabled{opacity:.55;cursor:default}
+.err{color:#ff8f98;font-size:13.5px;margin-top:8px;min-height:18px}
+</style>
+</head>
+<body>
+<a class="back" href="/owner">← Owner's Cockpit</a>
+<h1>💬 Talk to Milli</h1>
+<p class="sub"><strong>Milli checks this inbox regularly and replies here — build requests made here get picked up by Milli.</strong><br>
+Leave a message, an idea, or a fix you want. Milli answers in this same thread.</p>
+
+<div class="chat" id="chat">
+  {% for m in msgs %}
+  <div class="msg {{ m.from }}">
+    <span class="who">{{ 'YOU' if m.from == 'ken' else 'MILLI' }} · {{ m.when }}</span>{{ m.body|e }}
+  </div>
+  {% else %}
+  <div class="empty" id="chat-empty">No messages yet — say the first word below. 👇</div>
+  {% endfor %}
+</div>
+
+<form id="milli-form">
+  <textarea id="milli-body" placeholder="Message Milli…" maxlength="4000"></textarea>
+  <button type="submit" id="milli-send">Send</button>
+</form>
+<div class="err" id="milli-err"></div>
+
+<script>
+(function(){
+  var chat = document.getElementById('chat');
+  var form = document.getElementById('milli-form');
+  var bodyEl = document.getElementById('milli-body');
+  var sendBtn = document.getElementById('milli-send');
+  var errEl = document.getElementById('milli-err');
+  var lastId = 0;
+  function render(msgs){
+    chat.innerHTML = '';
+    if (!msgs.length){
+      var e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'No messages yet — say the first word below. 👇';
+      chat.appendChild(e);
+      return;
+    }
+    msgs.forEach(function(m){
+      lastId = Math.max(lastId, m.id);
+      var d = document.createElement('div');
+      d.className = 'msg ' + m.from;
+      var w = document.createElement('span');
+      w.className = 'who';
+      w.textContent = (m.from === 'ken' ? 'YOU' : 'MILLI')
+        + ' · ' + (m.when || '');
+      d.appendChild(w);
+      d.appendChild(document.createTextNode(m.body));
+      chat.appendChild(d);
+    });
+  }
+  function poll(){
+    fetch('/api/owner/milli/history', {credentials: 'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.ok) render(d.msgs || []);
+      })
+      .catch(function(){});
+  }
+  form.addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var body = bodyEl.value.trim();
+    if (!body) return;
+    sendBtn.disabled = true;
+    errEl.textContent = '';
+    fetch('/api/owner/milli/send', {
+      method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({body: body})
+    }).then(function(r){ return r.json(); })
+      .then(function(d){
+        sendBtn.disabled = false;
+        if (d && d.ok){
+          bodyEl.value = '';
+          poll();
+        } else {
+          errEl.textContent = (d && d.error)
+            || 'Could not send that message.';
+        }
+      })
+      .catch(function(){
+        sendBtn.disabled = false;
+        errEl.textContent = 'Could not send that message.';
+      });
+  });
+  setInterval(poll, 10000);
+})();
+</script>
+</body>
+</html>
