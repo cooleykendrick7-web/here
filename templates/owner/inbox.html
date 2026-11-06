@@ -129,5 +129,20 @@ you decide each item on the page where you already act (one tap away under each 
   </table></div>
   {% else %}<p class="empty">✓ Nothing waiting.</p>{% endif %}
 </section>
+
+<section>
+  <h2>🪙 Black Coin withdrawals <span class="cnt {{ 'zero' if not n_bc }}">{{ n_bc }}</span></h2>
+  <a class="door" href="/owner/bc">Work them on the BC Withdrawals desk →</a>
+  {% if bc_wds %}
+  <div class="table-wrap"><table class="admin">
+    <thead><tr><th>Member</th><th>Amount</th><th>To address</th><th>Requested</th></tr></thead>
+    <tbody>
+      {% for w in bc_wds %}
+      <tr><td><a href="/user/{{ w.user_id }}">{{ w.name|e }}</a></td><td><strong>{{ w.amount|e }} BC</strong></td><td>{{ w.address|e }}</td><td>{{ w.when|e }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">✓ Nothing waiting.</p>{% endif %}
+</section>
 </body>
 </html>
