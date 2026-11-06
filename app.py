@@ -1656,6 +1656,18 @@ def init_db():
         # unless a money/message guard trips (see _janitor_sweep).
         c.execute("ALTER TABLE users ADD COLUMN is_probe "
                   "INTEGER DEFAULT 0")
+    if "bc_enabled" not in _user_cols_lt:
+        # Black Coin opt-in (Ken's order, 2026-11-06): participation
+        # is a switch buried at the very bottom of Settings that a
+        # member turns on themselves — finding it is the signal
+        # they studied HERE. Default OFF for everyone. Bonuses keep
+        # accruing on ticket pack buys either way (credit_purchase
+        # never reads this flag); the switch only gates seeing the
+        # Black Coin Bonus card on the wallet page and using the
+        # withdrawal route. The owner sees who flipped it (a 🪙 in
+        # the Users table + the opted-in count on /owner/bc).
+        c.execute("ALTER TABLE users ADD COLUMN bc_enabled "
+                  "INTEGER DEFAULT 0")
     c.execute("""CREATE TABLE IF NOT EXISTS janitor_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts TEXT NOT NULL, user_id INTEGER, name TEXT DEFAULT '',
@@ -9941,6 +9953,8 @@ async def profile_edit_page(request: Request):
         "idm": {"member": bool(user.get("idm_member")),
                 "pending": _idm_pending},
         "idm_flash": request.query_params.get("idm") or "",
+        "bc_enabled": 1 if user.get("bc_enabled") else 0,
+        "bc_flash": request.query_params.get("bc") or "",
         "my_suggestions": _my_sugg,
         "idea_flash": request.query_params.get("idea") or "",
         "media_flash": request.query_params.get("media") or "",
@@ -10093,6 +10107,31 @@ async def settings_creator(request: Request):
            "take gifts now." if on else
            "Creator Mode is off — your gift buttons are hidden.")
     return redir(nxt, msg)
+
+
+@app.post("/settings/blackcoin")
+async def settings_blackcoin(request: Request):
+    """Black Coin opt-in (Ken's order, 2026-11-06): the 🪙 switch
+    buried at the very bottom of Settings, past every other card.
+    A member turns it on themselves — finding this door is the
+    signal they studied HERE. ON reveals the Black Coin Bonus
+    card on the wallet page (balance, withdraw form, history)
+    and unlocks the withdrawal route; OFF hides the card and the
+    route refuses. Bonuses keep accruing on ticket pack buys
+    either way — credit_purchase never reads this flag — so a
+    member who flips it on later finds their BC waiting."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    on = 1 if (form.get("bc_enabled") or "") == "1" else 0
+    conn = db()
+    conn.execute("UPDATE users SET bc_enabled=? WHERE id=?",
+                 (on, user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/settings/profile?bc="
+                 + ("on" if on else "off") + "#blackcoin")
 
 
 @app.post("/settings/spot")
@@ -21977,6 +22016,7 @@ async def tickets_page(request: Request):
     _tc.close()
     return render(request, "tickets.html", {
         "balance": balance, "earned": earned,
+        "bc_enabled": 1 if me.get("bc_enabled") else 0,
         "bc_balance": _bc_balance(user["id"]),
         "bc_withdrawals": bc_withdrawals,
         "bc_pending": bc_pending,
@@ -22021,6 +22061,12 @@ async def tickets_bc_withdraw(request: Request):
     user, err = require_login(request)
     if err:
         return err
+    me = get_user(user["id"]) or {}
+    if not me.get("bc_enabled"):
+        return redir("/tickets",
+                     "Black Coin is switched off for your account "
+                     "— the switch sits at the very bottom of "
+                     "Settings, past every other card.")
     try:
         form = await request.form()
     except Exception:
@@ -24333,7 +24379,8 @@ async def owner_dashboard(request: Request):
                       "is_verified_user": bool(u["is_verified_user"]),
                       "is_verified_vendor": bool(u["is_verified_vendor"]),
                       "idm_member": bool(u["idm_member"]),
-                      "is_probe": bool(u["is_probe"])})
+                      "is_probe": bool(u["is_probe"]),
+                      "bc_enabled": bool(u["bc_enabled"])})
 
     fact = conn.execute(
         "SELECT f.*, a.name AS req_name, b.name AS tgt_name FROM friendships f "
@@ -25369,6 +25416,9 @@ async def owner_bc(request: Request):
         "LEFT JOIN users u ON u.id=w.user_id "
         "WHERE w.status!='pending' ORDER BY w.id DESC "
         "LIMIT 50").fetchall()
+    n_members = conn.execute(
+        "SELECT COUNT(*) c FROM users WHERE "
+        "COALESCE(bc_enabled,0)=1").fetchone()["c"]
     conn.close()
 
     def _wrow(r):
@@ -25392,6 +25442,7 @@ async def owner_bc(request: Request):
         "pending_amount_fmt": f"{pending_amount:,}",
         "liability_fmt": f"{liability:,}",
         "stack_fmt": f"{BC_STACK_TOTAL:,}",
+        "n_members": n_members,
         "n_pending": len(pend_rows),
         "pending": [_wrow(r) for r in pend_rows],
         "history": [_wrow(r) for r in hist_rows]})
