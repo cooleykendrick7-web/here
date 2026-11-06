@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BC Withdrawals — HERE Owner</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#05070c;color:#f0f0f0;padding:20px;min-height:100vh}
+a{color:#ff8f98;text-decoration:none}
+h1{font-size:24px;font-weight:900;margin-bottom:6px}
+.sub{color:#9a9a9a;font-size:14px;margin-bottom:20px;max-width:760px;line-height:1.55}
+.sub strong{color:#e8e8e8}
+section{margin-bottom:28px}
+section>h2{font-size:18px;margin-bottom:10px;color:#ffd400}
+.cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:26px}
+.stat{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:14px 16px;min-width:160px;flex:1}
+.stat .num{font-size:24px;font-weight:900;color:#f5b301}
+.stat .lbl{color:#9a9a9a;font-size:12.5px;margin-top:3px;line-height:1.45}
+.table-wrap{overflow-x:auto;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:10px}
+table.admin{width:100%;border-collapse:collapse;font-size:13px}
+table.admin th{background:#1f1f1f;color:#ffd400;text-align:left;padding:9px 10px;font-size:12px;white-space:nowrap}
+table.admin td{padding:8px 10px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+table.admin tr:last-child td{border-bottom:none}
+.pill{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 9px;background:#333;color:#fff}
+.pill.pending{background:#b8860b}
+.pill.sent{background:#1d9e50}
+.pill.declined{background:#d41f2e}
+.empty{color:#9a9a9a;font-size:14px;padding:14px}
+.back{display:inline-block;margin-bottom:16px;background:#2a2a2a;color:#f0f0f0;border-radius:6px;padding:7px 13px;font-size:13px;font-weight:600}
+.addr{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;word-break:break-all;user-select:all}
+input.txh{width:250px;max-width:100%;background:#111;border:1px solid #3a3a3a;border-radius:6px;color:#f0f0f0;padding:6px 9px;font-size:12.5px;font-family:ui-monospace,Menlo,Consolas,monospace}
+button.act{border:none;border-radius:6px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer;color:#fff;background:#1d9e50}
+button.act.decline{background:#d41f2e}
+form.inline{display:inline-block;margin:2px 4px 2px 0}
+.flashmsg{background:rgba(29,158,80,.16);border:1px solid #1d9e50;color:#b9f4d2;border-radius:10px;padding:10px 14px;font-size:14px;margin-bottom:18px;max-width:760px}
+</style>
+</head>
+<body>
+<a class="back" href="/owner">← Owner Panel</a>
+<h1>🪙 Black Coin Withdrawals</h1>
+<p class="sub">Members reserve <strong>Black Coin Bonus</strong> BC out of their HERE balance to their own
+Base wallet. <strong>You</strong> send the real Black Coin from your own wallet by hand — your signature,
+outside HERE — then paste the transaction hash here and mark it sent. Declining refunds the reserved BC
+straight back to the member's bonus balance.</p>
+{% if flash %}<div class="flashmsg">{{ flash|e }}</div>{% endif %}
+
+<div class="cards">
+  <div class="stat"><div class="num">{{ granted_fmt }} BC</div><div class="lbl">Black Coin Bonuses granted, all time</div></div>
+  <div class="stat"><div class="num">{{ sent_fmt }} BC</div><div class="lbl">Sent on-chain (marked sent here)</div></div>
+  <div class="stat"><div class="num">{{ liability_fmt }} BC</div><div class="lbl">Outstanding — {{ balances_fmt }} BC in member balances + {{ pending_amount_fmt }} BC reserved in pending withdrawals, owed out of your {{ stack_fmt }} BC stack</div></div>
+  <div class="stat"><div class="num">{{ n_pending }}</div><div class="lbl">Withdrawals waiting on your send</div></div>
+</div>
+
+<section>
+  <h2>Pending — send these by hand</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>Member</th><th>Amount</th><th>Send to (full address)</th><th>Requested</th><th>After you send</th></tr></thead>
+      <tbody>
+        {% for w in pending %}
+        <tr>
+          <td><a href="/user/{{ w.user_id }}">{{ w.name|e }}</a></td>
+          <td><strong>{{ w.amount_fmt }} BC</strong></td>
+          <td><span class="addr">{{ w.address|e }}</span></td>
+          <td>{{ w.when|e }}</td>
+          <td>
+            <form class="inline" method="post" action="/owner/bc/{{ w.id }}/sent">
+              <input class="txh" type="text" name="tx_hash" placeholder="Paste tx hash (0x…)" autocomplete="off" spellcheck="false">
+              <button class="act" type="submit">Mark sent</button>
+            </form>
+            <form class="inline" method="post" action="/owner/bc/{{ w.id }}/decline">
+              <button class="act decline" type="submit">Decline &amp; refund</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No withdrawals waiting — the desk is clear.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>History (latest 50 decided)</h2>
+  <div class="table-wrap">
+    <table class="admin">
+      <thead><tr><th>Member</th><th>Amount</th><th>Address</th><th>Status</th><th>Requested</th><th>Decided</th><th>Transaction</th></tr></thead>
+      <tbody>
+        {% for w in history %}
+        <tr>
+          <td><a href="/user/{{ w.user_id }}">{{ w.name|e }}</a></td>
+          <td>{{ w.amount_fmt }} BC</td>
+          <td><span class="addr">{{ w.address|e }}</span></td>
+          <td><span class="pill {{ w.status|e }}">{{ w.status|e }}</span></td>
+          <td>{{ w.when|e }}</td>
+          <td>{{ w.decided|e }}</td>
+          <td>{% if w.tx_url %}<a href="{{ w.tx_url }}" target="_blank" rel="noopener">BaseScan ↗</a>{% else %}—{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="empty">Nothing decided yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+</body>
+</html>
