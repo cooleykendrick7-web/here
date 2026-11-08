@@ -23,8 +23,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 RESULTS = []
 
-DEFAULT_IMG = "https://joincomehere.com/static/og-share.jpg"
-PITCH = "HERE is where the fun lives"
+DEFAULT_IMG = "https://joincomehere.com/static/og-card.jpg"
+PITCH = "HERE is the social platform where creators actually get paid"
 
 
 def check(name, cond, extra=""):
@@ -62,14 +62,14 @@ def full_default_set(name, html):
     check(f"{name}: og:type website", og(html, "type") == "website")
     check(f"{name}: og:site_name HERE", og(html, "site_name") == "HERE")
     check(f"{name}: og:title default",
-          og(html, "title") == "HERE — Come Get HERE")
+          og(html, "title") == "HERE — Go LIVE. Get GIFTED. Get PAID.")
     check(f"{name}: og:description is the pitch",
           (og(html, "description") or "").startswith(PITCH))
     check(f"{name}: og:image is the absolute default card",
           og(html, "image") == DEFAULT_IMG)
     check(f"{name}: og:image hints (w/h/type)",
-          og(html, "image:width") == "1320"
-          and og(html, "image:height") == "2417"
+          og(html, "image:width") == "1200"
+          and og(html, "image:height") == "630"
           and og(html, "image:type") == "image/jpeg")
     check(f"{name}: twitter card summary_large_image",
           tw(html, "card") == "summary_large_image")
@@ -131,11 +131,11 @@ lid_plain = int(r.headers["location"].split("/")[2].split("?")[0])
 anon = TestClient(here.app, follow_redirects=False)
 
 # ---------------- bundled share image ----------------
-r = anon.get("/static/og-share.jpg")
-check("static og-share.jpg serves 200", r.status_code == 200)
-check("static og-share.jpg is the bundled portrait (645473 bytes)",
-      len(r.content) == 645473, str(len(r.content)))
-check("static og-share.jpg is a JPEG",
+r = anon.get("/static/og-card.jpg")
+check("static og-card.jpg serves 200", r.status_code == 200)
+check("static og-card.jpg is the bundled share card (121604 bytes)",
+      len(r.content) == 121604, str(len(r.content)))
+check("static og-card.jpg is a JPEG",
       r.content[:2] == b"\xff\xd8")
 
 # ---------------- site-wide defaults: login / signup / teaser ----------
@@ -190,7 +190,7 @@ check("/p text: og:description is the post body snippet",
 check("/p text: og:image falls back to the default card",
       og(t, "image") == DEFAULT_IMG)
 check("/p text: fallback image carries w/h/type hints",
-      og(t, "image:width") == "1320" and og(t, "image:type") == "image/jpeg")
+      og(t, "image:width") == "1200" and og(t, "image:type") == "image/jpeg")
 check("/p text: twitter:image falls back too",
       tw(t, "image") == DEFAULT_IMG)
 

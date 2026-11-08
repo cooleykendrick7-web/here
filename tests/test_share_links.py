@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 RESULTS = []
 CANON = "https://joincomehere.com"
-DEFAULT_IMG = CANON + "/static/og-share.jpg"
+DEFAULT_IMG = CANON + "/static/og-card.jpg"
 JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 64 + b"\xff\xd9"
 
 
