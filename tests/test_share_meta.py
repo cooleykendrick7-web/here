@@ -62,7 +62,7 @@ def full_default_set(name, html):
     check(f"{name}: og:type website", og(html, "type") == "website")
     check(f"{name}: og:site_name HERE", og(html, "site_name") == "HERE")
     check(f"{name}: og:title default",
-          og(html, "title") == "HERE — Go LIVE. Get GIFTED. Get PAID.")
+          og(html, "title") == "HERE — Get Paid To Be Here.")
     check(f"{name}: og:description is the pitch",
           (og(html, "description") or "").startswith(PITCH))
     check(f"{name}: og:image is the absolute default card",
@@ -133,8 +133,8 @@ anon = TestClient(here.app, follow_redirects=False)
 # ---------------- bundled share image ----------------
 r = anon.get("/static/og-card.jpg")
 check("static og-card.jpg serves 200", r.status_code == 200)
-check("static og-card.jpg is the bundled share card (121604 bytes)",
-      len(r.content) == 121604, str(len(r.content)))
+check("static og-card.jpg is the bundled share card (67232 bytes)",
+      len(r.content) == 67232, str(len(r.content)))
 check("static og-card.jpg is a JPEG",
       r.content[:2] == b"\xff\xd8")
 
