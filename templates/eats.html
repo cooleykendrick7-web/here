@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Everybody Eats — HERE's daily creator pool{% endblock %}
+{% block og_title %}Everybody Eats — HERE's daily creator pool{% endblock %}
+{% block og_description %}Every day, 10% of HERE's ticket-pack and Playbook sales drops into one pot — and at midnight it splits equally among every creator who earned that day. Public pot, public splits, real payouts.{% endblock %}
+{% block content %}
+<div style="max-width:760px;margin:0 auto">
+  <div class="card" style="text-align:center;padding:28px 20px">
+    <div style="font-size:40px">🍽️</div>
+    <h1 style="font-size:28px;margin-top:6px">Everybody Eats</h1>
+    <p style="color:var(--muted);margin-top:8px;line-height:1.55">HERE's daily pool for creators — the one no other platform has. Every day, <strong>10% of the day's ticket-pack &amp; Playbook sales</strong> drops into one pot. At midnight it splits <strong>equally</strong> among every member who earned that day. Not by views. Not by secret math. By showing up and earning.</p>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px">
+      <span style="background:var(--glass,#f4f4f6);border:1px solid var(--border);border-radius:999px;padding:7px 14px;font-weight:800">🍲 Today's pot so far: {{ pot_dollars }} ({{ pot.pool_tickets }} 🎟️)</span>
+      <span style="background:var(--glass,#f4f4f6);border:1px solid var(--border);border-radius:999px;padding:7px 14px;font-weight:800">👥 {{ member_count }} member{% if member_count != 1 %}s{% endif %} in the pool</span>
+    </div>
+    {% if pot.carried_in %}<p style="margin-top:10px;font-size:13.5px;color:var(--muted)">Includes {{ pot.carried_in }} 🎟️ rolled in from an earlier day's remainder — nothing is ever lost.</p>{% endif %}
+    {% if me %}
+      {% if me.eats_on %}
+      <p style="margin-top:14px;font-weight:800;color:#1d9e50">✅ You're in the pool.{% if me.earned_today %} You've already earned today — you're in tonight's split.{% else %} Earn at least one gifted ticket today and you're in tonight's split.{% endif %}</p>
+      {% elif me.creator %}
+      <p style="margin-top:14px">You're a creator but the switch is off — <a href="/settings/profile#creator-mode"><strong>flip Everybody Eats on in Settings</strong></a> and earn today to join tonight's split.</p>
+      {% else %}
+      <p style="margin-top:14px">Two switches put you in: <a href="/settings/profile#creator-mode"><strong>Creator Mode + Everybody Eats, in Settings</strong></a>. Then earn one gifted ticket today.</p>
+      {% endif %}
+    {% else %}
+    <p style="margin-top:14px"><a href="/signup"><strong>Join HERE free</strong></a>, turn on Creator Mode, flip the Eats switch — then every day you earn, you split the pot.</p>
+    {% endif %}
+  </div>
+
+  {% if yesterday %}
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">🌙 Yesterday's split</div>
+    <p style="margin-top:8px;line-height:1.6">The pot was <strong>{{ yesterday_dollars }}</strong> ({{ yesterday.pool_tickets }} 🎟️). {% if yesterday.qualifiers %}<strong>{{ yesterday.qualifiers }} creator{% if yesterday.qualifiers != 1 %}s{% endif %}</strong> earned that day, so each one got <strong>{{ yesterday.per_share }} 🎟️</strong> — straight into their wallet, cashable like any gift.{% if yesterday.carried_out %} {{ yesterday.carried_out }} 🎟️ rolled into today.{% endif %}{% else %}Nobody qualified, so the whole pot rolled into today — it waits for the creators who earn.{% endif %}</p>
+  </div>
+  {% endif %}
+
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">How it works</div>
+    <div style="margin-top:8px;line-height:1.65;font-size:15px">
+      <p><strong>1.</strong> Turn on <strong>Creator Mode</strong> in Settings (free).</p>
+      <p style="margin-top:6px"><strong>2.</strong> Flip the <strong>🍽️ Everybody Eats</strong> switch, right inside the Creator Mode card. Members wear a 🍽️ EATS badge by their name.</p>
+      <p style="margin-top:6px"><strong>3.</strong> Earn at least <strong>one gifted ticket</strong> that day — on a live, a post, your Page, a ticket door, or locked content.</p>
+      <p style="margin-top:6px"><strong>4.</strong> At midnight (Chicago time) the day's pot splits <strong>equally</strong>. Your cut lands in your wallet and cashes out to your bank through Stripe, same as your gifts — it shows on your <a href="/earnings">earnings page</a> as its own line.</p>
+    </div>
+    <div style="margin-top:14px;border:1px solid var(--border);border-radius:12px;padding:12px 14px;line-height:1.6;font-size:14.5px">
+      <strong>The honesty part:</strong> the pot is a cut of money HERE already took in — never printed, never promised. A $0 day pays $0. What's guaranteed is the <em>rule</em>: if money moves on HERE, the creators in the pool get a cut of all of it, every day, in the open. Every payout lands on <a href="/paidwall"><strong>the Wall of Paid</strong></a>.
+    </div>
+  </div>
+
+  {% if members %}
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">🍽️ In the pool</div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px">
+      {% for m in members %}
+      <a href="/user/{{ m.id }}" style="display:flex;flex-direction:column;align-items:center;width:76px;text-decoration:none;color:inherit">
+        <img src="{{ m.avatar }}" alt="" style="width:52px;height:52px;border-radius:50%;object-fit:cover">
+        <span style="font-size:12px;font-weight:700;margin-top:5px;text-align:center;line-height:1.25">{{ m.name|e }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if history %}
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">📅 Recent days</div>
+    <div style="margin-top:8px">
+      {% for h in history %}
+      <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span><strong>{{ h.day }}</strong><br>
+        <span style="color:var(--muted);font-size:12.5px">{{ h.qualifiers }} creator{% if h.qualifiers != 1 %}s{% endif %} split it{% if h.carried_out %} · {{ h.carried_out }} 🎟️ rolled on{% endif %}</span></span>
+        <span style="font-weight:800;white-space:nowrap">{{ h.per_share }} 🎟️ each</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

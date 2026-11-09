@@ -679,6 +679,28 @@ def init_db():
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TEXT NOT NULL DEFAULT '',
         decided_at TEXT)""")
+    # EVERYBODY EATS (2026-11-08): the opt-in daily-pool switch
+    # rides on users; eats_days is the settlement ledger — one row
+    # per Chicago day, settled exactly once (see the Eats block).
+    if "eats_enabled" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN eats_enabled "
+                  "INTEGER DEFAULT 0")
+    if "eats_since" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN eats_since "
+                  "TEXT DEFAULT ''")
+    c.execute("UPDATE users SET eats_enabled=0 "
+              "WHERE eats_enabled IS NULL")
+    c.execute("""CREATE TABLE IF NOT EXISTS eats_days (
+        day TEXT PRIMARY KEY,
+        gross_cents INTEGER NOT NULL DEFAULT 0,
+        pool_cents INTEGER NOT NULL DEFAULT 0,
+        carried_in INTEGER NOT NULL DEFAULT 0,
+        pool_tickets INTEGER NOT NULL DEFAULT 0,
+        qualifiers INTEGER NOT NULL DEFAULT 0,
+        per_share INTEGER NOT NULL DEFAULT 0,
+        carried_out INTEGER NOT NULL DEFAULT 0,
+        settled INTEGER NOT NULL DEFAULT 0,
+        settled_at TEXT DEFAULT '')""")
     _sugg_cols = [r[1] for r in
                   c.execute("PRAGMA table_info(app_suggestions)")]
     if _sugg_cols and "source" not in _sugg_cols:
@@ -3366,7 +3388,7 @@ def post_card(p, viewer, owner_on=False):
     a = conn.execute("SELECT id,name,avatar,is_verified,"
                      "is_verified_user,is_verified_vendor,"
                      "private_profile,founding_no,creator_mode,"
-                     "plus_until,idm_member "
+                     "plus_until,idm_member,eats_enabled "
                      "FROM users WHERE id=?",
                      (p["user_id"],)).fetchone()
     likes = conn.execute("SELECT COUNT(*) c FROM likes WHERE post_id=?",
@@ -3490,6 +3512,7 @@ def post_card(p, viewer, owner_on=False):
         "author_vuser": bool(a["is_verified_user"]) if a else False,
         "author_vvendor": bool(a["is_verified_vendor"]) if a else False,
         "author_idm": bool(a["idm_member"]) if a else False,
+        "author_eats": bool(a["eats_enabled"]) if a and "eats_enabled" in a.keys() else False,
         "kind": p["kind"], "body": p["body"] or "",
         "body_html": linkify_body(p["body"] or "", tagged_users, tagged_pages),
         "feeling": p["feeling"] or "", "link_url": p["link_url"] or "",
@@ -9666,6 +9689,7 @@ async def profile(request: Request, uid: int):
         "is_verified": bool(prof.get("is_verified")),
         "is_verified_user": bool(prof.get("is_verified_user")),
         "idm_member": bool(prof.get("idm_member")),
+        "eats_member": bool(prof.get("eats_enabled")),
         "vuser_status": prof.get("vuser_status") or "none",
         "is_verified_vendor": bool(prof.get("is_verified_vendor")),
         "vvendor_status": prof.get("vvendor_status") or "none",
@@ -9947,11 +9971,13 @@ async def profile_edit_page(request: Request):
     _idm_pending = bool(conn.execute(
         "SELECT 1 FROM idm_requests WHERE user_id=? "
         "AND status='pending'", (user["id"],)).fetchone())
+    _eats_settle_due(conn)
     conn.close()
     return render(request, "profile_edit.html", {
         "artist_app_pending": _artist_pending,
         "idm": {"member": bool(user.get("idm_member")),
                 "pending": _idm_pending},
+        "eats_on": bool(user.get("eats_enabled")),
         "idm_flash": request.query_params.get("idm") or "",
         "bc_enabled": 1 if user.get("bc_enabled") else 0,
         "bc_flash": request.query_params.get("bc") or "",
@@ -10098,6 +10124,11 @@ async def settings_creator(request: Request):
     conn = db()
     conn.execute("UPDATE users SET creator_mode=? WHERE id=?",
                  (on, user["id"]))
+    if not on:
+        # EVERYBODY EATS lives inside Creator Mode: leaving
+        # Creator Mode leaves the daily pool too.
+        conn.execute("UPDATE users SET eats_enabled=0 WHERE id=?",
+                     (user["id"],))
     conn.commit()
     conn.close()
     nxt = (form.get("next") or "").strip()
@@ -15024,6 +15055,248 @@ async def owner_idm_decide(request: Request, rid: int):
         conn.commit()
     conn.close()
     return RedirectResponse("/owner/idm", status_code=303)
+
+
+# ---------------- EVERYBODY EATS (Ken's order, 2026-11-08) -------
+# Ken's ask, in his words: a feature no other platform has, built
+# to help the USERS make money, not HERE — as close to "guaranteed"
+# as honest gets. The design Milli brought back and Ken approved
+# (with his own twist — an opt-in switch inside Creator Mode):
+#
+#   * Every Chicago day, EATS_POOL_PCT (10%) of the day's RECORDED
+#     sales gross — ticket packs (the 'buy' ledger, priced by the
+#     same _buy_aggregates the owner Money Desk reads) plus paid
+#     Playbook sales (playbook_access kind='paid' at PLAYBOOK_CENTS)
+#     — becomes that day's pool, in cents.
+#   * The pool converts to earned tickets at the standard rate
+#     (1 cent = 2 tickets; a ticket cashes out at half a cent), plus
+#     whatever tickets rolled over from earlier days.
+#   * At the day's end the pool splits EQUALLY among the day's
+#     qualifiers: members with Creator Mode ON, the Eats switch ON,
+#     and at least one fan-earned ticket that day (kinds
+#     gift_receive / unlock_receive / entry_receive). The integer
+#     remainder rolls into the next day — nothing is ever lost, and
+#     a day with no qualifiers rolls its whole pool forward.
+#   * A share credits gift_earned ONLY (never gift_lifetime, so
+#     streamer levels keep measuring fan love, not pool money) and
+#     writes a ticket_txns row kind='eats_pool', so it cashes out
+#     through the exact same Stripe rails as gifts and shows on
+#     /earnings as its own line.
+#   * Settlement is LAZY and idempotent: the first /eats, /earnings
+#     or Settings view after midnight settles every open day back
+#     to launch. The eats_days row's settled flag flips inside one
+#     guarded UPDATE; only the caller that wins the flip credits.
+#   * Honesty rules (same as /invest): the pot is a cut of money
+#     HERE already took in — never printed, never promised. A $0
+#     day pays $0. The RULE is the guarantee, and the public /eats
+#     page shows the pot, the members, and every past split.
+EATS_POOL_PCT = 10
+EATS_LAUNCH_DAY = date(2026, 11, 8)
+EATS_EARN_KINDS = ("gift_receive", "unlock_receive", "entry_receive")
+
+
+def _eats_day_gross_cents(conn, day):
+    """Recorded sales gross (cents) for one Chicago day: ticket
+    packs via _buy_aggregates + paid Playbook sales at the fixed
+    price. This is the pool's only source — money HERE's own books
+    can prove, timestamped to the day it landed."""
+    start = _chicago_day_start_utc(day)
+    end = _chicago_day_start_utc(day + timedelta(days=1))
+    _c, gross, _f = _buy_aggregates(conn, start, end)
+    pb = conn.execute(
+        "SELECT COUNT(*) c FROM playbook_access WHERE "
+        "kind='paid' AND created_at>=? AND created_at<?",
+        (start, end)).fetchone()["c"]
+    return gross + (pb or 0) * PLAYBOOK_CENTS
+
+
+def _eats_carried_in(conn, day):
+    """Tickets rolled into `day` by the most recent settled day
+    before it (0 before the first settlement ever)."""
+    r = conn.execute(
+        "SELECT carried_out FROM eats_days WHERE settled=1 "
+        "AND day<? ORDER BY day DESC LIMIT 1",
+        (day.isoformat(),)).fetchone()
+    return (r["carried_out"] or 0) if r else 0
+
+
+def _eats_qualifiers(conn, day):
+    """User ids who split `day`'s pool: Creator Mode on, Eats
+    switch on, and >= 1 fan-earned ticket inside the day."""
+    start = _chicago_day_start_utc(day)
+    end = _chicago_day_start_utc(day + timedelta(days=1))
+    kinds = ",".join("'%s'" % k for k in EATS_EARN_KINDS)
+    rows = conn.execute(
+        "SELECT DISTINCT t.user_id FROM ticket_txns t "
+        "JOIN users u ON u.id=t.user_id "
+        "WHERE t.kind IN (" + kinds + ") AND t.tickets>0 "
+        "AND t.created_at>=? AND t.created_at<? "
+        "AND u.eats_enabled=1 AND u.creator_mode=1",
+        (start, end)).fetchall()
+    return [r["user_id"] for r in rows]
+
+
+def _eats_settle_day(conn, day):
+    """Settle one Chicago day exactly once. Returns [(user_id,
+    tickets)] credited by THIS call ([] when already settled or
+    the pool paid nobody). The caller notifies after commit."""
+    ds = day.isoformat()
+    row = conn.execute("SELECT * FROM eats_days WHERE day=?",
+                       (ds,)).fetchone()
+    if row and row["settled"]:
+        return []
+    gross = _eats_day_gross_cents(conn, day)
+    pool_cents = gross * EATS_POOL_PCT // 100
+    carried = _eats_carried_in(conn, day)
+    total = pool_cents * 2 + carried
+    quals = _eats_qualifiers(conn, day)
+    per = (total // len(quals)) if quals else 0
+    rem = total - per * len(quals)
+    if row is None:
+        conn.execute("INSERT OR IGNORE INTO eats_days(day) "
+                     "VALUES(?)", (ds,))
+    cur = conn.execute(
+        "UPDATE eats_days SET gross_cents=?, pool_cents=?, "
+        "carried_in=?, pool_tickets=?, qualifiers=?, per_share=?, "
+        "carried_out=?, settled=1, settled_at=? "
+        "WHERE day=? AND settled=0",
+        (gross, pool_cents, carried, total, len(quals), per, rem,
+         now_iso(), ds))
+    credited = []
+    if cur.rowcount == 1 and per > 0:
+        stamp = now_iso()
+        for uid in quals:
+            conn.execute(
+                "UPDATE users SET gift_earned = gift_earned + ? "
+                "WHERE id=?", (per, uid))
+            conn.execute(
+                "INSERT INTO ticket_txns(user_id, kind, tickets, "
+                "live_id, gift_key, note, created_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (uid, "eats_pool", per, None, "",
+                 "Everybody Eats " + ds, stamp))
+            credited.append((uid, per))
+    conn.commit()
+    return credited
+
+
+def _eats_settle_due(conn):
+    """Settle every open day from launch through yesterday
+    (Chicago). Called lazily from /eats, /earnings and Settings —
+    the first view after midnight does the midnight split."""
+    today = _today_chicago()
+    day = EATS_LAUNCH_DAY
+    while day < today:
+        credited = _eats_settle_day(conn, day)
+        for uid, per in credited:
+            notify(uid, "eats_pool",
+                   "🍽️ Everybody Eats: %d 🎟️ from the %s pool "
+                   "just landed in your wallet — every creator "
+                   "who earned that day split it equally."
+                   % (per, day.isoformat()), "/earnings")
+        day += timedelta(days=1)
+
+
+def _eats_today_view(conn):
+    """Today's live pot for the /eats page: gross so far, the pool
+    slice, and the tickets it makes (incl. the roll-in)."""
+    today = _today_chicago()
+    gross = _eats_day_gross_cents(conn, today)
+    pool_cents = gross * EATS_POOL_PCT // 100
+    carried = _eats_carried_in(conn, today)
+    return {"gross_cents": gross, "pool_cents": pool_cents,
+            "pool_tickets": pool_cents * 2 + carried,
+            "carried_in": carried}
+
+
+@app.post("/settings/eats")
+async def settings_eats(request: Request):
+    """🍽️ Everybody Eats switch (Ken's twist on Milli's design):
+    lives inside Creator Mode — flipping Creator Mode off takes
+    you out of the pool too, and the switch refuses to turn on
+    while Creator Mode is off. One route serves the Settings card;
+    a same-origin 'next' field picks where you land."""
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    on = 1 if (form.get("eats") or "") == "1" else 0
+    conn = db()
+    me = conn.execute("SELECT creator_mode, eats_enabled FROM "
+                      "users WHERE id=?", (user["id"],)).fetchone()
+    if on and not (me and me["creator_mode"]):
+        conn.close()
+        return redir("/settings/profile#creator-mode",
+                     "Turn on Creator Mode first — 🍽️ Everybody "
+                     "Eats lives inside it.")
+    conn.execute(
+        "UPDATE users SET eats_enabled=?, eats_since=CASE WHEN "
+        "?=1 AND eats_enabled=0 THEN ? ELSE eats_since END "
+        "WHERE id=?",
+        (on, on, now_iso(), user["id"]))
+    conn.commit()
+    conn.close()
+    nxt = (form.get("next") or "").strip()
+    if not (nxt.startswith("/") and not nxt.startswith("//")):
+        nxt = "/settings/profile"
+    msg = ("You're in 🍽️ — earn a gifted ticket today and you "
+           "split tonight's pool with every creator who earned."
+           if on else
+           "Everybody Eats is off — you're out of the daily pool "
+           "until you flip it back on.")
+    return redir(nxt, msg)
+
+
+@app.get("/eats", response_class=HTMLResponse)
+async def eats_page(request: Request):
+    """🍽️ Everybody Eats — the public daily-pool page: today's pot
+    building live, yesterday's split, the member wall, and the
+    rules in plain words. Public on purpose (proof is the brand);
+    the switch itself lives in Settings."""
+    user = current_user(request)
+    conn = db()
+    _eats_settle_due(conn)
+    today = _today_chicago()
+    yday = today - timedelta(days=1)
+    pot = _eats_today_view(conn)
+    yrow = conn.execute("SELECT * FROM eats_days WHERE day=?",
+                        (yday.isoformat(),)).fetchone()
+    history = conn.execute(
+        "SELECT * FROM eats_days WHERE settled=1 ORDER BY day "
+        "DESC LIMIT 7").fetchall()
+    members = conn.execute(
+        "SELECT id, name, avatar FROM users WHERE eats_enabled=1 "
+        "ORDER BY eats_since ASC, id ASC LIMIT 60").fetchall()
+    member_count = conn.execute(
+        "SELECT COUNT(*) c FROM users WHERE eats_enabled=1"
+        ).fetchone()["c"]
+    my_earned_today = 0
+    if user:
+        s = _chicago_day_start_utc(today)
+        e = _chicago_day_start_utc(today + timedelta(days=1))
+        kinds = ",".join("'%s'" % k for k in EATS_EARN_KINDS)
+        my_earned_today = conn.execute(
+            "SELECT COUNT(*) c FROM ticket_txns WHERE "
+            "user_id=? AND kind IN (" + kinds + ") AND "
+            "tickets>0 AND created_at>=? AND created_at<?",
+            (user["id"], s, e)).fetchone()["c"]
+    conn.close()
+    me = None
+    if user:
+        _u = dict(user)
+        me = {"creator": bool(_u.get("creator_mode")),
+              "eats_on": bool(_u.get("eats_enabled")),
+              "earned_today": bool(my_earned_today)}
+    return render(request, "eats.html", {
+        "pot": pot, "pot_dollars": _money2(pot["pool_cents"]),
+        "yesterday": (dict(yrow) if yrow else None),
+        "yesterday_dollars": (_money2(yrow["pool_cents"])
+                              if yrow else ""),
+        "history": [dict(h) for h in history],
+        "members": [{"id": m["id"], "name": m["name"],
+                     "avatar": avatar_url(m["avatar"])}
+                    for m in members],
+        "member_count": member_count, "me": me})
 
 
 @app.get("/founders", response_class=HTMLResponse)
@@ -22328,6 +22601,7 @@ async def earnings_page(request: Request):
     earned = me.get("gift_earned") or 0
     lifetime = me.get("gift_lifetime") or 0
     conn = db()
+    _eats_settle_due(conn)
     stream_rows = conn.execute(
         "SELECT t.live_id AS live_id, "
         "SUM(CASE WHEN COALESCE(t.note,'')='shout' THEN 0 ELSE 1 "
@@ -22368,6 +22642,15 @@ async def earnings_page(request: Request):
     page_gifts = ({"gifts": page_g["c"] or 0,
                    "tickets": page_g["s"] or 0}
                   if page_g and page_g["c"] else None)
+    # EVERYBODY EATS: pool shares land as kind='eats_pool' credits
+    # and get their own honest line here (count = days paid).
+    eats_g = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(tickets),0) s FROM "
+        "ticket_txns WHERE user_id=? AND kind='eats_pool'",
+        (user["id"],)).fetchone()
+    eats_pool = ({"days": eats_g["c"] or 0,
+                  "tickets": eats_g["s"] or 0}
+                 if eats_g and eats_g["c"] else None)
     # Money build: post/Peep gifts (note='post') and ticket-door
     # earnings (kind='entry_receive') get their own honest lines
     # too — a creator sees exactly which door the money came
@@ -22449,6 +22732,7 @@ async def earnings_page(request: Request):
             _earned_dollars(CASHOUT_MIN_TICKETS)),
         "streams": streams, "earlier": earlier,
         "page_gifts": page_gifts,
+        "eats_pool": eats_pool,
         "post_gifts_earn": post_gifts_earn,
         "track_gifts_earn": track_gifts_earn,
         "door_earn": door_earn,
@@ -25798,6 +26082,10 @@ HEARLEY_KB = [
     (["invest in here", "investing in here", "how to invest", "buy into here", "invest", "investing", "investment"],
      "There are three ways to invest in HERE, all on the Invest page. One: become a creator — free; your time is the investment, and fans pay you in tickets that cash out to your bank. Two: the Playbook ($19.99) — the money manual our artists read. Three: Black Coin (BC), the ecosystem's coin. Read the Invest page's honesty box before the coin: BC is not stock and nobody promises its price.",
      "/invest", "Open the Invest page"),
+    (["everybody eats", "eats pool", "daily pool", "pool split",
+      "join the pool", "the eats switch"],
+     "Everybody Eats is HERE's daily pool for creators. Flip it on in Settings, inside Creator Mode. Every day, 10% of the day's ticket-pack and Playbook sales drops into a pot, and at midnight it splits EQUALLY among every member who earned at least one gifted ticket that day. Your cut lands in your wallet and cashes out like any gift. The pot and every past split are public on the Eats page.",
+     "/eats", "See today's pot"),
     (["black coin", "blackcoin", "buy bc", " bc ", "crypto", "coin"],
      "Black Coin (BC) is the cryptocurrency HERE's founder created for this ecosystem — on the Base chain, fixed supply of 1,000,000,000, no more can ever be made. The Invest page has the real contract address and the buy link (Aerodrome). The plain truth, same as the page says: BC is NOT stock, gives no ownership of HERE, and nobody can promise its price — it can fall to zero. Only money you can afford to lose, and only ever buy at the contract address on the Invest page.",
      "/invest", "See Black Coin on the Invest page"),

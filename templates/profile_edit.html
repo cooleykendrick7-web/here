@@ -336,6 +336,21 @@
   </form>
 </div>
 
+<div class="card" id="eats">
+  <div class="section-title">🍽️ Everybody Eats — the daily pool</div>
+  <p style="margin-top:8px;color:var(--muted)">The pool no other platform has: every day, 10% of HERE's ticket-pack &amp; Playbook sales drops into one pot, and at midnight it splits <strong>equally</strong> among every member who earned a gifted ticket that day. Your cut lands in your wallet like a gift and cashes out the same way. No switch, no cut — even if you earned that day. A $0 day pays $0; the rule never changes. See the pot and every past split on <a href="/eats"><strong>the Eats page</strong></a>.</p>
+  {% if profile.creator_mode %}
+  <form action="/settings/eats" method="post" style="margin-top:12px">
+    <div class="field">
+      <label style="font-weight:500"><input type="checkbox" name="eats" value="1" {% if eats_on %}checked{% endif %}> Everybody Eats — I'm in the daily pool</label>
+    </div>
+    <button type="submit" class="btn">Save Everybody Eats</button>
+  </form>
+  {% else %}
+  <p style="margin-top:12px;font-weight:700">Turn on Creator Mode above first — Everybody Eats lives inside it.</p>
+  {% endif %}
+</div>
+
 <div class="card" id="media-here">
   <div class="section-title">🎵 Media HERE — your profile music</div>
   <p style="margin-top:8px;color:var(--muted)">Turn it on and you can upload tracks (MP3 and other audio files) to your profile. Anyone visiting can press play, and the song rides a little floating player while they surf HERE. Every upload asks who owns the rights — the answer stays on record.</p>
