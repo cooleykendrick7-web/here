@@ -4108,6 +4108,16 @@ async def logout(request: Request):
 
 
 
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page(request: Request):
+    """The public privacy policy (added 2026-11-08 — Google OAuth
+    publishing requires a live privacy URL, and HERE needed one
+    regardless). Standalone template: readable logged out."""
+    return render(request, "privacy.html",
+                  {"logged_in": bool(current_user(request))})
+
+
 # ---------------- Google sign-in (2026-11-08) ----------------
 # Env-gated like SMTP: with GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET
 # set, the login/signup pages grow a "Continue with Google" button
