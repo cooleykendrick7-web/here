@@ -690,6 +690,14 @@ def init_db():
                   "TEXT DEFAULT ''")
     c.execute("UPDATE users SET eats_enabled=0 "
               "WHERE eats_enabled IS NULL")
+    # PROFILE BASICS (2026-11-08, Ken's order): where a member is,
+    # where they're from, and their birthday (shown as an age) —
+    # set in Settings, shown on the profile, searchable by city
+    # and state.
+    for _bc in ("city", "state", "hometown", "birthdate"):
+        if _bc not in _user_cols:
+            c.execute("ALTER TABLE users ADD COLUMN " + _bc
+                      + " TEXT DEFAULT ''")
     # GOOGLE SIGN-IN (2026-11-08): the Google account id linked to
     # this HERE account, '' when none. Linking is by Google's
     # verified email only (see the Google block below).
@@ -1146,6 +1154,38 @@ def init_db():
         if _col not in _mp_cols:
             c.execute("ALTER TABLE match_profiles ADD COLUMN "
                       + _col + " TEXT NOT NULL DEFAULT ''")
+    # Match Here v3 (Nov 8, 2026): question prompts, a voice intro,
+    # and the Two Truths & A Lie game fields.
+    for _col in ("prompt_q1", "prompt_a1", "prompt_q2", "prompt_a2",
+                 "voice_note", "ttl_s1", "ttl_s2", "ttl_s3"):
+        if _col not in _mp_cols:
+            c.execute("ALTER TABLE match_profiles ADD COLUMN "
+                      + _col + " TEXT NOT NULL DEFAULT ''")
+    if "ttl_lie" not in _mp_cols:
+        c.execute("ALTER TABLE match_profiles ADD COLUMN ttl_lie "
+                  "INTEGER NOT NULL DEFAULT 0")
+    c.execute("""CREATE TABLE IF NOT EXISTS match_guesses (
+        viewer_id INTEGER NOT NULL, target_id INTEGER NOT NULL,
+        correct INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(viewer_id, target_id))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS match_daily_picks (
+        viewer_id INTEGER NOT NULL, day TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(viewer_id, day))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS match_date_shares (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL, friend_id INTEGER NOT NULL,
+        target_id INTEGER NOT NULL,
+        when_text TEXT NOT NULL DEFAULT '',
+        where_text TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS match_checkins (
+        user_id INTEGER NOT NULL, other_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        dismissed INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(user_id, other_id))""")
     _user_cols_now = [r["name"] for r in
                       c.execute("PRAGMA table_info(users)").fetchall()]
     if "private_profile" not in _user_cols_now:
@@ -9993,6 +10033,10 @@ async def profile(request: Request, uid: int):
         "live_level": _streamer_level(prof.get("gift_lifetime")),
         "showdown_w": _sw, "showdown_l": _sl, "showdown_d": _sd,
         "streak": current_streak(uid),
+        "city": prof.get("city", "") or "",
+        "state": prof.get("state", "") or "",
+        "hometown": prof.get("hometown", "") or "",
+        "age": _match_age(prof.get("birthdate", "") or ""),
         "contest_winner": contest_winner_user_id() == uid,
         "viewer_follows": bool(user["id"] != uid
                                and is_following(user["id"], uid)),
@@ -10313,6 +10357,10 @@ async def profile_edit_page(request: Request):
         "blocked_people": blocked_people,
         "profile": {"id": user["id"], "name": user["name"],
                     "bio": user.get("bio", ""),
+                    "city": user.get("city", "") or "",
+                    "state": user.get("state", "") or "",
+                    "hometown": user.get("hometown", "") or "",
+                    "birthdate": user.get("birthdate", "") or "",
                     "avatar": avatar_url(user.get("avatar", "")),
                     "background": avatar_url(user.get("background", "")),
                     "is_verified": bool(user.get("is_verified")),
@@ -10679,8 +10727,19 @@ async def profile_edit(request: Request):
     except ValueError as e:
         return redir("/settings/profile", str(e))
     remove_bg = (form.get("remove_background") or "") == "1"
+    _city = (form.get("city") or "").strip()[:60]
+    _state = (form.get("state") or "").strip()[:40]
+    _hometown = (form.get("hometown") or "").strip()[:60]
+    _bday = (form.get("birthdate") or "").strip()[:10]
+    if _bday:
+        try:
+            date.fromisoformat(_bday)
+        except ValueError:
+            _bday = ""
     conn = db()
     sets, vals = ["name=?", "bio=?"], [name, bio]
+    sets += ["city=?", "state=?", "hometown=?", "birthdate=?"]
+    vals += [_city, _state, _hometown, _bday]
     if avatar:
         sets.append("avatar=?")
         vals.append(avatar)
@@ -11430,6 +11489,9 @@ async def send_message(request: Request, fid: int):
             f"/messages/{fid}",
             "Give them a chance to reply \u2014 in Match Here you "
             "can send a few openers, then it's their move. \U0001f498")
+    _guard = _match_chat_guard(user["id"], fid, body)
+    if _guard:
+        return redir(f"/messages/{fid}", _guard)
     _deliver_message(user, fid, body)
     return redir(f"/messages/{fid}")
 
@@ -14076,7 +14138,7 @@ def _match_completeness(prof):
     keys = ("dob", "gender", "city", "zip", "height_in", "faith",
             "smoke", "drink", "interests", "about", "intent", "work",
             "kids", "rel_status", "languages", "pets", "personality",
-            "education")
+            "education", "prompt_a1", "voice_note", "ttl_s1")
     filled = 0
     for k in keys:
         v = prof[k] if k in prof.keys() else ""
@@ -14178,6 +14240,22 @@ def _match_card(conn, prof, viewer_prof, origin):
     hin = prof["height_in"] or 0
     interests = [s.strip() for s in (prof["interests"] or "").split(",")
                  if s.strip()][:8]
+    _pq, _pa = "", ""
+    for _i in (1, 2):
+        _a = (prof[f"prompt_a{_i}"] or "").strip() \
+            if f"prompt_a{_i}" in prof.keys() else ""
+        if _a:
+            _pq = prof[f"prompt_q{_i}"] or ""
+            _pa = _a
+            break
+    _voice = (prof["voice_note"] or "").strip() \
+        if "voice_note" in prof.keys() else ""
+    _ttl = bool("ttl_s1" in prof.keys()
+                and (prof["ttl_s1"] or "").strip()
+                and (prof["ttl_lie"] or 0) in (1, 2, 3))
+    _ts = _parse_ts(_uget(u, "last_seen_at"))
+    _fresh = bool(_ts and (datetime.now(timezone.utc) - _ts)
+                  <= timedelta(days=7))
     return {
         "user_id": prof["user_id"], "name": u["name"],
         "avatar": avatar_url(u["avatar"]),
@@ -14201,6 +14279,10 @@ def _match_card(conn, prof, viewer_prof, origin):
         "education": prof["education"] or "",
         "star": _match_star(prof["dob"]),
         "online": _match_online(u),
+        "prompt_q": _pq, "prompt_a": _pa,
+        "has_voice": bool(_voice),
+        "voice_url": ("/uploads/" + _voice) if _voice else "",
+        "ttl": _ttl, "fresh": _fresh,
     }
 
 
@@ -14342,6 +14424,80 @@ def _match_tab_ctx(conn, uid):
             "matches_n": len(_match_matches(conn, uid))}
 
 
+MATCH_PROMPTS = [
+    "My ideal Sunday looks like\u2026",
+    "The way to my heart is\u2026",
+    "I'm weirdly good at\u2026",
+    "A perfect first date would be\u2026",
+    "You'll know I like you when\u2026",
+    "My favorite meal to cook (or eat) is\u2026",
+    "The song I have on repeat is\u2026",
+    "I'm looking for someone who\u2026",
+    "A fun fact nobody guesses about me\u2026",
+    "My hometown in three words\u2026",
+]
+
+_MATCH_LINK_RE = re.compile(
+    r"(https?://|www\.|\b[a-z0-9-]+\.(com|net|org|io|co|me|app|"
+    r"xyz|online)\b)", re.I)
+_MATCH_APPS_RE = re.compile(
+    r"\b(snapchat|instagram|insta|whatsapp|telegram|kik|"
+    r"cash\s?app|venmo|zelle)\b", re.I)
+MATCH_GUARD_MSG = (
+    "\U0001f6e1\ufe0f For your safety, phone numbers, links and "
+    "other apps stay off the first few messages between daters "
+    "\u2014 keep it HERE, where we can look out for you. \U0001f498")
+MATCH_GUARD_FREE_MSGS = 10
+
+
+def _match_chat_guard(sender_id, other_id, body):
+    """First-chat guardrails (Nov 8, 2026): between two VERIFIED
+    Match daters who are neither matched nor friends, the first
+    MATCH_GUARD_FREE_MSGS messages carry no phone numbers, no
+    links, and no move-off-app bait — the classic scam/creep
+    opener is rushing off-platform. Returns the gentle refusal
+    text, or "" when the message is fine. Fail OPEN, exactly like
+    the opener limit: Match logic never breaks plain messaging."""
+    try:
+        conn = db()
+        try:
+            a = _match_profile(conn, sender_id)
+            b = _match_profile(conn, other_id)
+            if not a or not b:
+                return ""
+            if (a["face_status"] != "verified"
+                    or b["face_status"] != "verified"):
+                return ""
+            if _match_is_match(conn, sender_id, other_id):
+                return ""
+            fr = conn.execute(
+                "SELECT status FROM friendships WHERE "
+                "(user_id=? AND friend_id=?) OR (user_id=? AND "
+                "friend_id=?)",
+                (sender_id, other_id, other_id, sender_id)).fetchall()
+            if any(r["status"] == "accepted" for r in fr):
+                return ""
+            total = conn.execute(
+                "SELECT COUNT(*) c FROM messages WHERE "
+                "(sender_id=? AND receiver_id=?) OR (sender_id=? "
+                "AND receiver_id=?)",
+                (sender_id, other_id, other_id,
+                 sender_id)).fetchone()["c"]
+            if total >= MATCH_GUARD_FREE_MSGS:
+                return ""
+        finally:
+            conn.close()
+        text = body or ""
+        digits = re.sub(r"\D", "", text)
+        if len(digits) >= 10:
+            return MATCH_GUARD_MSG
+        if _MATCH_LINK_RE.search(text) or _MATCH_APPS_RE.search(text):
+            return MATCH_GUARD_MSG
+        return ""
+    except Exception:
+        return ""
+
+
 def _match_opener_blocked(sender_id, other_id):
     """Match Here opener limit (Ken's reference video, Nov 1,
     2026): between two VERIFIED Match daters who are neither
@@ -14464,6 +14620,7 @@ async def match_setup(request: Request):
         "height_ft": hin // 12 if hin else "",
         "height_in": hin % 12 if hin else "",
         "faiths": MATCH_FAITHS, "habits": MATCH_HABITS,
+        "prompt_options": MATCH_PROMPTS,
         "genders": MATCH_GENDERS, "intents": MATCH_INTENTS,
         "kids_opts": MATCH_KIDS, "rel_opts": MATCH_RELSTATUS,
         "pets_opts": MATCH_PETS, "person_opts": MATCH_PERSONALITY,
@@ -14521,6 +14678,44 @@ async def match_setup_save(request: Request):
     interests = (form.get("interests") or "").strip()[:140]
     about = (form.get("about") or "").strip()[:300]
 
+    def _pq(name):
+        v = (form.get(name) or "").strip()
+        return v if v in MATCH_PROMPTS else ""
+
+    prompt_q1 = _pq("prompt_q1")
+    prompt_a1 = (form.get("prompt_a1") or "").strip()[:160] \
+        if prompt_q1 else ""
+    prompt_q2 = _pq("prompt_q2")
+    prompt_a2 = (form.get("prompt_a2") or "").strip()[:160] \
+        if prompt_q2 else ""
+    ttl_s1 = (form.get("ttl_s1") or "").strip()[:90]
+    ttl_s2 = (form.get("ttl_s2") or "").strip()[:90]
+    ttl_s3 = (form.get("ttl_s3") or "").strip()[:90]
+    try:
+        ttl_lie = int(form.get("ttl_lie") or 0)
+    except (TypeError, ValueError):
+        ttl_lie = 0
+    if not (ttl_s1 and ttl_s2 and ttl_s3) or ttl_lie not in (1, 2, 3):
+        ttl_lie = 0
+    # A save that carries NONE of the v3 fields (an older form, a
+    # partial client) must not wipe prompts / TTL already saved —
+    # the real form always submits them (prefilled), and a field
+    # submitted EMPTY still clears on purpose.
+    if "prompt_q1" not in form and "ttl_s1" not in form:
+        _old = conn.execute(
+            "SELECT prompt_q1, prompt_a1, prompt_q2, prompt_a2, "
+            "ttl_s1, ttl_s2, ttl_s3, ttl_lie FROM match_profiles "
+            "WHERE user_id=?", (user["id"],)).fetchone()
+        if _old:
+            prompt_q1 = _old["prompt_q1"] or ""
+            prompt_a1 = _old["prompt_a1"] or ""
+            prompt_q2 = _old["prompt_q2"] or ""
+            prompt_a2 = _old["prompt_a2"] or ""
+            ttl_s1 = _old["ttl_s1"] or ""
+            ttl_s2 = _old["ttl_s2"] or ""
+            ttl_s3 = _old["ttl_s3"] or ""
+            ttl_lie = _old["ttl_lie"] or 0
+
     def _opt(name, allowed):
         v = (form.get(name) or "").strip()
         return v if v in allowed else ""
@@ -14534,6 +14729,24 @@ async def match_setup_save(request: Request):
     work = (form.get("work") or "").strip()[:80]
     languages = (form.get("languages") or "").strip()[:60]
     prof = _match_profile(conn, user["id"])
+    voice_note = (prof["voice_note"] or "") if prof else ""
+    if (form.get("voice_del") or "") == "1":
+        if voice_note:
+            _delete_upload(voice_note)
+        voice_note = ""
+    _vup = form.get("voice")
+    if _vup is not None and getattr(_vup, "filename", ""):
+        try:
+            _vp = save_upload(_vup, "matchvoice",
+                              {"mp3", "m4a", "wav", "webm", "ogg",
+                               "oga"}, max_mb=3)
+        except ValueError as e:
+            conn.close()
+            return redir("/match/setup", str(e))
+        if _vp:
+            if voice_note:
+                _delete_upload(voice_note)
+            voice_note = _vp
     photos = _match_photos(prof) if prof else []
     drop = set(form.getlist("photo_del"))
     photos = [p for p in photos if p not in drop]
@@ -14563,24 +14776,32 @@ async def match_setup_save(request: Request):
             "faith=?, smoke=?, drink=?, interests=?, about=?, "
             "intent=?, work=?, kids=?, rel_status=?, languages=?, "
             "pets=?, personality=?, education=?, "
+            "prompt_q1=?, prompt_a1=?, prompt_q2=?, prompt_a2=?, "
+            "voice_note=?, ttl_s1=?, ttl_s2=?, ttl_s3=?, ttl_lie=?, "
             "photos=?, updated_at=? WHERE user_id=?",
             (dob, gender, looking, city, state, zipc, zrow["lat"],
              zrow["lon"], height_in, faith, smoke, drink, interests,
              about, intent, work, kids, rel_status, languages, pets,
-             personality, education, json.dumps(photos), now,
-             user["id"]))
+             personality, education, prompt_q1, prompt_a1, prompt_q2,
+             prompt_a2, voice_note, ttl_s1, ttl_s2, ttl_s3, ttl_lie,
+             json.dumps(photos), now, user["id"]))
     else:
         conn.execute(
             "INSERT INTO match_profiles(user_id, dob, gender, "
             "looking_for, city, state, zip, lat, lon, height_in, "
             "faith, smoke, drink, interests, about, intent, work, "
             "kids, rel_status, languages, pets, personality, "
-            "education, photos, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "education, prompt_q1, prompt_a1, prompt_q2, prompt_a2, "
+            "voice_note, ttl_s1, ttl_s2, ttl_s3, ttl_lie, "
+            "photos, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+            "?,?,?,?,?,?,?,?,?,?,?)",
             (user["id"], dob, gender, looking, city, state, zipc,
              zrow["lat"], zrow["lon"], height_in, faith, smoke, drink,
              interests, about, intent, work, kids, rel_status,
              languages, pets, personality, education,
+             prompt_q1, prompt_a1, prompt_q2, prompt_a2, voice_note,
+             ttl_s1, ttl_s2, ttl_s3, ttl_lie,
              json.dumps(photos), now, now))
     conn.commit()
     conn.close()
@@ -14753,6 +14974,50 @@ async def match_tap(request: Request, uid: int):
     return back(request, "/match")
 
 
+def _match_checkin_sweep(conn, uid):
+    """Post-match check-in (Nov 8, 2026): a match that is 24h+ old
+    AND actually talking earns its owner one gentle check-in on
+    the Matches page ('How's it going?') with All-good / Report
+    doors. Created once per (user, match); a bell ping goes out
+    at creation. Returns the other-ids with an OPEN check-in."""
+    now = datetime.now(timezone.utc)
+    open_ids = []
+    for tid in _match_matches(conn, uid):
+        row = conn.execute(
+            "SELECT * FROM match_checkins WHERE user_id=? AND "
+            "other_id=?", (uid, tid)).fetchone()
+        if row is not None:
+            if not row["dismissed"]:
+                open_ids.append(tid)
+            continue
+        mrow = conn.execute(
+            "SELECT MAX(created_at) m FROM match_swipes WHERE "
+            "action='like' AND ((swiper_id=? AND target_id=?) OR "
+            "(swiper_id=? AND target_id=?))",
+            (uid, tid, tid, uid)).fetchone()
+        mt = _parse_ts(mrow["m"]) if mrow else None
+        if not mt or (now - mt) < timedelta(hours=24):
+            continue
+        talked = conn.execute(
+            "SELECT COUNT(*) c FROM messages WHERE (sender_id=? "
+            "AND receiver_id=?) OR (sender_id=? AND receiver_id=?)",
+            (uid, tid, tid, uid)).fetchone()["c"]
+        if talked < 1:
+            continue
+        conn.execute(
+            "INSERT INTO match_checkins(user_id, other_id, "
+            "created_at, dismissed) VALUES(?,?,?,0)",
+            (uid, tid, now_iso()))
+        conn.commit()
+        tu = get_user(tid)
+        notify(uid, "match_checkin",
+               f"\U0001f498 How's it going with "
+               f"{tu['name'] if tu else 'your match'}? Tap to "
+               "check in.", "/match/matches", actor_id=tid)
+        open_ids.append(tid)
+    return open_ids
+
+
 @app.get("/match/matches", response_class=HTMLResponse)
 async def match_matches_page(request: Request):
     user, err = require_login(request)
@@ -14778,10 +15043,29 @@ async def match_matches_page(request: Request):
         if card:
             card["muted"] = tid in muted
             cards.append(card)
+    checkin_ids = set(_match_checkin_sweep(conn, user["id"]))
+    for card in cards:
+        card["checkin"] = card["user_id"] in checkin_ids
+    frows = conn.execute(
+        "SELECT u.id, u.name FROM friendships f JOIN users u ON "
+        "u.id = CASE WHEN f.user_id=? THEN f.friend_id ELSE "
+        "f.user_id END WHERE f.status='accepted' AND "
+        "(f.user_id=? OR f.friend_id=?) ORDER BY u.name",
+        (user["id"], user["id"], user["id"])).fetchall()
+    friends = [{"id": r["id"], "name": r["name"]} for r in frows]
+    srows = conn.execute(
+        "SELECT s.target_id, u.name FROM match_date_shares s "
+        "JOIN users u ON u.id=s.friend_id WHERE s.user_id=? "
+        "ORDER BY s.id DESC", (user["id"],)).fetchall()
+    shares = {}
+    for r in srows:
+        shares.setdefault(r["target_id"], r["name"])
+    for card in cards:
+        card["shared_with"] = shares.get(card["user_id"], "")
     tabs = _match_tab_ctx(conn, user["id"])
     conn.close()
     return render(request, "match_matches.html",
-                  {"cards": cards, **tabs})
+                  {"cards": cards, "friends": friends, **tabs})
 
 
 @app.post("/match/undo")
@@ -14888,10 +15172,218 @@ async def match_view(request: Request, uid: int):
         (user["id"], uid)).fetchone() is not None
     muted = uid in muted_id_set(user["id"])
     tabs = _match_tab_ctx(conn, user["id"])
+    grow = conn.execute(
+        "SELECT * FROM match_guesses WHERE viewer_id=? AND "
+        "target_id=?", (user["id"], uid)).fetchone()
+    my_guess = ({"correct": bool(grow["correct"])} if grow else None)
+    ttl = None
+    if card and card.get("ttl"):
+        ttl = {"s": [row["ttl_s1"], row["ttl_s2"], row["ttl_s3"]],
+               "lie": (row["ttl_lie"] if my_guess else 0)}
+    prompts = []
+    for _i in (1, 2):
+        _a = (row[f"prompt_a{_i}"] or "").strip()
+        if _a:
+            prompts.append({"q": row[f"prompt_q{_i}"] or "",
+                            "a": _a})
     conn.close()
     return render(request, "match_view.html", {
         "card": card, "matched": matched, "i_liked": i_liked,
-        "muted": muted, **tabs})
+        "muted": muted, "my_guess": my_guess, "ttl": ttl,
+        "prompts": prompts,
+        "guess_flash": request.query_params.get("guess", ""),
+        **tabs})
+
+
+
+@app.post("/match/view/{uid}/comment")
+async def match_comment(request: Request, uid: int):
+    """Say something SPECIFIC (Nov 8, 2026): comment on a photo or
+    a prompt answer instead of a bare 'hey'. It lands as a normal
+    message with its context line, under the same rules as any
+    opener — block check, opener limit, first-chat guardrails."""
+    user, prof, gate = _match_gate(request)
+    if user is None:
+        return gate
+    conn = gate
+    row = conn.execute(
+        "SELECT * FROM match_profiles WHERE user_id=?",
+        (uid,)).fetchone()
+    ok = (row and uid != user["id"]
+          and row["face_status"] == "verified"
+          and not blocked_either_way(user["id"], uid)
+          and not conn.execute(
+              "SELECT 1 FROM match_unmatches WHERE (user_id=? AND "
+              "other_id=?) OR (user_id=? AND other_id=?)",
+              (user["id"], uid, uid, user["id"])).fetchone())
+    conn.close()
+    if not ok:
+        return redir("/match", "That profile isn't available. \U0001f498")
+    form = await request.form()
+    about = (form.get("about") or "their profile").strip()[:60]
+    body = (form.get("body") or "").strip()[:300]
+    if not body:
+        return redir(f"/match/view/{uid}", "Write a little something first.")
+    if _match_opener_blocked(user["id"], uid):
+        return redir(f"/match/view/{uid}",
+                     "Give them a chance to reply \u2014 a few "
+                     "openers, then it's their move. \U0001f498")
+    _guard = _match_chat_guard(user["id"], uid, body)
+    if _guard:
+        return redir(f"/match/view/{uid}", _guard)
+    _deliver_message(user, uid,
+                     f"\U0001f4ac About {about}: {body}")
+    return redir(f"/messages/{uid}")
+
+
+@app.post("/match/guess/{uid}")
+async def match_guess(request: Request, uid: int):
+    """Two Truths & A Lie: one guess per viewer, ever. The lie's
+    position NEVER renders until the guess is in."""
+    user, prof, gate = _match_gate(request)
+    if user is None:
+        return gate
+    conn = gate
+    row = conn.execute(
+        "SELECT * FROM match_profiles WHERE user_id=?",
+        (uid,)).fetchone()
+    if not row or uid == user["id"] \
+            or (row["ttl_lie"] or 0) not in (1, 2, 3):
+        conn.close()
+        return redir("/match", "That game isn't on. \U0001f498")
+    form = await request.form()
+    try:
+        choice = int(form.get("choice") or 0)
+    except (TypeError, ValueError):
+        choice = 0
+    if choice not in (1, 2, 3):
+        conn.close()
+        return redir(f"/match/view/{uid}")
+    already = conn.execute(
+        "SELECT 1 FROM match_guesses WHERE viewer_id=? AND "
+        "target_id=?", (user["id"], uid)).fetchone()
+    if already:
+        conn.close()
+        return redir(f"/match/view/{uid}")
+    correct = 1 if choice == row["ttl_lie"] else 0
+    conn.execute(
+        "INSERT INTO match_guesses(viewer_id, target_id, correct, "
+        "created_at) VALUES(?,?,?,?)",
+        (user["id"], uid, correct, now_iso()))
+    conn.commit()
+    conn.close()
+    if correct:
+        notify(uid, "match_ttl",
+               f"\U0001f3af {user['name']} guessed your lie in "
+               "Two Truths & A Lie!", f"/match/view/{user['id']}")
+    return redir(f"/match/view/{uid}?guess="
+                 + ("right" if correct else "wrong"))
+
+
+@app.get("/match/pick", response_class=HTMLResponse)
+async def match_pick(request: Request):
+    """The Daily Pick (Nov 8, 2026): one hand-picked profile a
+    day, framed as an event — a daily reason to open Match Here
+    even while the pool is small. Deterministic per viewer per
+    Chicago day; profiles with a prompt or a voice intro go
+    first because they give the pick something to say."""
+    user, prof, gate = _match_gate(request)
+    if user is None:
+        return gate
+    conn = gate
+    day = _today_chicago().isoformat()
+    row = conn.execute(
+        "SELECT target_id FROM match_daily_picks WHERE "
+        "viewer_id=? AND day=?", (user["id"], day)).fetchone()
+    card = None
+    if row:
+        tp = _match_profile(conn, row["target_id"])
+        if tp:
+            card = _match_card(conn, tp, prof, _match_my_origin(prof))
+    else:
+        deck = _match_deck(conn, user, prof,
+                           _match_my_origin(prof), 0)
+        deck.sort(key=lambda c: 0 if (c.get("prompt_a")
+                                      or c.get("has_voice")) else 1)
+        if deck:
+            card = deck[0]
+            conn.execute(
+                "INSERT OR IGNORE INTO match_daily_picks(viewer_id, "
+                "day, target_id, created_at) VALUES(?,?,?,?)",
+                (user["id"], day, card["user_id"], now_iso()))
+            conn.commit()
+    tabs = _match_tab_ctx(conn, user["id"])
+    conn.close()
+    return render(request, "match_pick.html",
+                  {"card": card, **tabs})
+
+
+@app.post("/match/share-date")
+async def match_share_date(request: Request):
+    """Share My Date (Nov 8, 2026): one tap sends a trusted HERE
+    friend who you're meeting, when, and where — the safety
+    feature that tells members (especially women) this room
+    looks out for them. The plan goes as a normal message from
+    the member to their friend."""
+    user, prof, gate = _match_gate(request)
+    if user is None:
+        return gate
+    conn = gate
+    form = await request.form()
+    try:
+        tid = int(form.get("target_id") or 0)
+        fid = int(form.get("friend_id") or 0)
+    except (TypeError, ValueError):
+        tid = fid = 0
+    when = (form.get("when_text") or "").strip()[:80]
+    where = (form.get("where_text") or "").strip()[:120]
+    ok = (tid and fid and when and where
+          and _match_is_match(conn, user["id"], tid)
+          and conn.execute(
+              "SELECT 1 FROM friendships WHERE status='accepted' "
+              "AND ((user_id=? AND friend_id=?) OR (user_id=? AND "
+              "friend_id=?))",
+              (user["id"], fid, fid, user["id"])).fetchone())
+    tname = ""
+    if ok:
+        tu = get_user(tid)
+        fu = get_user(fid)
+        tname = tu["name"] if tu else "your match"
+        conn.execute(
+            "INSERT INTO match_date_shares(user_id, friend_id, "
+            "target_id, when_text, where_text, created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (user["id"], fid, tid, when, where, now_iso()))
+        conn.commit()
+        fname = fu["name"] if fu else "your friend"
+    conn.close()
+    if not ok:
+        return redir("/match/matches",
+                     "Pick one of your matches, one of your "
+                     "friends, a time and a place. \U0001f6e1\ufe0f")
+    _deliver_message(
+        user, fid,
+        f"\U0001f6e1\ufe0f Share My Date: I'm meeting {tname} "
+        f"from Match Here \u2014 {when} at {where}. Their "
+        f"profile: /match/view/{tid}. Just keeping you in the "
+        "loop. \U0001f498")
+    return redir("/match/matches",
+                 f"Shared with {fname} \u2014 have fun, stay safe. "
+                 "\U0001f6e1\ufe0f")
+
+
+@app.post("/match/checkin/{uid}/ok")
+async def match_checkin_ok(request: Request, uid: int):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute(
+        "UPDATE match_checkins SET dismissed=1 WHERE user_id=? "
+        "AND other_id=?", (user["id"], uid))
+    conn.commit()
+    conn.close()
+    return redir("/match/matches", "Good to hear. \U0001f498")
 
 
 @app.post("/match/unmatch")
@@ -21270,25 +21762,48 @@ async def search(request: Request):
     if err:
         return err
     q = (request.query_params.get("q") or "").strip()
+    fcity = (request.query_params.get("city") or "").strip()
+    fstate = (request.query_params.get("state") or "").strip()
     users, pages, posts = [], [], []
-    if q:
+    if q or fcity or fstate:
         # Token-based people search: split the query into tokens and match
         # ANY token against first/last/display name (the name field holds the
         # full name, so "ken" and "cooley" both find "Kendrick Cooley"),
         # case-insensitive partial match. Exact-phrase hits rank first.
         tokens = [t for t in q.split() if t]
         conn = db()
-        ors = " OR ".join(["name LIKE ?"] * len(tokens))
-        params = [f"%{t}%" for t in tokens]
+        # A query token can match a name OR the member's city,
+        # state, or hometown — typing "Bismarck" finds Bismarck.
+        # With ONLY city/state filters (no query), everyone is the
+        # base set and the filters do the narrowing.
+        if tokens:
+            ors = " OR ".join(
+                ["name LIKE ? OR city LIKE ? OR state LIKE ? "
+                 "OR hometown LIKE ?"] * len(tokens))
+            params = []
+            for t in tokens:
+                params += [f"%{t}%"] * 4
+            base = f"(({ors}) OR email LIKE ?)"
+            params.append(f"%{q}%")
+        else:
+            base, params = "1=1", []
+        extra, eparams = "", []
+        if fcity:
+            extra += " AND city LIKE ?"
+            eparams.append(f"%{fcity}%")
+        if fstate:
+            extra += " AND state LIKE ?"
+            eparams.append(f"%{fstate}%")
         urows = conn.execute(
             f"SELECT id,name,avatar,last_seen_at,status_mode,inbox_status,"
-            f"private_profile,is_verified_user,is_verified_vendor "
-            f"FROM users WHERE ({ors}) OR email LIKE ? "
+            f"private_profile,is_verified_user,is_verified_vendor,"
+            f"city,state,birthdate "
+            f"FROM users WHERE {base}{extra} "
             f"ORDER BY CASE WHEN name LIKE ? THEN 0 ELSE 1 END, name LIMIT 50",
-            params + [f"%{q}%", f"%{q}%"]).fetchall()
+            params + eparams + [f"%{q}%"]).fetchall()
         prows = conn.execute(
             "SELECT id,name,ptype FROM pages WHERE name LIKE ? ORDER BY name LIMIT 50",
-            (f"%{q}%",)).fetchall()
+            (f"%{q}%",)).fetchall() if q else []
         # People search still FINDS private users (with a 🔒 marker, so
         # they can be friended) — but anyone in a block relationship
         # with the viewer (either direction) is excluded entirely.
@@ -21300,6 +21815,8 @@ async def search(request: Request):
                   "is_private": bool(r["private_profile"]),
                   "vuser": bool(r["is_verified_user"]),
                   "vvendor": bool(r["is_verified_vendor"]),
+                  "city": r["city"] or "", "state": r["state"] or "",
+                  "age": _match_age(r["birthdate"] or ""),
                   "req": req_status(user["id"], r["id"])}
                  for r in urows if r["id"] not in _blocked_search]
         pages = []
@@ -21311,10 +21828,12 @@ async def search(request: Request):
                           "ptype": r["ptype"], "joined": joined})
         # Post text search: match ANY token against body (privacy-respecting
         # via post_card — non-viewable posts are dropped).
-        pors = " OR ".join(["body LIKE ?"] * len(tokens))
-        prow2 = conn.execute(
-            f"SELECT * FROM posts WHERE ({pors}) ORDER BY created_at DESC LIMIT 40",
-            params).fetchall()
+        prow2 = []
+        if tokens:
+            pors = " OR ".join(["body LIKE ?"] * len(tokens))
+            prow2 = conn.execute(
+                f"SELECT * FROM posts WHERE ({pors}) ORDER BY created_at DESC LIMIT 40",
+                [f"%{t}%" for t in tokens]).fetchall()
         conn.close()
         owner_on = is_owner(request)
         posts = []
@@ -21325,7 +21844,8 @@ async def search(request: Request):
                 if len(posts) >= 20:
                     break
     return render(request, "search.html",
-                  {"q": q, "users": users, "pages": pages, "posts": posts})
+                  {"q": q, "fcity": fcity, "fstate": fstate,
+                   "users": users, "pages": pages, "posts": posts})
 
 
 # ---------------- pages ----------------

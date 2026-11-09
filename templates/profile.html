@@ -59,6 +59,7 @@
       {% endif %}
       {% if profile.is_verified_user or profile.is_verified_vendor %}<div style="margin-top:9px;display:flex;gap:10px;flex-wrap:wrap">{% with bv_user=profile.is_verified_user, bv_vendor=profile.is_verified_vendor, bv_full=1 %}{% include "partials/badges.html" %}{% endwith %}</div>{% endif %}
       {% if profile.presence %}<div style="margin-top:4px">{% set pres = profile.presence %}{% set show_label = true %}{% include "partials/presence_bolt.html" %}</div>{% endif %}
+      {% if (profile.city or profile.hometown or profile.age) and not profile.is_private_locked %}<p style="margin-top:6px;opacity:.85;font-size:14.5px">📍{% if profile.city %} {{ profile.city|e }}{% if profile.state %}, {{ profile.state|e }}{% endif %}{% endif %}{% if profile.age %} · Age {{ profile.age }}{% endif %}{% if profile.hometown %} · From {{ profile.hometown|e }}{% endif %}</p>{% endif %}
       {% if profile.bio and not profile.is_private_locked %}<p style="margin-top:8px;white-space:pre-wrap">{{ profile.bio|e }}</p>{% endif %}
       {% if profile.founding_no == 1 and not profile.is_private_locked %}
       <div style="margin-top:12px;border:1px solid #b8860b;background:linear-gradient(135deg,rgba(245,197,66,.16),rgba(184,134,11,.05));border-radius:14px;padding:12px 14px">

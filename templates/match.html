@@ -66,6 +66,7 @@
 
   {% if mode in ('deck', 'empty') %}
   {% set mtab = 'deck' %}{% include "partials/match_tabs.html" %}
+  <a href="/match/pick" style="display:block;margin-top:10px;text-decoration:none;background:linear-gradient(135deg,#d41f2e,#a4133c);color:#fff;border-radius:14px;padding:11px 14px;font-weight:800;font-size:15px;box-shadow:0 4px 14px rgba(212,31,46,.3)">🌟 Your Daily Pick is waiting — one hand-picked profile, every day →</a>
   <div style="text-align:right;margin-top:6px">
     <form method="post" action="/match/pause" style="display:inline">
       <button class="btn-ghost" type="submit" style="font-size:13px;padding:5px 12px">⏸ Pause me</button>
@@ -150,6 +151,7 @@
         <div style="font-size:25px;font-weight:800;text-shadow:0 1px 6px rgba(0,0,0,.5)">{{ card.name|e }}{% if card.age %}, {{ card.age }}{% endif %}{% if card.is_verified %} <span title="Verified on HERE" style="color:#ffd400">★</span>{% endif %}{% if card.online %} <span title="On HERE now" style="color:#2ee66b;font-size:15px">●</span>{% endif %}</div>
         <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap">
           <span style="font-size:13px;background:#1db954;border-radius:20px;padding:2px 9px;font-weight:700">✔ Face Verified</span>
+          {% if card.fresh %}<span style="font-size:13px;background:linear-gradient(135deg,#ffd400,#ff9d00);color:#231a00;border-radius:20px;padding:2px 9px;font-weight:800">✨ Active this week</span>{% endif %}
           {% if card.intent %}<span style="font-size:13px;background:rgba(255,255,255,.92);color:#a4133c;border-radius:20px;padding:2px 9px;font-weight:700">💬 {{ card.intent|e }}</span>{% endif %}
         </div>
         <div style="opacity:.95;font-size:14.5px;margin-top:5px">📍 {{ card.city|e }}{% if card.state %}, {{ card.state|e }}{% endif %}{% if card.distance %} · ~{{ card.distance }} mi away{% endif %}</div>
@@ -163,6 +165,8 @@
         {% if card.drink %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">🍺 {{ card.drink }}</span>{% endif %}
         {% if card.star %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">✨ {{ card.star }}</span>{% endif %}
         {% if card.work %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">💼 {{ card.work|e }}</span>{% endif %}
+        {% if card.has_voice %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">🎙️ Voice intro</span>{% endif %}
+        {% if card.ttl %}<span style="background:var(--chip-bg,#f0f2f5);border-radius:16px;padding:4px 11px;font-size:13.5px">🎲 Two Truths &amp; A Lie</span>{% endif %}
       </div>
       {% if card.interests %}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
@@ -170,6 +174,7 @@
       </div>
       {% endif %}
       {% if card.about %}<p style="margin:12px 0 0;line-height:1.55;font-size:15.5px">“{{ card.about|e }}”</p>{% endif %}
+      {% if card.prompt_a %}<div style="margin-top:12px;background:#fff5f6;border:1px solid #f6c9cf;border-radius:14px;padding:10px 13px"><div style="font-size:12.5px;font-weight:800;color:#a4133c;letter-spacing:.2px">{{ card.prompt_q|e }}</div><div style="font-size:15.5px;line-height:1.5;margin-top:2px">“{{ card.prompt_a|e }}”</div></div>{% endif %}
       <p style="margin:10px 0 0"><a href="/match/view/{{ card.user_id }}" style="font-size:14.5px;font-weight:700">See their full dating profile →</a></p>
     </div>
   </div>

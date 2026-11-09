@@ -29,6 +29,23 @@
       <textarea id="pe-bio" name="bio" maxlength="1000" placeholder="Tell people about yourself…">{{ profile.bio|e }}</textarea>
     </div>
     <div class="field">
+      <label for="pe-city">City you live in</label>
+      <input type="text" id="pe-city" name="city" value="{{ profile.city|e }}" maxlength="60" placeholder="e.g. Bismarck" autocomplete="address-level2">
+    </div>
+    <div class="field">
+      <label for="pe-state">State</label>
+      <input type="text" id="pe-state" name="state" value="{{ profile.state|e }}" maxlength="40" placeholder="e.g. ND" autocomplete="address-level1">
+    </div>
+    <div class="field">
+      <label for="pe-hometown">Where you're from</label>
+      <input type="text" id="pe-hometown" name="hometown" value="{{ profile.hometown|e }}" maxlength="60" placeholder="Your hometown">
+    </div>
+    <div class="field">
+      <label for="pe-birthdate">Birthday</label>
+      <input type="date" id="pe-birthdate" name="birthdate" value="{{ profile.birthdate|e }}">
+      <div style="font-size:12.5px;opacity:.75;margin-top:3px">Only your age is ever shown — never your birthday. People can find you by city, state and hometown in search.</div>
+    </div>
+    <div class="field">
       <label for="pe-avatar">Profile picture</label><br>
       {% if profile.avatar %}<img class="avatar av-100" src="{{ profile.avatar|e }}" alt="" style="margin-bottom:8px"><br>{% endif %}
       <input type="file" id="pe-avatar" name="avatar" accept="image/*">

@@ -48,7 +48,7 @@
       <div style="position:relative;border-radius:16px;overflow:hidden;border:1px solid var(--border,#ddd)">
         <img src="{{ c.photo|e }}" alt="" style="width:100%;aspect-ratio:3/3.6;object-fit:cover;display:block">
         {% if c.online %}<span style="position:absolute;top:8px;right:8px;width:11px;height:11px;border-radius:50%;background:#2ee66b;border:2px solid #fff" title="On HERE now"></span>{% endif %}
-        <div style="position:absolute;left:0;right:0;bottom:0;padding:16px 9px 7px;background:linear-gradient(transparent,rgba(0,0,0,.66));color:#fff;font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.name|e }}{% if c.age %}, {{ c.age }}{% endif %}</div>
+        <div style="position:absolute;left:0;right:0;bottom:0;padding:16px 9px 7px;background:linear-gradient(transparent,rgba(0,0,0,.66));color:#fff;font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{% if c.fresh %}<span style="color:#ffd400">✨ </span>{% endif %}{{ c.name|e }}{% if c.age %}, {{ c.age }}{% endif %}</div>
       </div>
       <div style="font-size:12.5px;opacity:.8;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.city|e }}{% if c.distance %} · ~{{ c.distance }} mi{% endif %}</div>
     </a>
@@ -60,7 +60,7 @@
     <div style="position:relative">
       <a href="/match/view/{{ c.user_id }}"><img src="{{ c.photo|e }}" alt="" style="width:100%;height:380px;object-fit:cover;display:block"></a>
       <div style="position:absolute;left:0;right:0;top:0;padding:14px 16px 26px;background:linear-gradient(rgba(0,0,0,.55),transparent);color:#fff">
-        <div style="font-size:22px;font-weight:800">{{ c.name|e }}{% if c.age %}, {{ c.age }}{% endif %}{% if c.is_verified %} <span style="color:#ffd400">★</span>{% endif %}{% if c.online %} <span style="color:#2ee66b;font-size:14px">●</span>{% endif %}</div>
+        <div style="font-size:22px;font-weight:800">{% if c.fresh %}<span title="Active this week" style="color:#e8a200">✨ </span>{% endif %}{{ c.name|e }}{% if c.age %}, {{ c.age }}{% endif %}{% if c.is_verified %} <span style="color:#ffd400">★</span>{% endif %}{% if c.online %} <span style="color:#2ee66b;font-size:14px">●</span>{% endif %}</div>
         <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
           <span style="font-size:12.5px;background:#1db954;border-radius:20px;padding:2px 9px;font-weight:700">✔ Face Verified</span>
           {% if c.intent %}<span style="font-size:12.5px;background:rgba(255,255,255,.92);color:#a4133c;border-radius:20px;padding:2px 9px;font-weight:700">💬 {{ c.intent|e }}</span>{% endif %}

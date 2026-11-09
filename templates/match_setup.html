@@ -191,7 +191,80 @@
       <p style="opacity:.7;font-size:13px;margin-top:6px">Real photos of YOU only — your face check compares your selfie against these. At least one photo is required.</p>
     </div>
 
-    <button class="btn" type="submit" style="font-size:17px;padding:13px">Save my dating profile 💘</button>
+
+    <div style="margin-top:22px;border-top:1px solid var(--border,#ddd);padding-top:16px">
+      <div class="section-title">💬 Answer a prompt <span style="font-weight:400;opacity:.75;font-size:13px">— shown on your card, gives people something real to say</span></div>
+      <div style="margin-top:10px">
+        <label style="font-size:13.5px;font-weight:700">Prompt 1</label>
+        <select name="prompt_q1" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">— pick a prompt —</option>
+          {% for q in prompt_options %}<option value="{{ q|e }}"{% if p.prompt_q1 == q %} selected{% endif %}>{{ q|e }}</option>{% endfor %}
+        </select>
+        <textarea name="prompt_a1" maxlength="160" rows="2" placeholder="Your answer…" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:6px">{{ p.prompt_a1|e }}</textarea>
+      </div>
+      <div style="margin-top:12px">
+        <label style="font-size:13.5px;font-weight:700">Prompt 2</label>
+        <select name="prompt_q2" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:4px">
+          <option value="">— pick a prompt —</option>
+          {% for q in prompt_options %}<option value="{{ q|e }}"{% if p.prompt_q2 == q %} selected{% endif %}>{{ q|e }}</option>{% endfor %}
+        </select>
+        <textarea name="prompt_a2" maxlength="160" rows="2" placeholder="Your answer…" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit;margin-top:6px">{{ p.prompt_a2|e }}</textarea>
+      </div>
+    </div>
+
+    <div style="margin-top:22px;border-top:1px solid var(--border,#ddd);padding-top:16px">
+      <div class="section-title">🎙️ Voice intro <span style="font-weight:400;opacity:.75;font-size:13px">— 30 seconds of the real you. Hard to fake, easy to fall for.</span></div>
+      {% if p.voice_note %}
+      <audio controls preload="none" src="/uploads/{{ p.voice_note|e }}" style="width:100%;margin-top:10px"></audio>
+      <label style="display:block;font-size:13.5px;margin-top:6px"><input type="checkbox" name="voice_del" value="1"> Remove my voice intro</label>
+      {% endif %}
+      <input type="file" id="voice-file" name="voice" accept="audio/*,.mp3,.m4a,.wav,.webm,.ogg" style="margin-top:10px">
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button type="button" id="vrec" class="btn-ghost">🎙️ Record instead</button>
+        <span id="vstat" style="font-size:13px;opacity:.8"></span>
+      </div>
+      <script>
+      (function(){
+        var btn = document.getElementById('vrec'), st = document.getElementById('vstat'),
+            inp = document.getElementById('voice-file'), rec = null, chunks = [], timer = null;
+        if (!navigator.mediaDevices || !window.MediaRecorder) { btn.style.display = 'none'; return; }
+        btn.addEventListener('click', function(){
+          if (rec) { rec.stop(); return; }
+          navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+            chunks = [];
+            rec = new MediaRecorder(stream);
+            rec.ondataavailable = function(e){ if (e.data.size) chunks.push(e.data); };
+            rec.onstop = function(){
+              stream.getTracks().forEach(function(t){ t.stop(); });
+              clearTimeout(timer); rec = null;
+              btn.textContent = '🎙️ Record instead';
+              var blob = new Blob(chunks, {type: 'audio/webm'});
+              var f = new File([blob], 'voice.webm', {type: 'audio/webm'});
+              var dt = new DataTransfer(); dt.items.add(f); inp.files = dt.files;
+              st.textContent = 'Voice ready — hit Save below. 🎙️';
+            };
+            rec.start();
+            btn.textContent = '⏹ Stop recording';
+            st.textContent = 'Recording… up to 30 seconds.';
+            timer = setTimeout(function(){ if (rec) rec.stop(); }, 30000);
+          }).catch(function(){ st.textContent = 'Mic blocked — you can upload a file instead.'; });
+        });
+      })();
+      </script>
+    </div>
+
+    <div style="margin-top:22px;border-top:1px solid var(--border,#ddd);padding-top:16px">
+      <div class="section-title">🎲 Two Truths &amp; A Lie <span style="font-weight:400;opacity:.75;font-size:13px">— visitors guess which one is the lie</span></div>
+      {% for n in [1,2,3] %}
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <input type="text" name="ttl_s{{ n }}" maxlength="90" value="{{ p['ttl_s' ~ n]|e }}" placeholder="Statement {{ n }}…" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+        <label style="font-size:13px;white-space:nowrap"><input type="radio" name="ttl_lie" value="{{ n }}"{% if p.ttl_lie == n %} checked{% endif %}> the lie</label>
+      </div>
+      {% endfor %}
+      <div style="font-size:12.5px;opacity:.75;margin-top:5px">Fill all three and mark the lie — it stays hidden until somebody guesses.</div>
+    </div>
+
+    <button class="btn" type="submit" style="font-size:17px;padding:13px;margin-top:20px">Save my dating profile 💘</button>
     <p style="opacity:.7;font-size:13px;text-align:center;margin:0">Next step after saving: the face check — one selfie, and you're in the deck.</p>
   </form>
 

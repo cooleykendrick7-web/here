@@ -32,6 +32,50 @@
       </div>
       {% endif %}
 
+
+      {% if guess_flash == "right" %}<div style="margin-top:12px;background:#e9fbe9;border:1px solid #9ed69e;border-radius:12px;padding:10px 13px;font-weight:700">🎯 You got it — that WAS the lie! Ice: broken.</div>{% elif guess_flash == "wrong" %}<div style="margin-top:12px;background:var(--card-bg,#fff);border:1px solid var(--border,#ddd);border-radius:12px;padding:10px 13px;font-weight:700">🤔 Not that one — good guess though. It's locked in now!</div>{% endif %}
+      {% if card.has_voice %}
+      <div class="section-title" style="margin-top:18px">🎙️ Hear {{ card.name|e }}</div>
+      <audio controls preload="none" src="{{ card.voice_url|e }}" style="width:100%;margin-top:8px"></audio>
+      {% endif %}
+      {% for pr in prompts %}
+      <div style="margin-top:12px;background:#fff5f6;border:1px solid #f6c9cf;border-radius:14px;padding:11px 14px">
+        <div style="font-size:12.5px;font-weight:800;color:#a4133c;letter-spacing:.2px">{{ pr.q|e }}</div>
+        <div style="font-size:16px;line-height:1.55;margin-top:2px">“{{ pr.a|e }}”</div>
+      </div>
+      {% endfor %}
+      {% if ttl %}
+      <div class="section-title" style="margin-top:18px">🎲 Two Truths &amp; A Lie</div>
+      <div style="margin-top:8px;display:grid;gap:8px">
+        {% for st in ttl.s %}
+        <div style="display:flex;gap:8px;align-items:center;background:var(--card-bg,#fff);border:1px solid var(--border,#ddd);border-radius:12px;padding:10px 13px">
+          <span style="flex:1;font-size:15.5px">{{ st|e }}</span>
+          {% if my_guess %}
+            {% if ttl.lie == loop.index %}<span style="font-weight:800;color:#c21807">🤥 the lie</span>{% endif %}
+          {% else %}
+            {% if card.user_id != user.id %}<form method="post" action="/match/guess/{{ card.user_id }}" style="margin:0"><input type="hidden" name="choice" value="{{ loop.index }}"><button class="btn-ghost btn-sm" type="submit">This is the lie 🤔</button></form>{% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% if my_guess %}<div style="margin-top:8px;font-size:14.5px;font-weight:700">{% if my_guess.correct %}🎯 You spotted the lie!{% else %}🤷 That one was true — the lie is revealed above.{% endif %}</div>{% endif %}
+      {% endif %}
+      {% if card.user_id != user.id %}
+      <div class="section-title" style="margin-top:18px">💬 Say something specific</div>
+      <form method="post" action="/match/view/{{ card.user_id }}/comment" style="margin-top:8px">
+        <select name="about" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+          <option value="your photo">their photo</option>
+          {% for pr in prompts %}<option value="your answer to “{{ pr.q|e }}”">their answer: {{ pr.q|e }}</option>{% endfor %}
+          {% if card.has_voice %}<option value="your voice intro">their voice intro</option>{% endif %}
+          <option value="your profile">their profile</option>
+        </select>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input type="text" name="body" maxlength="300" placeholder="Be specific — it works. 💘" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+          <button class="btn" type="submit">Send</button>
+        </div>
+      </form>
+      {% endif %}
+
       <div class="section-title" style="margin-top:18px">More about {{ card.name|e }}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-top:8px;font-size:15px">
         {% if card.height %}<div>📏 <strong>Height</strong><br>{{ card.height }}</div>{% endif %}

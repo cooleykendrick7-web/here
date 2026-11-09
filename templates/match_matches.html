@@ -44,6 +44,28 @@
         <button class="btn-ghost" type="submit">🚫 Block</button>
       </form>
     </div>
+    {% if c.checkin %}
+    <div style="margin-top:12px;background:linear-gradient(135deg,#fff0f2,#ffe3e7);border:1px solid #f3b7c0;border-radius:14px;padding:12px 14px">
+      <div style="font-weight:800">💘 Checking in — how's it going with {{ c.name|e }}?</div>
+      <div style="font-size:14px;margin-top:3px">No pressure. If anything felt off, the Report button is right below — we act on those.</div>
+      <form method="post" action="/match/checkin/{{ c.user_id }}/ok" style="margin-top:8px"><button class="btn" type="submit">😊 All good</button></form>
+    </div>
+    {% endif %}
+    {% if friends %}
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:14px;opacity:.85">🛡️ Share My Date — meeting {{ c.name|e }} in person?</summary>
+      {% if c.shared_with %}<div style="font-size:13.5px;margin-top:6px">🛡️ You already shared your plans with {{ c.shared_with|e }}.</div>{% endif %}
+      <form method="post" action="/match/share-date" style="display:grid;gap:8px;margin-top:8px">
+        <input type="hidden" name="target_id" value="{{ c.user_id }}">
+        <select name="friend_id" style="padding:9px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+          {% for f in friends %}<option value="{{ f.id }}">{{ f.name|e }}</option>{% endfor %}
+        </select>
+        <input type="text" name="when_text" maxlength="80" placeholder="When — e.g. Friday 7pm" style="padding:9px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+        <input type="text" name="where_text" maxlength="120" placeholder="Where — e.g. Applebee's on State St" style="padding:9px;border-radius:10px;border:1px solid var(--border,#ccc);background:var(--card-bg,#fff);color:inherit">
+        <button class="btn-ghost" type="submit">🛡️ Send my plan to my friend</button>
+      </form>
+    </details>
+    {% endif %}
     <details style="margin-top:10px">
       <summary style="cursor:pointer;font-size:14px;opacity:.85">⚠️ Report this person</summary>
       <form method="post" action="/match/report" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
