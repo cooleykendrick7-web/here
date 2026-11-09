@@ -54,6 +54,12 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
 .owner-h{position:fixed;bottom:10px;left:0;right:0;text-align:center}
 .owner-h a{color:#ffd400;font-size:12px;text-decoration:none;opacity:.85}
 .owner-h a:hover{opacity:1}
+
+.g-wrap{margin-top:16px}
+.g-or{display:flex;align-items:center;gap:10px;color:#999;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin:4px 0 12px}
+.g-or:before,.g-or:after{content:"";flex:1;height:1px;background:#333}
+.g-btn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:#111;font-weight:800;font-size:15px;border-radius:10px;padding:12px 14px;text-decoration:none}
+.g-g{font-weight:900;color:#4285f4;font-size:18px;line-height:1}
 </style>
 </head>
 <body>
@@ -109,6 +115,11 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
     </div>
     <button type="submit" class="btn">Create Account</button>
   </form>
+{% if google_on %}
+<div class="g-wrap"><div class="g-or"><span>or</span></div>
+<a class="g-btn" href="/auth/google{% if next %}?next={{ next|urlencode }}{% endif %}"><span class="g-g">G</span> Continue with Google</a></div>
+{% endif %}
+
   <div class="switch">Already on HERE? <a href="/login{% if next %}?next={{ next|urlencode }}{% endif %}">Log in</a></div>
 </div>
 <div class="owner-h"><a href="/owner/login" title="">H</a></div>

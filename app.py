@@ -690,6 +690,12 @@ def init_db():
                   "TEXT DEFAULT ''")
     c.execute("UPDATE users SET eats_enabled=0 "
               "WHERE eats_enabled IS NULL")
+    # GOOGLE SIGN-IN (2026-11-08): the Google account id linked to
+    # this HERE account, '' when none. Linking is by Google's
+    # verified email only (see the Google block below).
+    if "google_sub" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN google_sub "
+                  "TEXT DEFAULT ''")
     c.execute("""CREATE TABLE IF NOT EXISTS eats_days (
         day TEXT PRIMARY KEY,
         gross_cents INTEGER NOT NULL DEFAULT 0,
@@ -3885,6 +3891,64 @@ def _inviter_for_code(code):
     return dict(r) if r else None
 
 
+
+# ---------------- password strength: the common list ----------------
+# The 8-character floor alone lets "password123" through. This list
+# + the pattern families below refuse the passwords attackers try
+# first. Checked at signup and at reset (the two places a password
+# is born). Case-insensitive.
+COMMON_PASSWORDS = frozenset("""
+password password1 password123 password1234 12345678 123456789
+1234567890 12345678910 qwerty123 qwertyuiop abc12345 abc123456
+letmein1 letmein123 welcome1 welcome123 admin123 administrator
+iloveyou iloveyou1 iloveyou123 monkey123 dragon123 football
+baseball superman batman123 trustno1 sunshine master123 shadow123
+ashley123 michael1 jennifer jordan123 hunter123 soccer123 hockey123
+killer123 george123 charlie computer123 michelle jessica pepper123
+12341234 11111111 00000000 99999999 654321987 qazwsx123 zxcvbnm1
+passw0rd passw0rd123 p@ssw0rd p@ssw0rd123 default123 changeme
+changeme123 secret123 summer2024 summer2025 summer2026 winter2024
+winter2025 winter2026 spring2025 spring2026 autumn2025 fall2025
+january123 february123 december november october123 america1
+america123 united123 london123 paris12345 texas123 florida1
+california newyork123 yankees1 cowboys1 lakers123 celtics1
+warriors raiders1 packers1 steelers broncos1 giants123 jets1234
+dolphins eagles1 titans123 chiefs123 saints123 colts12345
+godzilla pokemon1 naruto12 dragonball spiderman superman1
+batman1234 ironman12 avengers hulk1234 thor12345 joker123 harley123
+starwars startrek disney12 princess frozen12 elsa1234 moana123
+money123 money1234 rich1234 million1 billion1 dollar123 cash1234
+gold1234 silver12 diamond1 crystal1 diamond123 queen123 king1234
+prince123 baby1234 babygirl babydaddy sweetie1 honey123 sugar123
+angel123 angels12 demon123 devil666 hell1234 heaven12 jesus123
+god12345 bible123 church12 faith123 hope1234 love1234 love12345
+loveyou1 loveyou12 forever1 forever12 always12 happy123 happy1234
+smile123 smiles12 flower12 flowers1 garden12 ocean123 beach123
+summer12 winter12 spring12 autumn12 season12 coffee12 coffee123
+beer1234 wine12345 vodka123 whiskey tequila1 corona12 budlight
+miller12 heineken smoker12 smoker123 stoner42 stoner123 high1234
+green123 blue1234 red12345 black123 white123 pink1234 gold12345
+music123 music1234 rock1234 metal123 jazz1234 blues123 hiphop12
+rapper12 singer12 guitar12 piano123 violin12 dance123 dancer12
+party123 party1234 club1234 disco123 house123 techno12 rave1234
+""".split())
+
+
+def _pw_rejected(pw):
+    """True when a candidate password is one attackers try first:
+    on the common list, or a common word with a short digit tail."""
+    p = (pw or "").lower()
+    if p in COMMON_PASSWORDS:
+        return True
+    if re.fullmatch(
+            r"(password|qwerty|letmein|welcome|iloveyou|admin|"
+            r"secret|monkey|dragon|football|baseball|sunshine|"
+            r"master|shadow|superman|batman|princess|charlie)"
+            r"\d{0,4}", p):
+        return True
+    return False
+
+
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request):
     if current_user(request):
@@ -3904,7 +3968,8 @@ async def signup_page(request: Request):
                    "error": request.query_params.get("error", ""),
                    "next": _safe_next(
                        request.query_params.get("next")),
-                   "inviter": inviter})
+                   "inviter": inviter,
+                   "google_on": google_enabled()})
 
 
 @app.post("/signup")
@@ -3917,6 +3982,9 @@ async def signup(request: Request):
         return redir("/signup?error=" + "Name, email and password are required.")
     if len(password) < 8:
         return redir("/signup?error=" + "Password needs at least 8 characters.")
+    if _pw_rejected(password):
+        return redir("/signup?error=" + "That password is too common "
+                     "\u2014 pick something less guessable.")
     _sip = _client_ip(request)
     if _too_many_attempts("signup", _sip, 20, 60):
         return redir("/signup?error=" + "Too many new accounts from "
@@ -4000,6 +4068,7 @@ async def login_page(request: Request):
         return redir("/home")
     return render(request, "auth/login.html",
                   {"error": request.query_params.get("error", ""),
+                   "google_on": google_enabled(),
                    "next": _safe_next(
                        request.query_params.get("next"))})
 
@@ -4036,6 +4105,185 @@ async def logout(request: Request):
     resp = redir("/login")
     resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
+
+
+
+# ---------------- Google sign-in (2026-11-08) ----------------
+# Env-gated like SMTP: with GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET
+# set, the login/signup pages grow a "Continue with Google" button
+# and these two routes light up; without them, nothing shows and
+# /auth/google explains itself. Rules that must never weaken:
+#  * an account is linked or created ONLY from a Google-verified
+#    email (email_verified from Google's own token check, aud ==
+#    our client id) \u2014 the email IS the identity bridge, the
+#    same trust the password-reset flow already places in it;
+#  * linking is by that verified email, so a member who joined with
+#    a password lands on the SAME account, never a duplicate;
+#  * brand-new Google accounts get an unguessable random password
+#    hash (nobody knows it, password login simply never matches);
+#    the member can set a real password any time through /forgot;
+#  * invite credit + founding seats follow the exact signup rules.
+def _google_cfg():
+    cid = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+    sec = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+    if not cid or not sec:
+        return None
+    return {"id": cid, "secret": sec}
+
+
+def google_enabled():
+    return _google_cfg() is not None
+
+
+def _google_exchange_code(code, redirect_uri):
+    """Swap the auth code for tokens at Google. {} on any failure.
+    Module-level seam: tests monkeypatch this + _google_tokeninfo."""
+    try:
+        data = urlencode({
+            "code": code, "client_id": _google_cfg()["id"],
+            "client_secret": _google_cfg()["secret"],
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code"}).encode()
+        req = urllib.request.Request(
+            "https://oauth2.googleapis.com/token", data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read().decode())
+    except Exception:
+        return {}
+
+
+def _google_tokeninfo(id_token):
+    """Google's own verdict on an id_token (aud, email,
+    email_verified, sub, name). {} on any failure."""
+    try:
+        url = ("https://oauth2.googleapis.com/tokeninfo?id_token="
+               + quote(id_token or ""))
+        with urllib.request.urlopen(url, timeout=10) as r:
+            return json.loads(r.read().decode())
+    except Exception:
+        return {}
+
+
+@app.get("/auth/google")
+async def google_start(request: Request):
+    cfg = _google_cfg()
+    if not cfg:
+        return redir("/login?error=" + "Google sign-in isn't set up "
+                     "yet \u2014 use your email and password.")
+    state = secrets.token_urlsafe(24)
+    params = {"client_id": cfg["id"],
+              "redirect_uri": _abs_url(request, "/auth/google/callback"),
+              "response_type": "code", "scope": "openid email profile",
+              "state": state, "prompt": "select_account"}
+    resp = RedirectResponse(
+        "https://accounts.google.com/o/oauth2/v2/auth?"
+        + urlencode(params), status_code=303)
+    resp.set_cookie("here_gstate", state, max_age=600, httponly=True,
+                    path="/", samesite="lax")
+    nxt = _safe_next(request.query_params.get("next"))
+    if nxt:
+        resp.set_cookie("here_gnext", nxt, max_age=600, httponly=True,
+                        path="/", samesite="lax")
+    return resp
+
+
+@app.get("/auth/google/callback")
+async def google_callback(request: Request):
+    cfg = _google_cfg()
+    if not cfg:
+        return redir("/login?error=" + "Google sign-in isn't set up "
+                     "yet \u2014 use your email and password.")
+    fail = "/login?error=" + ("Google sign-in didn't finish "
+                              "\u2014 try again.")
+    state = request.query_params.get("state", "")
+    saved = request.cookies.get("here_gstate", "")
+    code = request.query_params.get("code", "")
+    if request.query_params.get("error") or not code or not saved \
+            or not hmac.compare_digest(state, saved):
+        return redir(fail)
+    tok = _google_exchange_code(
+        code, _abs_url(request, "/auth/google/callback"))
+    info = _google_tokeninfo(tok.get("id_token", "")) if tok else {}
+    email = (info.get("email") or "").strip().lower()
+    sub = info.get("sub", "") or ""
+    verified = info.get("email_verified") in (True, "true", "True")
+    if not email or not sub or not verified \
+            or info.get("aud") != cfg["id"]:
+        return redir("/login?error=" + "Google didn't confirm a "
+                     "verified email \u2014 try again.")
+    name = (info.get("name") or "").strip() or email.split("@")[0]
+    conn = db()
+    u = conn.execute("SELECT * FROM users WHERE google_sub=?",
+                     (sub,)).fetchone()
+    created = False
+    if not u:
+        u = conn.execute("SELECT * FROM users WHERE email=?",
+                         (email,)).fetchone()
+        if u:
+            conn.execute("UPDATE users SET google_sub=? WHERE id=?",
+                         (sub, u["id"]))
+            conn.commit()
+    if not u:
+        pw_hash = bcrypt.hashpw(
+            secrets.token_urlsafe(32).encode(),
+            bcrypt.gensalt()).decode()
+        try:
+            cur = conn.execute(
+                "INSERT INTO users(name, email, pw_hash, created_at, "
+                "invite_code, google_sub) VALUES(?,?,?,?,?,?)",
+                (name, email, pw_hash, now_iso(),
+                 gen_invite_code(conn), sub))
+            uid = cur.lastrowid
+            conn.execute(
+                "UPDATE users SET founding=1, founding_no="
+                "(SELECT COUNT(*) FROM users WHERE founding=1) + 1 "
+                "WHERE id=? AND "
+                "(SELECT COUNT(*) FROM users WHERE founding=1) < 100",
+                (uid,))
+            conn.commit()
+            created = True
+            u = conn.execute("SELECT * FROM users WHERE id=?",
+                             (uid,)).fetchone()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            u = conn.execute("SELECT * FROM users WHERE email=?",
+                             (email,)).fetchone()
+            if u and not (u["google_sub"] or ""):
+                conn.execute(
+                    "UPDATE users SET google_sub=? WHERE id=?",
+                    (sub, u["id"]))
+                conn.commit()
+    conn.close()
+    if not u:
+        return redir(fail)
+    uid = u["id"]
+    # Invite credit for a brand-new account \u2014 the same rule as
+    # email signup: only after a successful insert, only from the
+    # here_invite cookie, never to oneself.
+    credited = False
+    if created:
+        inviter = _inviter_for_code(
+            request.cookies.get("here_invite", ""))
+        if inviter and inviter["id"] != uid:
+            conn = db()
+            conn.execute("UPDATE users SET invited_by=? WHERE id=?",
+                         (inviter["id"], uid))
+            conn.commit()
+            conn.close()
+            credited = True
+            notify(inviter["id"], "invite",
+                   f"\U0001f389 {name} joined HERE from your invite!",
+                   "/invite", actor_id=uid)
+    token = new_session(uid)
+    dest = _safe_next(request.cookies.get("here_gnext")) or (
+        "/welcome" if created else "/home")
+    resp = redir(dest)
+    resp.delete_cookie("here_gstate", path="/")
+    resp.delete_cookie("here_gnext", path="/")
+    if credited or request.cookies.get("here_invite"):
+        resp.delete_cookie("here_invite", path="/")
+    return set_session_cookie(resp, token, SESSION_COOKIE)
 
 
 # ---------------- password recovery (Build O) ----------------
@@ -4108,6 +4356,48 @@ def _send_reset_email(cfg, to_email, link):
             "1 hour.</p>"
             "<p>If you didn't ask for this, ignore this email \u2014 "
             "your password won't change.</p>"
+            "<p>\u2014 HERE support</p>", subtype="html")
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=10) as s:
+            s.starttls()
+            s.login(cfg["user"], cfg["pass"])
+            s.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+
+def _send_pw_changed_email(cfg, to_email):
+    """The alarm bell: after a successful reset, tell the account's
+    email it happened, so a hijacked reset never goes unnoticed.
+    True/False \u2014 NEVER raises; the caller treats it as
+    best-effort (a mail failure never blocks or undoes a reset)."""
+    try:
+        msg = EmailMessage()
+        msg["From"] = cfg["user"]
+        msg["To"] = to_email
+        msg["Subject"] = "HERE \u2014 your password was changed"
+        msg.set_content(
+            "Hi,\n\n"
+            "Your HERE password was just changed through the "
+            "password-reset page. You can log in now with your new "
+            "password.\n\n"
+            "If that was you, you're all set \u2014 no need to reply."
+            "\n\n"
+            "If that was NOT you, your email account may be "
+            "compromised. Change your email password, then reset "
+            "your HERE password again right away:\n\n"
+            "https://joincomehere.com/forgot\n\n"
+            "\u2014 HERE support")
+        msg.add_alternative(
+            "<p>Hi,</p>"
+            "<p>Your HERE password was just changed through the "
+            "password-reset page. You can log in now with your new "
+            "password.</p>"
+            "<p>If that was you, you're all set.</p>"
+            "<p><strong>If that was NOT you</strong>, your email "
+            "account may be compromised. Change your email password, "
+            "then <a href=\"https://joincomehere.com/forgot\">reset "
+            "your HERE password again</a> right away.</p>"
             "<p>\u2014 HERE support</p>", subtype="html")
         with smtplib.SMTP(cfg["host"], cfg["port"], timeout=10) as s:
             s.starttls()
@@ -4234,6 +4524,11 @@ async def reset_submit(request: Request, token: str):
                       {"dead": False, "token": token,
                        "error": "Those passwords don't match \u2014 "
                                "try again."})
+    if _pw_rejected(pw1):
+        return render(request, "auth/reset.html",
+                      {"dead": False, "token": token,
+                       "error": "That password is too common \u2014 "
+                                "pick something less guessable."})
     pw_hash = bcrypt.hashpw(pw1.encode(), bcrypt.gensalt()).decode()
     conn = db()
     # Claim the token in the same breath: the guarded UPDATE only
@@ -4243,16 +4538,29 @@ async def reset_submit(request: Request, token: str):
         "UPDATE password_resets SET used_at=?, token_plain=NULL "
         "WHERE id=? AND used_at IS NULL", (now_iso(), row["id"]))
     claimed = cur.rowcount
+    _changed_email = ""
     if claimed == 1:
         conn.execute("UPDATE users SET pw_hash=? WHERE id=?",
                      (pw_hash, row["user_id"]))
         # A reset kills every session the account has, everywhere.
         conn.execute("DELETE FROM sessions WHERE user_id=?",
                      (row["user_id"],))
+        _urow = conn.execute("SELECT email FROM users WHERE id=?",
+                             (row["user_id"],)).fetchone()
+        _changed_email = _urow["email"] if _urow else ""
     conn.commit()
     conn.close()
     if claimed != 1:
         return render(request, "auth/reset.html", {"dead": True})
+    # Alarm bell (2026-11-08): the account's email hears that its
+    # password changed. Best-effort \u2014 SMTP off or a send failure
+    # never blocks the reset that already happened.
+    try:
+        _cfg = _smtp_cfg()
+        if _cfg and _changed_email:
+            _send_pw_changed_email(_cfg, _changed_email)
+    except Exception:
+        pass
     return redir("/login",
                  "Password changed \u2014 log in with your new password.")
 
