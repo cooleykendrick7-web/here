@@ -191,6 +191,8 @@
   <div class="mv-sheet" id="mv-menu-sheet" hidden>
     <button class="mv-menu-item" id="mv-menu-interested" type="button">👍 Interested</button>
     <button class="mv-menu-item" id="mv-menu-not" type="button">👎 Not interested</button>
+    <button class="mv-menu-item" id="mv-menu-repost" type="button">🔁 Repost to my timeline</button>
+    <button class="mv-menu-item" id="mv-menu-story" type="button">➕ Add to my story</button>
     <button class="mv-menu-item" id="mv-menu-cancel" type="button">Cancel</button>
   </div>
 
@@ -968,6 +970,22 @@
                {interested: false});
       closeMenu();
       removeEntry(entry);
+    });
+  document.getElementById('mv-menu-repost')
+    .addEventListener('click', function () {
+      if (!menuEntry) return closeMenu();
+      var entry = menuEntry;
+      postBare('/views/' + entry.item.post_id + '/repost')
+        .catch(function () {});
+      closeMenu();
+    });
+  document.getElementById('mv-menu-story')
+    .addEventListener('click', function () {
+      if (!menuEntry) return closeMenu();
+      var entry = menuEntry;
+      postBare('/views/' + entry.item.post_id + '/to-story')
+        .catch(function () {});
+      closeMenu();
     });
 
   /* ---------------- sound ---------------- */

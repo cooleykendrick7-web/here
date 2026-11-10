@@ -704,6 +704,18 @@ def init_db():
     if "google_sub" not in _user_cols:
         c.execute("ALTER TABLE users ADD COLUMN google_sub "
                   "TEXT DEFAULT ''")
+    # PEEP FEED (2026-11-09): system accounts (the Peep Feed
+    # channel today) are platform furniture, not people: hidden
+    # from search + Who's HERE, cannot be friended, never log in.
+    if "is_system" not in _user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN is_system "
+                  "INTEGER DEFAULT 0")
+    c.execute(
+        "INSERT OR IGNORE INTO users(name, email, pw_hash, "
+        "created_at, is_system) VALUES('Peep Feed', "
+        "'peepfeed@here.internal', ?, ?, 1)",
+        (bcrypt.hashpw(secrets.token_urlsafe(32).encode(),
+                       bcrypt.gensalt()).decode(), now_iso()))
     c.execute("""CREATE TABLE IF NOT EXISTS eats_days (
         day TEXT PRIMARY KEY,
         gross_cents INTEGER NOT NULL DEFAULT 0,
@@ -3219,6 +3231,7 @@ def discover_people(uid, limit=10):
         "u.inbox_status, COUNT(v.id) AS views "
         "FROM users u LEFT JOIN profile_views v "
         "ON v.viewed_id=u.id AND v.viewed_at > datetime('now','-7 days') "
+        "WHERE COALESCE(u.is_system,0)=0 "
         "GROUP BY u.id ORDER BY views DESC, u.created_at DESC").fetchall()
     conn.close()
     out = []
@@ -6422,6 +6435,9 @@ VIEWS_POP_PER_REACTION = 2.0
 VIEWS_POP_PER_COMMENT = 3.0
 VIEWS_POP_CAP = 20.0
 VIEWS_RECENCY_MAX = 20.0     # a brand-new video gets +20, decaying daily
+PEEP_FEED_BOOST = 18.0       # Peep Feed seed videos (2026-11-09):
+                             # enough to surface in a thin scroll,
+                             # never enough to beat a friend (+30)
 VIEWS_SEEN_PENALTY = 35.0    # already-seen videos sink (not removed)
 # Learning deltas (user_affinity points)
 VIEWS_LEARN_SEEN_TAG, VIEWS_LEARN_SEEN_AUTHOR = 0.5, 0.5
@@ -6472,6 +6488,15 @@ def _teach_from_post(conn, uid, post, tag_delta, author_delta):
                        author_delta)
 
 
+def _peep_feed_uid(conn):
+    """The Peep Feed channel account id (None before its first
+    boot creates it)."""
+    r = conn.execute(
+        "SELECT id FROM users WHERE COALESCE(is_system,0)=1 "
+        "ORDER BY id LIMIT 1").fetchone()
+    return r["id"] if r else None
+
+
 def _views_candidates(conn, viewer, tag=None):
     """Feed-eligible post rows (dicts) for a viewer, BEFORE ranking:
     the post carries an uploaded VIDEO file (media ext in VID_EXTS —
@@ -6518,6 +6543,7 @@ def _views_feed(viewer, tag=None, offset=0, limit=10):
     Order: score DESC, then created_at DESC. Page via offset/limit."""
     conn = db()
     posts = _views_candidates(conn, viewer, tag)
+    pf_uid = _peep_feed_uid(conn)
     friends = friend_id_set(viewer["id"])
     following = following_ids(viewer["id"])
     tag_aff = _affinity_map(conn, viewer["id"], "tag")
@@ -6544,6 +6570,8 @@ def _views_feed(viewer, tag=None, offset=0, limit=10):
             score += VIEWS_W_FRIEND
         if p["user_id"] in following:
             score += VIEWS_W_FOLLOW
+        if pf_uid and p["user_id"] == pf_uid:
+            score += PEEP_FEED_BOOST
         score += max(-VIEWS_AUTHOR_AFF_CAP, min(
             VIEWS_AUTHOR_AFF_CAP,
             author_aff.get(str(p["user_id"]), 0.0)))
@@ -6680,6 +6708,64 @@ async def views_feed_json(request: Request):
         if cards:
             resp["ads"] = cards
     return JSONResponse(resp)
+
+
+@app.post("/views/{pid}/repost")
+async def views_repost(request: Request, pid: int):
+    """Repost a peep to your own timeline (Peep Feed ask, Nov 9,
+    2026) — the same share row POST /post/{id}/share creates,
+    in the JSON shape the Peeps player speaks."""
+    user, post, err = _views_gate(request, pid)
+    if err:
+        return err
+    if (post.get("privacy") or "public") != "public":
+        return JSONResponse({"ok": False, "error": "not public"},
+                            status_code=403)
+    conn = db()
+    exists = conn.execute(
+        "SELECT 1 FROM posts WHERE user_id=? AND shared_post_id=?",
+        (user["id"], post["id"])).fetchone()
+    if not exists:
+        conn.execute(
+            "INSERT INTO posts(user_id, kind, privacy, "
+            "shared_post_id, created_at) "
+            "VALUES(?,'text','public',?,?)",
+            (user["id"], post["id"], now_iso()))
+        conn.commit()
+    conn.close()
+    if not exists and post["user_id"] != user["id"]:
+        notify(post["user_id"], "share",
+               f"{user['name']} reposted your video. \U0001f3ac",
+               f"/post/{post['id']}", actor_id=user["id"])
+    return JSONResponse({"ok": True, "already": bool(exists)})
+
+
+@app.post("/views/{pid}/to-story")
+async def views_to_story(request: Request, pid: int):
+    """Add a peep to your story (Peep Feed ask, Nov 9, 2026):
+    a normal 24h friends-audience story riding the same video
+    file — no re-upload, no copy. Adding the same video twice
+    while the first is live is a no-op."""
+    user, post, err = _views_gate(request, pid)
+    if err:
+        return err
+    media = post.get("media") or ""
+    if _media_ext(media) not in VID_EXTS:
+        return JSONResponse({"ok": False, "error": "not a video"},
+                            status_code=400)
+    conn = db()
+    dupe = conn.execute(
+        "SELECT 1 FROM stories WHERE user_id=? AND media=? "
+        "AND expires_at>?", (user["id"], media, now_iso())).fetchone()
+    if not dupe:
+        conn.execute(
+            "INSERT INTO stories(user_id, media, caption, "
+            "created_at, expires_at, audience) VALUES(?,?,?,?,?,?)",
+            (user["id"], media, (post.get("body") or "")[:200],
+             now_iso(), story_expires_at(), "friends"))
+        conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "already": bool(dupe)})
 
 
 @app.get("/views/trending")
@@ -10806,6 +10892,10 @@ async def friend_request(request: Request, uid: int):
     target = get_user(uid)
     if not target:
         return back(request, "/friends")
+    if target.get("is_system"):
+        return redir("/friends",
+                     "That's a HERE channel — follow it in Peeps "
+                     "instead. 🎬")
     if blocked_either_way(user["id"], uid):
         return redir("/friends",
                      "You can't send a friend request to this person.")
@@ -15610,6 +15700,90 @@ async def settings_suggest(request: Request):
     conn.close()
     return RedirectResponse(
         "/settings/profile?idea=sent#ideas", status_code=303)
+
+
+@app.get("/owner/peepfeed", response_class=HTMLResponse)
+async def owner_peepfeed_page(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    pf = _peep_feed_uid(conn)
+    rows = []
+    if pf:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT p.*, "
+            "(SELECT COUNT(*) FROM likes WHERE post_id=p.id) rc, "
+            "(SELECT COUNT(*) FROM comments WHERE post_id=p.id) cc, "
+            "(SELECT COUNT(*) FROM posts "
+            "WHERE shared_post_id=p.id) shares "
+            "FROM posts p WHERE p.user_id=? "
+            "AND p.shared_post_id IS NULL AND p.media != '' "
+            "ORDER BY p.id DESC", (pf,)).fetchall()]
+    conn.close()
+    return render(request, "owner/peepfeed.html",
+                  {"rows": rows, "pf_channel": pf,
+                   "pf_flash": request.query_params.get("flash", "")})
+
+
+@app.post("/owner/peepfeed")
+async def owner_peepfeed_upload(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    form = await request.form()
+    conn = db()
+    pf = _peep_feed_uid(conn)
+    conn.close()
+    if not pf:
+        return redir("/owner/peepfeed",
+                     "The Peep Feed channel is missing — reboot "
+                     "the app and try again.")
+    try:
+        media = save_upload(form.get("video"), "posts", VID_EXTS)
+    except ValueError as e:
+        return redir("/owner/peepfeed", str(e))
+    if not media:
+        return redir("/owner/peepfeed", "Pick a video file first.")
+    caption = (form.get("caption") or "").strip()[:500]
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO posts(user_id, page_id, kind, body, feeling, "
+        "link_url, video_url, media, privacy, music_video_id, "
+        "music_title, music_artist, music_thumb, music_start, "
+        "created_at) VALUES(?,NULL,'video',?,'','','',?,'public',"
+        "'','','','',0,?)",
+        (pf, caption, media, now_iso()))
+    pid = cur.lastrowid
+    for _t in parse_hashtags(caption):
+        conn.execute(
+            "INSERT OR IGNORE INTO post_hashtags(post_id, tag) "
+            "VALUES(?,?)", (pid, _t))
+    conn.commit()
+    conn.close()
+    return redir("/owner/peepfeed",
+                 "Posted to the Peep Feed \U0001f3ac — it's in "
+                 "everybody's Peeps now.")
+
+
+@app.post("/owner/peepfeed/{pid}/remove")
+async def owner_peepfeed_remove(request: Request, pid: int):
+    """Tombstone, never a hard delete: the post leaves every
+    feed, but shares members already made resolve to an empty
+    root instead of breaking their timelines."""
+    err = require_owner(request)
+    if err:
+        return err
+    conn = db()
+    pf = _peep_feed_uid(conn)
+    conn.execute(
+        "UPDATE posts SET media='', privacy='private' "
+        "WHERE id=? AND user_id=?", (pid, pf))
+    conn.commit()
+    conn.close()
+    return redir("/owner/peepfeed",
+                 "Removed from the Peep Feed. Copies members "
+                 "already shared stay theirs.")
 
 
 @app.get("/owner/suggestions", response_class=HTMLResponse)
@@ -21787,7 +21961,7 @@ async def search(request: Request):
             params.append(f"%{q}%")
         else:
             base, params = "1=1", []
-        extra, eparams = "", []
+        extra, eparams = " AND COALESCE(is_system,0)=0", []
         if fcity:
             extra += " AND city LIKE ?"
             eparams.append(f"%{fcity}%")
@@ -25610,7 +25784,9 @@ async def owner_dashboard(request: Request):
 
     today = datetime.now(timezone.utc).date().isoformat()
     stats = {
-        "users": conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"],
+        "users": conn.execute(
+            "SELECT COUNT(*) c FROM users "
+            "WHERE COALESCE(is_system,0)=0").fetchone()["c"],
         "posts_today": conn.execute(
             "SELECT COUNT(*) c FROM posts WHERE date(created_at)=date(?)",
             (today,)).fetchone()["c"],
