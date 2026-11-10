@@ -1592,6 +1592,22 @@ def init_db():
         ended_at TEXT NOT NULL DEFAULT '',
         ended_by TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL DEFAULT '')""")
+    # 2X STUDIO GO link codes (additive): one row per member who
+    # opened the /2x hub. The code is the bearer secret for that
+    # member's 2X link status ONLY (see /api/2x/link-status) — it
+    # unlocks nothing else on HERE. linked_at/app_* are stamped by
+    # the desktop app's confirm call (POST /api/2x/link).
+    c.execute("""CREATE TABLE IF NOT EXISTS twox_links (
+        user_id INTEGER PRIMARY KEY,
+        code TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT '',
+        linked_at TEXT NOT NULL DEFAULT '',
+        app_version TEXT NOT NULL DEFAULT '',
+        platform TEXT NOT NULL DEFAULT '',
+        last_checked_at TEXT NOT NULL DEFAULT '')""")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
+              "idx_twox_links_code ON twox_links(code)")
     c.execute("""CREATE TABLE IF NOT EXISTS media_track_likes (
         track_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
         created_at TEXT NOT NULL DEFAULT '',
@@ -19206,6 +19222,273 @@ def _contract_pdf_bytes(title, lines):
     out.append("\n".join(tail))
     return "\n".join(out).encode("latin-1", "replace")
 
+
+
+# ---------------- 2X STUDIO GO on HERE ----------------
+# The gated hub for Ken's desktop studio (2X STUDIO GO). The door
+# is public to signed-in members, the room is not: access needs
+# BOTH real HERE flags — Creator Mode ON (users.creator_mode, the
+# /settings/creator switch) AND an approved artist standing
+# (users.artist_verified, set when the owner approves an
+# artist_applications row or stamps the member on the Label desk).
+# No parallel flags were invented; the gate reads the same fields
+# the rest of HERE reads. A valid owner session bypasses, exactly
+# like owner context elsewhere on HERE.
+#
+# The link code is a per-member bearer secret for 2X link status
+# ONLY: 10 chars from the invite-code alphabet (~50 bits) in a
+# 2X-XXXXX-XXXXX shape, stored on twox_links, regenerable by the
+# member. Whoever holds a code can ask "is this member linked and
+# entitled?" and learns nothing else — no name, email or profile
+# data rides on /api/2x/link-status. (The one exception is
+# POST /api/2x/link, the member's own confirm call, which echoes
+# the member's own display name back to their own app.)
+# Contract: ~/workspace/2x-studio-go/docs/2X-HERE-INTEGRATION.md —
+# that doc's one-time-token flow is realised here as this
+# persistent regenerable code, which is what the hub hands out.
+
+TWOX_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def _twox_new_code(conn):
+    while True:
+        raw = "".join(secrets.choice(TWOX_CODE_ALPHABET)
+                      for _ in range(10))
+        code = "2X-" + raw[:5] + "-" + raw[5:]
+        if not conn.execute("SELECT 1 FROM twox_links WHERE "
+                            "code=?", (code,)).fetchone():
+            return code
+
+
+def _twox_gate(conn, user):
+    """The 2X gate for one member row: reads the REAL Creator and
+    Artist flags and explains itself in the integration doc's
+    reason vocabulary."""
+    creator = bool(user.get("creator_mode"))
+    artist = bool(user.get("artist_verified"))
+    reasons = []
+    if not creator:
+        reasons.append("creator_mode_off")
+    artist_state = "approved" if artist else "not_applied"
+    if not artist:
+        row = conn.execute(
+            "SELECT status FROM artist_applications WHERE "
+            "user_id=? ORDER BY id DESC LIMIT 1",
+            (user["id"],)).fetchone()
+        st = row["status"] if row else ""
+        if st == "new":
+            artist_state = "pending"
+            reasons.append("artist_pending")
+        elif st == "passed":
+            artist_state = "rejected"
+            reasons.append("artist_rejected")
+        elif st == "approved":
+            # Approved once, plaque later revoked on the desk.
+            artist_state = "rejected"
+            reasons.append("artist_rejected")
+        else:
+            reasons.append("artist_not_applied")
+    return {"creator_mode": creator, "artist_approved": artist,
+            "artist_state": artist_state,
+            "entitled": bool(creator and artist),
+            "reasons": reasons}
+
+
+def _twox_code_row(conn, user_id, create=False):
+    row = conn.execute("SELECT * FROM twox_links WHERE user_id=?",
+                       (user_id,)).fetchone()
+    if row or not create:
+        return dict(row) if row else None
+    stamp = now_iso()
+    conn.execute(
+        "INSERT INTO twox_links(user_id, code, created_at, "
+        "updated_at) VALUES(?,?,?,?)",
+        (user_id, _twox_new_code(conn), stamp, stamp))
+    conn.commit()
+    return _twox_code_row(conn, user_id)
+
+
+@app.get("/2x", response_class=HTMLResponse)
+async def twox_hub(request: Request):
+    """🎛️ 2X STUDIO GO on HERE — locked door for everyone,
+    the link-code room for Creator + Artist members."""
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    gate = _twox_gate(conn, user)
+    owner_on = is_owner(request)
+    entitled = bool(gate["entitled"] or owner_on)
+    link = _twox_code_row(conn, user["id"], create=entitled) \
+        if entitled else _twox_code_row(conn, user["id"])
+    conn.close()
+    return render(request, "twox.html", {
+        "entitled": entitled, "owner_bypass": bool(owner_on
+                                                   and not gate[
+                                                       "entitled"]),
+        "gate": gate, "link": link})
+
+
+@app.post("/2x/code/regenerate")
+async def twox_code_regenerate(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    gate = _twox_gate(conn, user)
+    if not (gate["entitled"] or is_owner(request)):
+        conn.close()
+        return redir("/2x")
+    _twox_code_row(conn, user["id"], create=True)
+    conn.execute("UPDATE twox_links SET code=?, updated_at=? "
+                 "WHERE user_id=?",
+                 (_twox_new_code(conn), now_iso(), user["id"]))
+    conn.commit()
+    conn.close()
+    return redir("/2x", "New 2X link code generated — the old "
+                        "code no longer works.")
+
+
+def _twox_status_payload(conn, row):
+    """link-status body for one twox_links row: gate fields and
+    reasons, nothing else about the member."""
+    user = get_user(row["user_id"])
+    if not user:
+        return None
+    gate = _twox_gate(conn, user)
+    return {"linked": True,
+            "app_confirmed": bool(row.get("linked_at")),
+            "entitled": gate["entitled"],
+            "creator_mode": gate["creator_mode"],
+            "artist_approved": gate["artist_approved"],
+            "artist_state": gate["artist_state"],
+            "reasons": gate["reasons"],
+            "checked_at": now_iso()}
+
+
+async def _twox_code_from_request(request):
+    code = request.query_params.get("code") or ""
+    if not code:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                code = str(body.get("code") or "")
+        except Exception:
+            code = ""
+    if not code:
+        try:
+            form = await request.form()
+            code = str(form.get("code") or "")
+        except Exception:
+            code = ""
+    return code.strip().upper()
+
+
+def _twox_lookup(request, code):
+    """Rate-limit + resolve a link code. Returns (conn, row) or
+    (None, JSONResponse) — 60 calls / 10 min per IP rides the
+    shared auth_attempts limiter."""
+    ip = _client_ip(request)
+    if _too_many_attempts("2x_link", ip, 60, 10):
+        return None, JSONResponse(
+            {"linked": False, "entitled": False,
+             "reasons": ["rate_limited"]}, status_code=429)
+    _record_attempt("2x_link", ip)
+    if not code:
+        return None, JSONResponse(
+            {"linked": False, "entitled": False,
+             "reasons": ["invalid_code"]}, status_code=400)
+    conn = db()
+    row = conn.execute("SELECT * FROM twox_links WHERE code=?",
+                       (code,)).fetchone()
+    if not row:
+        conn.close()
+        return None, JSONResponse(
+            {"linked": False, "entitled": False,
+             "reasons": ["invalid_code"]}, status_code=404)
+    return conn, dict(row)
+
+
+@app.post("/api/2x/link-status")
+async def twox_link_status(request: Request):
+    """The desktop app's entitlement check: it presents the
+    member's link code and learns only whether that member is
+    linked + entitled, and why not when they aren't."""
+    code = await _twox_code_from_request(request)
+    conn, row = _twox_lookup(request, code)
+    if conn is None:
+        return row
+    payload = _twox_status_payload(conn, row)
+    conn.execute("UPDATE twox_links SET last_checked_at=? "
+                 "WHERE user_id=?", (now_iso(), row["user_id"]))
+    conn.commit()
+    conn.close()
+    if payload is None:
+        return JSONResponse({"linked": False, "entitled": False,
+                             "reasons": ["invalid_code"]},
+                            status_code=404)
+    return JSONResponse(payload)
+
+
+@app.get("/api/2x/entitlement")
+async def twox_entitlement(request: Request):
+    """GET twin of link-status (the integration doc's entitlement
+    check, keyed by link code instead of a public username)."""
+    code = await _twox_code_from_request(request)
+    conn, row = _twox_lookup(request, code)
+    if conn is None:
+        return row
+    payload = _twox_status_payload(conn, row)
+    conn.execute("UPDATE twox_links SET last_checked_at=? "
+                 "WHERE user_id=?", (now_iso(), row["user_id"]))
+    conn.commit()
+    conn.close()
+    if payload is None:
+        return JSONResponse({"linked": False, "entitled": False,
+                             "reasons": ["invalid_code"]},
+                            status_code=404)
+    return JSONResponse(payload)
+
+
+@app.post("/api/2x/link")
+async def twox_link_confirm(request: Request):
+    """The app confirms a link: stamps when/where it connected
+    and answers in the integration doc's shape, including the
+    member's own display name for their own app."""
+    code = await _twox_code_from_request(request)
+    conn, row = _twox_lookup(request, code)
+    if conn is None:
+        if row.status_code == 404:
+            return JSONResponse({"linked": False,
+                                 "error": "invalid_code"},
+                                status_code=401)
+        return row
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    stamp = now_iso()
+    conn.execute(
+        "UPDATE twox_links SET linked_at=?, app_version=?, "
+        "platform=?, last_checked_at=? WHERE user_id=?",
+        (stamp,
+         str(body.get("app_version") or "")[:40],
+         str(body.get("platform") or "")[:20],
+         stamp, row["user_id"]))
+    conn.commit()
+    payload = _twox_status_payload(conn, row)
+    user = get_user(row["user_id"])
+    conn.close()
+    if payload is None or not user:
+        return JSONResponse({"linked": False,
+                             "error": "invalid_code"},
+                            status_code=401)
+    payload["username"] = user["name"]
+    payload["reason"] = (payload["reasons"][0]
+                         if payload["reasons"] else None)
+    return JSONResponse(payload)
 
 
 # ---------------- Label routes ----------------
