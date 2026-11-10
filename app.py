@@ -15731,20 +15731,27 @@ async def owner_peepfeed_upload(request: Request):
     err = require_owner(request)
     if err:
         return err
+    ajax = request.headers.get("x-peepfeed-ajax") == "1"
+
+    def _fail(msg):
+        if ajax:
+            return JSONResponse({"ok": False, "error": msg},
+                                status_code=400)
+        return redir("/owner/peepfeed", msg)
+
     form = await request.form()
     conn = db()
     pf = _peep_feed_uid(conn)
     conn.close()
     if not pf:
-        return redir("/owner/peepfeed",
-                     "The Peep Feed channel is missing — reboot "
+        return _fail("The Peep Feed channel is missing — reboot "
                      "the app and try again.")
     try:
         media = save_upload(form.get("video"), "posts", VID_EXTS)
     except ValueError as e:
-        return redir("/owner/peepfeed", str(e))
+        return _fail(str(e))
     if not media:
-        return redir("/owner/peepfeed", "Pick a video file first.")
+        return _fail("Pick a video file first.")
     caption = (form.get("caption") or "").strip()[:500]
     conn = db()
     cur = conn.execute(
@@ -15761,6 +15768,8 @@ async def owner_peepfeed_upload(request: Request):
             "VALUES(?,?)", (pid, _t))
     conn.commit()
     conn.close()
+    if ajax:
+        return JSONResponse({"ok": True, "post_id": pid})
     return redir("/owner/peepfeed",
                  "Posted to the Peep Feed \U0001f3ac — it's in "
                  "everybody's Peeps now.")

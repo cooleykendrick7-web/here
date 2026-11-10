@@ -183,6 +183,45 @@ r = OWN.get("/owner/peepfeed")
 check("the desk no longer lists the removed video",
       "First seed!" not in r.text)
 
+# ---------- AJAX upload (the progress path) ----------
+r = OWN.get("/owner/peepfeed")
+check("desk carries the live-progress uploader",
+      "onprogress" in r.text and 'id="pf-form"' in r.text
+      and "multiple" in r.text)
+r = OWN.post("/owner/peepfeed",
+             data={"caption": "ajax seed"},
+             files={"video": ("ajax.mp4", MP4, "video/mp4")},
+             headers={"X-Peepfeed-Ajax": "1"})
+j = {}
+try:
+    j = r.json()
+except Exception:
+    pass
+check("AJAX upload answers JSON ok + post_id",
+      r.status_code == 200 and j.get("ok") is True
+      and bool(j.get("post_id")), r.text[:120])
+rows = dbq("SELECT * FROM posts WHERE user_id=? AND body='ajax seed'",
+           (PF,))
+check("the AJAX upload still lands as a channel post",
+      len(rows) == 1 and rows[0]["media"].endswith(".mp4"))
+r = OWN.post("/owner/peepfeed",
+             data={"caption": "bad file"},
+             files={"video": ("notes.txt", b"hello", "text/plain")},
+             headers={"X-Peepfeed-Ajax": "1"})
+j = {}
+try:
+    j = r.json()
+except Exception:
+    pass
+check("a bad file answers JSON error, not a redirect",
+      r.status_code == 400 and j.get("ok") is False
+      and bool(j.get("error")), r.text[:120])
+r = OWN.post("/owner/peepfeed",
+             data={"caption": "classic seed"},
+             files={"video": ("classic.mp4", MP4, "video/mp4")})
+check("the no-JS form path still redirects (fallback intact)",
+      r.status_code in (301, 302, 303, 307))
+
 fails = [n for n, ok in RESULTS if not ok]
 print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} passed")
 if fails:

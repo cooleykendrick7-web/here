@@ -27,6 +27,13 @@ table.admin tr:last-child td{border-bottom:none}
 .flash{background:#12351c;border:1px solid #1d9e50;color:#b9f4cd;border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:14px}
 input[type=text]{background:#141414;border:1px solid #2a2a2a;border-radius:8px;color:#f0f0f0;padding:9px 11px;font-size:14px}
 video.pf-prev{width:86px;height:120px;object-fit:cover;border-radius:10px;background:#000;display:block}
+.pf-qrow{background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:10px 14px;margin-top:10px}
+.pf-qname{font-size:13.5px;font-weight:700;word-break:break-all}
+.pf-qstat{font-size:13px;color:#9a9a9a;margin-top:2px}
+.pf-bar{height:14px;background:#2a2a2a;border-radius:99px;margin-top:8px;overflow:hidden}
+.pf-fill{height:100%;width:0%;background:#d41f2e;border-radius:99px;transition:width .15s}
+.pf-fill.done{background:#1d9e50}
+.pf-pct{font-size:22px;font-weight:900;color:#ffd400}
 </style>
 </head>
 <body>
@@ -44,14 +51,113 @@ video.pf-prev{width:86px;height:120px;object-fit:cover;border-radius:10px;backgr
 <p class="note">Upload a video and it lands in <strong>everybody's Peeps</strong> right away, posted by the <strong>Peep Feed</strong> channel — no name attached, it's just HERE's own feed. Members can repost it to their timeline, add it to their story, react, and comment. These seeds carry a small ranking boost so a new member's scroll is never empty — that's the algorithm getting its first material. Removing a video pulls it from every feed; copies members already shared stay theirs.</p>
 
 <section>
-  <form action="/owner/peepfeed" method="post" enctype="multipart/form-data" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:14px">
-    <input type="file" name="video" accept="video/*,.mp4,.mov,.webm" required>
-    <input type="text" name="caption" maxlength="500" placeholder="Caption (optional) — #hashtags ride along" style="flex:1;min-width:220px">
-    <button class="btn" type="submit">🎬 Post to Peep Feed</button>
+  <form id="pf-form" action="/owner/peepfeed" method="post" enctype="multipart/form-data" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:#141414;border:1px solid #2a2a2a;border-radius:10px;padding:14px">
+    <input type="file" id="pf-video" name="video" accept="video/*,.mp4,.mov,.webm" multiple required>
+    <input type="text" id="pf-caption" name="caption" maxlength="500" placeholder="Caption (optional) — #hashtags ride along" style="flex:1;min-width:220px">
+    <button class="btn" type="submit" id="pf-go">🎬 Post to Peep Feed</button>
   </form>
+  <p class="note" style="margin-top:8px">Pick one video — or several at once. They upload one by one with a live percent; the second a video hits <strong>100% ✅ Posted</strong> it's live in Peeps and the next one starts. No page reload, and the form is free for the next batch right away. (Keep this page open until a video reaches 100% — leaving mid-upload stops that one.)</p>
+  <div id="pf-queue"></div>
 </section>
+<script>
+(function () {
+  var form = document.getElementById('pf-form');
+  var fileInp = document.getElementById('pf-video');
+  var capInp = document.getElementById('pf-caption');
+  var queue = document.getElementById('pf-queue');
+  var goBtn = document.getElementById('pf-go');
+  if (!window.XMLHttpRequest || !window.FormData) return;
 
-<section>
+  function refreshList() {
+    fetch('/owner/peepfeed', {credentials: 'same-origin'})
+      .then(function (r) { return r.text(); })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var fresh = doc.getElementById('pf-list');
+        var mine = document.getElementById('pf-list');
+        if (fresh && mine) mine.innerHTML = fresh.innerHTML;
+      })
+      .catch(function () {});
+  }
+
+  function uploadOne(file, caption, row) {
+    return new Promise(function (resolve) {
+      var fill = row.querySelector('.pf-fill');
+      var pct = row.querySelector('.pf-pct');
+      var stat = row.querySelector('.pf-qstat');
+      var fd = new FormData();
+      fd.append('video', file);
+      fd.append('caption', caption);
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/owner/peepfeed');
+      xhr.setRequestHeader('X-Peepfeed-Ajax', '1');
+      xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) {
+          var p = Math.round(e.loaded / e.total * 100);
+          fill.style.width = p + '%';
+          pct.textContent = p + '%';
+          stat.textContent = 'Uploading…';
+        }
+      };
+      xhr.onload = function () {
+        var ok = false;
+        try { ok = JSON.parse(xhr.responseText).ok === true; }
+        catch (e) {}
+        if (ok) {
+          fill.style.width = '100%';
+          fill.className = 'pf-fill done';
+          pct.textContent = '100%';
+          stat.textContent = '✅ Posted — live in Peeps now.';
+        } else {
+          var msg = 'Upload failed — try again.';
+          try {
+            var j = JSON.parse(xhr.responseText);
+            if (j.error) msg = j.error;
+          } catch (e) {}
+          stat.textContent = '⚠️ ' + msg;
+          pct.textContent = '—';
+        }
+        resolve(ok);
+      };
+      xhr.onerror = function () {
+        stat.textContent = '⚠️ Connection dropped — try again.';
+        resolve(false);
+      };
+      xhr.send(fd);
+    });
+  }
+
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var files = Array.prototype.slice.call(fileInp.files || []);
+    if (!files.length) return;
+    var caption = capInp.value;
+    goBtn.disabled = true;
+    var chain = Promise.resolve();
+    files.forEach(function (file) {
+      var row = document.createElement('div');
+      row.className = 'pf-qrow';
+      row.innerHTML = '<span class="pf-qname"></span> ' +
+        '<span class="pf-pct">0%</span>' +
+        '<div class="pf-qstat">Waiting…</div>' +
+        '<div class="pf-bar"><div class="pf-fill"></div></div>';
+      row.querySelector('.pf-qname').textContent = '🎬 ' + file.name;
+      queue.insertBefore(row, queue.firstChild);
+      chain = chain.then(function () {
+        return uploadOne(file, caption, row);
+      });
+    });
+    chain.then(function () {
+      goBtn.disabled = false;
+      fileInp.value = '';
+      capInp.value = '';
+      refreshList();
+    });
+  });
+})();
+</script>
+
+<section id="pf-list">
   {% if rows %}
   <div class="table-wrap">
     <table class="admin">
