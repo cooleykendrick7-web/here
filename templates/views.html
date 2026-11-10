@@ -49,15 +49,6 @@
 .mv-iconbtn:hover{background:rgba(255,255,255,.28)}
 #mv-post-btn{background:#d41f2e;margin-left:auto}
 #mv-post-btn:hover{background:#a8151f}
-.mv-tagrow{display:flex;gap:7px;overflow-x:auto;padding:10px 2px 0;
-  scrollbar-width:none;align-items:center}
-.mv-tagrow::-webkit-scrollbar{display:none}
-.mv-tag{flex-shrink:0;background:rgba(255,255,255,.14);color:#fff;border:none;
-  border-radius:999px;padding:7px 13px;font-size:13.5px;font-weight:700;cursor:pointer}
-.mv-tag:hover{background:rgba(255,255,255,.28)}
-.mv-tag .cnt{opacity:.75;font-weight:600;font-size:12px}
-#mv-active-filter{flex-shrink:0;background:#d41f2e}
-#mv-active-filter:hover{background:#a8151f}
 /* --- right action rail --- */
 .mv-rail{position:absolute;right:10px;bottom:86px;z-index:3;display:flex;
   flex-direction:column;align-items:center;gap:16px}
@@ -180,10 +171,6 @@
       <button class="mv-iconbtn" id="mv-sound-btn" type="button" title="Sound on/off" aria-label="Toggle sound">🔇</button>
       <a class="mv-iconbtn" href="/home" title="Close" aria-label="Close Peeps">✕</a>
     </div>
-    <div class="mv-tagrow">
-      <button class="mv-tag" id="mv-active-filter" type="button" hidden></button>
-      <span id="mv-tags" style="display:contents"></span>
-    </div>
   </div>
 
   <!-- ⋯ menu sheet -->
@@ -263,8 +250,6 @@
 
   var feedEl = document.getElementById('mv-feed');
   var loadingEl = document.getElementById('mv-loading');
-  var tagsEl = document.getElementById('mv-tags');
-  var activeFilterBtn = document.getElementById('mv-active-filter');
   var soundBtn = document.getElementById('mv-sound-btn');
 
   var commentsBackdrop = document.getElementById('mv-comments-backdrop');
@@ -345,66 +330,12 @@
   }
 
   /* ---------------- filter ---------------- */
-  function paintActiveFilter() {
-    if (currentTag) {
-      activeFilterBtn.hidden = false;
-      activeFilterBtn.textContent = '🏷 #' + currentTag + ' ✕';
-    } else {
-      activeFilterBtn.hidden = true;
-      activeFilterBtn.textContent = '';
-    }
-    var chips = tagsEl.querySelectorAll('.mv-tag');
-    for (var i = 0; i < chips.length; i++) {
-      chips[i].style.background =
-        chips[i].getAttribute('data-tag') === currentTag
-          ? '#d41f2e' : '';
-    }
-  }
   function applyFilter(tag) {
     currentTag = tag || '';
     var url = location.pathname +
       (currentTag ? '?tag=' + encodeURIComponent(currentTag) : '');
     try { history.replaceState(null, '', url); } catch (e) {}
-    paintActiveFilter();
     loadFeed(true);
-  }
-  activeFilterBtn.addEventListener('click', function () { applyFilter(''); });
-
-  function loadTrending() {
-    getJSON('/views/trending').then(function (d) {
-      if (!d || !d.ok || !Array.isArray(d.tags)) return;
-      tagsEl.innerHTML = '';
-      d.tags.forEach(function (t) {
-        if (!t || !t.tag) return;
-        if (t.contest) {
-          /* The weekly contest tag is pinned first as a 🏆 LINK to
-             /contest — not a filter chip. */
-          var a = document.createElement('a');
-          a.className = 'mv-tag';
-          a.href = '/contest';
-          a.style.textDecoration = 'none';
-          a.textContent = '🏆 #' + t.tag + ' ';
-          var ccnt = document.createElement('span');
-          ccnt.className = 'cnt';
-          ccnt.textContent = t.count;
-          a.appendChild(ccnt);
-          tagsEl.appendChild(a);
-          return;
-        }
-        var b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'mv-tag';
-        b.setAttribute('data-tag', t.tag);
-        b.textContent = '#' + t.tag + ' ';
-        var cnt = document.createElement('span');
-        cnt.className = 'cnt';
-        cnt.textContent = t.count;
-        b.appendChild(cnt);
-        b.addEventListener('click', function () { applyFilter(t.tag); });
-        tagsEl.appendChild(b);
-      });
-      paintActiveFilter();
-    }).catch(function () {});
   }
 
   /* ---------------- feed loading ---------------- */
@@ -1188,8 +1119,6 @@
     else if (!composerSheet.hidden) closeComposer();
   });
 
-  paintActiveFilter();
-  loadTrending();
   loadFeed(true);
 })();
 </script>
