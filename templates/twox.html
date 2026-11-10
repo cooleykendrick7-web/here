@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}2X STUDIO GO — HERE{% endblock %}
+{% block og_title %}2X STUDIO GO — the studio door on HERE{% endblock %}
+{% block og_description %}2X STUDIO GO is Ken's desktop studio. On HERE it opens only for members who are both Creator Mode ON and a Verified Artist — the link code inside ties the studio app to your HERE profile.{% endblock %}
+{% block content %}
+<div style="max-width:760px;margin:0 auto">
+  <div class="card" style="text-align:center;padding:28px 20px">
+    <div style="font-size:40px">🎛️</div>
+    <h1 style="font-size:28px;margin-top:6px">2X STUDIO GO</h1>
+    <p style="color:var(--muted);margin-top:8px;line-height:1.55">The desktop studio, tied to HERE. Fifty tracks, your colors, your VST plugins, your mic — and a studio identity that knows who you are on HERE. This room is exclusive on purpose: it opens only for members who are <strong>both</strong> a Creator <strong>and</strong> a Verified Artist.</p>
+  </div>
+
+  {% if entitled %}
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">✅ You're in — Creator + Artist confirmed</div>
+    <div style="margin-top:10px;line-height:1.65;font-size:15px">
+      <p>🎙️ <strong>Creator Mode:</strong> ON</p>
+      <p style="margin-top:4px">👑 <strong>Artist:</strong> Verified Artist — approved{% if owner_bypass %} <span style="color:var(--muted)">(viewing with owner access)</span>{% endif %}</p>
+      {% if link and link.linked_at %}
+      <p style="margin-top:4px">🔗 <strong>Studio app linked:</strong> {{ link.linked_at[:10] }}{% if link.platform %} · {{ link.platform|e }}{% endif %}{% if link.app_version %} · app v{{ link.app_version|e }}{% endif %}</p>
+      {% else %}
+      <p style="margin-top:4px">🔗 <strong>Studio app:</strong> not linked yet — enter the code below in the app.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card" style="padding:22px 20px;text-align:center">
+    <div class="section-title">Your 2X link code</div>
+    <p style="margin-top:8px;color:var(--muted);line-height:1.55">Enter this code in <strong>2X STUDIO GO → Settings → 2X Here</strong>. It ties the studio to your HERE profile — treat it like a key: anyone holding it can check your 2X link status, nothing more.</p>
+    <div style="margin:16px auto 4px;display:inline-block;background:#111;color:#fff;border:2px solid var(--red);border-radius:12px;padding:14px 26px;font-size:26px;font-weight:900;letter-spacing:3px">{{ link.code|e }}</div>
+    <form method="post" action="/2x/code/regenerate" style="margin-top:14px" onsubmit="return confirm('Generate a new code? The old code stops working right away.')">
+      <button type="submit" class="btn-ghost">↻ Generate a new code</button>
+    </form>
+  </div>
+
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">What linking unlocks</div>
+    <div style="margin-top:8px;line-height:1.65;font-size:15px">
+      <p><strong>1.</strong> The studio knows your HERE standing — Creator + Artist confirmed, no forms, no passwords: the app never sees your HERE password, only this code.</p>
+      <p style="margin-top:6px"><strong>2.</strong> Your 2X identity travels with your HERE profile, so studio work and the Label live under one name.</p>
+      <p style="margin-top:6px"><strong>3.</strong> If either door ever closes — Creator Mode off, or the artist plaque revoked — the link check says so plainly and studio access through HERE pauses until it's fixed.</p>
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="padding:22px 20px">
+    <div class="section-title">🔒 The door is locked — two keys open it</div>
+    <p style="margin-top:8px;line-height:1.6">2X STUDIO GO access through HERE is for members who are signed up as a <strong>Creator</strong> and as an <strong>Artist</strong>. Here's exactly where you stand and what to do:</p>
+    <div style="margin-top:14px;line-height:1.65;font-size:15px">
+      <p>
+        {% if gate.creator_mode %}✅{% else %}⬜{% endif %}
+        <strong>Step 1 — Creator Mode.</strong>
+        {% if gate.creator_mode %}On — done.{% else %}Off. <a href="/settings/profile#creator-mode"><strong>Turn on Creator Mode in Settings</strong></a> — it's free and takes one switch.{% endif %}
+      </p>
+      <p style="margin-top:10px">
+        {% if gate.artist_approved %}✅{% else %}⬜{% endif %}
+        <strong>Step 2 — Become a Verified Artist.</strong>
+        {% if gate.artist_state == "approved" %}Approved — done. Your gold plaque is live; this key is in hand.
+        {% elif gate.artist_state == "pending" %}Your artist application is <strong>in — it's waiting on the owner's desk</strong>. Nothing more to do; check back here and this door opens the moment you're approved.
+        {% elif gate.artist_state == "rejected" %}Your last artist application wasn't approved. You can <a href="/artist/start"><strong>walk the artist door again</strong></a> — watch the play, read the Playbook, sign off — or set up Artist mode from <a href="/settings/profile#artist-card"><strong>your Settings artist card</strong></a>.
+        {% else %}Not an approved artist yet. <a href="/artist/start"><strong>Walk the artist door</strong></a>: switch on Artist mode, watch the play, read the Playbook, and sign off — your application lands on the owner's desk for approval. The short way in is on <a href="/settings/profile#artist-card"><strong>your Settings artist card</strong></a>.{% endif %}
+      </p>
+      <p style="margin-top:10px;color:var(--muted)">Both keys in hand, this page hands you your <strong>2X link code</strong> — the code the studio app asks for to tie itself to your HERE profile.</p>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
