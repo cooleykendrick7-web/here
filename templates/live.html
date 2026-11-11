@@ -688,6 +688,112 @@
 .studio-seg button:disabled{opacity:.45;cursor:default}
 #live-sheet input[type=range].studio-range{width:calc(100% - 16px);
   margin:2px 8px 10px;accent-color:var(--red)}
+/* ===== Studio Console (Phase 2): full-screen TikTok-Studio-shaped
+   console — scenes/sources rail, canvas preview, mixer, live data
+   + chat. Wide screens only; narrow screens keep the Studio sheet.
+   Below the sheets (1990) and toast (2100), above the live view. */
+#st2-console{position:fixed;inset:0;z-index:1600;display:flex;
+  background:#0b0b10;color:#fff;font-size:14px}
+#st2-console[hidden]{display:none}
+#st2-console *{box-sizing:border-box}
+.st2-rail{width:264px;flex:none;border-right:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.04);padding:12px 10px;overflow-y:auto}
+.st2-right{width:324px;flex:none;border-left:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.04);padding:12px 10px;overflow-y:auto;
+  display:flex;flex-direction:column}
+.st2-center{flex:1;min-width:0;display:flex;flex-direction:column;
+  padding:12px;gap:10px}
+.st2-rail-head{font-weight:900;font-size:16px;margin-bottom:8px}
+.st2-sec{font-weight:800;font-size:12px;letter-spacing:.6px;
+  text-transform:uppercase;color:rgba(255,255,255,.65);margin:14px 0 6px}
+.st2-note{font-size:12px;color:rgba(255,255,255,.62);line-height:1.45;
+  margin:4px 0 8px}
+.st2-scene{display:flex;align-items:center;gap:6px;width:100%;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);
+  color:#fff;border-radius:10px;padding:8px 10px;margin:0 0 6px;
+  cursor:pointer;text-align:left}
+.st2-scene.on{background:var(--red);border-color:var(--red-dark)}
+.st2-scene .nm{flex:1;font-weight:700;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.st2-icon-btn{background:rgba(255,255,255,.12);border:1px solid
+  rgba(255,255,255,.2);color:#fff;border-radius:8px;padding:3px 7px;
+  cursor:pointer;font-size:12px}
+.st2-add{width:100%;background:rgba(255,255,255,.1);color:#fff;
+  border:1px dashed rgba(255,255,255,.35);border-radius:10px;
+  padding:8px;cursor:pointer;font-weight:700}
+.st2-src{display:flex;align-items:center;gap:5px;width:100%;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.13);
+  color:#fff;border-radius:10px;padding:7px 8px;margin:0 0 5px;
+  cursor:pointer;text-align:left}
+.st2-src.on{border-color:var(--red);background:rgba(212,31,46,.18)}
+.st2-src .nm{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;font-size:13px}
+.st2-src.off .nm{opacity:.45}
+.st2-addrow{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0 2px}
+.st2-addrow button{background:rgba(255,255,255,.1);color:#fff;
+  border:1px solid rgba(255,255,255,.2);border-radius:999px;
+  padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer}
+.st2-props{margin-top:10px;border-top:1px solid rgba(255,255,255,.12);
+  padding-top:8px}
+.st2-props input[type=text], .st2-props textarea{width:100%;
+  background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.25);
+  border-radius:8px;color:#fff;padding:7px 9px;font-size:13px;margin:2px 0 8px}
+.st2-props select{width:100%;background:rgba(0,0,0,.4);color:#fff;
+  border:1px solid rgba(255,255,255,.25);border-radius:8px;
+  padding:7px 9px;font-size:13px;margin:2px 0 8px}
+.st2-props input[type=range]{width:100%;accent-color:var(--red);margin:2px 0 8px}
+.st2-props input[type=color]{width:52px;height:30px;background:none;
+  border:1px solid rgba(255,255,255,.25);border-radius:8px;margin:2px 0 8px}
+.st2-rowbtn{display:block;width:100%;background:rgba(255,255,255,.1);
+  color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:10px;
+  padding:8px 10px;margin:0 0 6px;cursor:pointer;font-weight:700;
+  text-align:left}
+.st2-srcgrid{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px}
+.st2-srcpick{width:calc(50% - 3px);background:rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.18);border-radius:10px;color:#fff;
+  padding:6px;cursor:pointer;text-align:left}
+.st2-srcpick img{width:100%;height:52px;object-fit:cover;border-radius:6px;
+  display:block;margin-bottom:4px;background:#000}
+.st2-srcpick .nm{font-size:11px;font-weight:600;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.st2-preview-wrap{position:relative;margin:auto;width:100%;
+  max-width:calc((100vh - 250px) * 16 / 9);background:#000;
+  border:1px solid rgba(255,255,255,.2);border-radius:12px;
+  overflow:hidden;touch-action:none;flex:none}
+.st2-preview-wrap.portrait{max-width:calc((100vh - 250px) * 9 / 16)}
+#st2-preview{display:block;width:100%;height:auto}
+.st2-selbox{position:absolute;border:2px solid var(--red);
+  box-shadow:0 0 0 1px rgba(255,255,255,.5);pointer-events:none;z-index:3}
+.st2-selbox::after{content:'';position:absolute;right:-8px;bottom:-8px;
+  width:14px;height:14px;background:var(--red);border:2px solid #fff;
+  border-radius:4px}
+.st2-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex:none}
+.st2-bar>button{background:rgba(255,255,255,.12);color:#fff;
+  border:1px solid rgba(255,255,255,.22);border-radius:999px;
+  padding:9px 16px;font-weight:800;cursor:pointer;font-size:13px}
+.st2-bar>button.primary{background:var(--red);border-color:var(--red-dark)}
+.st2-bar .studio-seg{padding:0}
+.st2-mixer{flex:none;border-top:1px solid rgba(255,255,255,.14);
+  padding-top:8px}
+.st2-mix-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.st2-mix-title{font-weight:800;font-size:12px;letter-spacing:.6px;
+  text-transform:uppercase;color:rgba(255,255,255,.65)}
+.st2-mix-ch{display:flex;align-items:center;gap:8px;margin:0 0 5px}
+.st2-mix-ch .lb{width:170px;flex:none;font-size:12.5px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st2-mix-ch input[type=range]{flex:1;accent-color:var(--red)}
+.st2-mix-ch .pc{width:44px;flex:none;text-align:right;font-size:12px;
+  color:rgba(255,255,255,.75)}
+.st2-stats{font-size:15px;font-weight:800;background:rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.14);border-radius:10px;
+  padding:9px 12px;margin-bottom:4px}
+#st2-chat-slot{flex:1;display:flex;flex-direction:column;gap:8px;
+  min-height:120px}
+#st2-chat-slot .live-float{position:static;width:auto;max-height:none;
+  flex:1;pointer-events:auto}
+#st2-chat-slot .live-float .live-comments{max-height:100%}
+#st2-chat-slot .live-panel{margin:0}
+@media (max-width:899px){ #st2-console{display:none !important} }
 @media (prefers-reduced-motion: reduce){
   .live-chrome,#live-exit{transition:none}
 }
@@ -1030,6 +1136,71 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
   <div class="aud-title" id="live-sheet-title">Manage</div>
   <div id="live-sheet-actions"></div>
   <button type="button" class="cmenu-item" id="live-sheet-cancel">Cancel</button>
+</div>
+<!-- Studio Console (Phase 2): the wide-screen Studio surface.
+     Its chat is the page's OWN chat (the #live-float stream and the
+     comment form panel are MOVED in here while the console is open
+     and put back on close — same nodes, same state, never a copy).
+     The preview canvas mirrors the real Studio canvas. -->
+<div id="st2-console" hidden>
+  <div class="st2-rail">
+    <div class="st2-rail-head">🎬 Studio Console</div>
+    <div class="st2-note">Scenes are layouts of sources. Switching a
+      scene re-lays your picture live — viewers see exactly what the
+      preview shows.</div>
+    <div class="st2-sec">Scenes</div>
+    <div id="st2-scenes"></div>
+    <button type="button" class="st2-add" id="st2-scene-add">＋ Add scene</button>
+    <div class="st2-sec">Sources · <span id="st2-scene-name"></span></div>
+    <div id="st2-sources"></div>
+    <div class="st2-addrow" id="st2-addrow">
+      <button type="button" data-add="main">🎥 Main</button>
+      <button type="button" data-add="face">🪟 Facecam</button>
+      <button type="button" data-add="camera">📷 Camera</button>
+      <button type="button" data-add="screen">🖥 Screen</button>
+      <button type="button" data-add="image">🖼 Image</button>
+      <button type="button" data-add="video">🎬 Video file</button>
+      <button type="button" data-add="text">🔤 Text</button>
+      <button type="button" data-add="studio">🎛 Classic mix</button>
+    </div>
+    <div class="st2-props" id="st2-props"></div>
+  </div>
+  <div class="st2-center">
+    <div class="st2-preview-wrap" id="st2-preview-wrap">
+      <canvas id="st2-preview" width="1280" height="720"></canvas>
+      <div class="st2-selbox" id="st2-selbox" hidden></div>
+    </div>
+    <div class="st2-bar">
+      <button type="button" class="primary" id="st2-btn-start">▶ Start Studio</button>
+      <span class="studio-seg" id="st2-orient">
+        <button type="button" data-o="landscape">🖥 Landscape</button>
+        <button type="button" data-o="portrait">📱 Portrait</button>
+      </span>
+      <button type="button" id="st2-btn-classic">🎛 Classic controls</button>
+      <span class="st2-note" style="margin:0">Drag a layer to move it · drag its
+        bottom-right corner to resize</span>
+      <button type="button" id="st2-btn-close" style="margin-left:auto">✕ Close</button>
+    </div>
+    <div class="st2-mixer">
+      <div class="st2-mix-head">
+        <span class="st2-mix-title">🎚 Audio mixer</span>
+        <span class="st2-note" id="st2-mix-state" style="margin:0"></span>
+        <button type="button" class="st2-icon-btn" id="st2-mix-toggle">Use mixer</button>
+        <span style="flex:1"></span>
+        <span class="st2-note" style="margin:0">Master</span>
+        <input type="range" id="st2-mix-master" min="0" max="150" value="100"
+          style="width:130px;accent-color:var(--red)">
+        <button type="button" class="st2-icon-btn" id="st2-mix-mute">🔊</button>
+      </div>
+      <div id="st2-mix-channels"></div>
+    </div>
+  </div>
+  <div class="st2-right">
+    <div class="st2-stats">👁 <span id="st2-viewers">0</span> watching
+      · ❤️ <span id="st2-likes">0</span></div>
+    <div class="st2-sec">💬 Live chat</div>
+    <div id="st2-chat-slot"></div>
+  </div>
 </div>
 <div id="live-toast" hidden></div>
 <button type="button" id="gift-boost" hidden>
@@ -2998,6 +3169,8 @@ function liveRoomDiff(prev, next){
       studio.on = true;
       studio.frame = 0;
       studioDraw();
+      if (typeof st2MixStart === 'function' && st2.mixWanted)
+        st2MixStart();
       return studioPublish();
     }).then(function(){
       if (studio.on){
@@ -3039,6 +3212,7 @@ function liveRoomDiff(prev, next){
   function studioStop(silent){
     if (!studio.on) return Promise.resolve();
     studio.on = false;
+    if (typeof st2MixStop === 'function') st2MixStop();
     studioParkCanvas();
     if (studio.raf) cancelAnimationFrame(studio.raf);
     studio.raf = 0;
@@ -3066,6 +3240,7 @@ function liveRoomDiff(prev, next){
     if (!studio.on) return;
     studioBindMain();
     studioPublish();
+    if (typeof st2MixRebind === 'function') st2MixRebind();
   }
   /* ---------- drawing helpers ---------- */
   function studioSrcSize(src){
@@ -3329,7 +3504,10 @@ function liveRoomDiff(prev, next){
        (Ken's 2026-10-29 report). */
     try {
     studio.frame++;
-    var ctx = studio.ctx, W = 1280, H = 720;
+    var ctx = studio.ctx, W = studio.canvas.width,
+      H = studio.canvas.height;
+    var st2Scene = (typeof st2SceneEngaged === 'function')
+      && st2SceneEngaged();
     var isScreen = lcVideoKind === 'screen';
     var faceWanted = studio.faceOn && !!studio.faceStream
       && !!studio.faceVid.srcObject;
@@ -3337,7 +3515,9 @@ function liveRoomDiff(prev, next){
     ctx.filter = 'none';
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
-    if (studio.keyOn && !faceWanted){
+    if (st2Scene){
+      st2DrawScene(ctx, W, H);
+    } else if (studio.keyOn && !faceWanted){
       /* Solo green screen: backdrop full-frame, keyed ME on top. */
       studioDrawBackdrop(ctx, W, H);
       var keyedMain = studioKeyed(studio.mainVid);
@@ -3416,7 +3596,7 @@ function liveRoomDiff(prev, next){
     }
     /* Picture shared on screen — any panelist can put one up
        on their own picture. */
-    if (studio.picImg){
+    if (studio.picImg && !st2Scene){
       var pw = studio.picSize === 's' ? 220
              : studio.picSize === 'l' ? 460 : 320;
       var ph = Math.round(pw * 0.66);
@@ -4057,7 +4237,14 @@ function liveRoomDiff(prev, next){
     sheetBd.hidden = false;
     lcEnumerate().then(function(){ studioRerender(); });
   }
-  $('ctl-studio').addEventListener('click', openStudioSheet);
+  $('ctl-studio').addEventListener('click', function(){
+    /* Phase 2: on a wide screen the Studio button opens the
+       full console; phones keep the Studio sheet. */
+    if (window.matchMedia
+        && matchMedia('(min-width: 900px)').matches
+        && typeof st2OpenConsole === 'function') st2OpenConsole();
+    else openStudioSheet();
+  });
   /* Diagnostics / test surface (same precedent as __liveConnect). */
   window.__liveStudio = {
     state: function(){
@@ -4094,6 +4281,1427 @@ function liveRoomDiff(prev, next){
     forceCompat: function(){ studioFilterOK = false; }
   };
 
+  /* ---------------- Studio Console (Phase 2) ----------------
+     Ken's Phase 2 order (Nov 10, 2026): the TikTok-LIVE-Studio
+     shape around the EXISTING Studio compositor — a full-screen
+     console (wide screens; the sheet stays on narrow ones) with
+     scenes, free layers, a portrait canvas and an audio mixer.
+
+     Scenes: each scene is a stack of layers (bottom first). A
+     layer has a rect as FRACTIONS of the canvas (x/y/w/h 0..1),
+     so flipping the canvas between 1280x720 and 720x1280 re-fits
+     every layer proportionally with zero math per layer. Layer
+     kinds: studio (the classic mix — main + facecam + picture,
+     re-composed from the same helpers), main (the Live Connect
+     source), face (the facecam), camera (its own device), screen
+     (its own share — getDisplayMedia, or a window/screen from
+     the desktop app's hereDesktop bridge), image, video (file),
+     text. Scenes + layout persist in localStorage; media files
+     themselves cannot persist (browser rule) — an image small
+     enough rides along as a data URL, a video layer keeps only
+     its slot + file name and asks for the file again.
+
+     The classic scene (one full-frame 'studio' layer) is NOT
+     scene-rendered: studioDraw runs its original path untouched,
+     so every existing Studio behaviour is preserved bit-for-bit
+     until the streamer builds scenes of their own.
+
+     Mixer: while Studio is on, outgoing audio can route through
+     a Web Audio graph — one gain per source (mic / screen /
+     video files) into a master gain — whose destination track
+     replaces the audio sender exactly the way the canvas track
+     replaces the video sender (lcReplaceSenderTrack). The page
+     mute button still works: it disables the raw mic track, and
+     silence flows through the graph. Peers born mid-mix get the
+     mix track from addLocalTracks, same as the Studio video. */
+
+  var ST2_LS_KEY = 'here_studio2';
+  var st2 = {
+    open: false, engaged: false, orient: 'landscape',
+    scenes: [], activeScene: 0, sel: null, renaming: -1,
+    screenStream: null, screenVid: null, screenName: '',
+    desktopSources: null, drag: null, pumpTimer: 0, statsTimer: 0,
+    chatHome: null, gains: {}, master: 1, masterMute: false,
+    mixWanted: false
+  };
+  var st2Media = {}; /* layerId -> {vid, stream, img, objUrl, name} */
+  var st2Mix = {ctx: null, dest: null, masterNode: null,
+                nodes: {}, outTrack: null, on: false};
+  var st2IdSeq = 0;
+
+  function st2LayerId(){
+    st2IdSeq++;
+    return 'L' + Date.now().toString(36) + st2IdSeq.toString(36);
+  }
+  function st2Layer(kind){
+    var L = {id: st2LayerId(), kind: kind, name: '', x: 0, y: 0,
+             w: 1, h: 1, vis: true, fit: 'cover', text: '',
+             fs: 64, color: '#ffffff', bg: true, deviceId: null,
+             srcId: null, imgData: null, vidName: ''};
+    if (kind === 'main') L.name = 'Main source';
+    else if (kind === 'studio'){ L.name = 'Classic mix'; }
+    else if (kind === 'face'){
+      L.name = 'Facecam';
+      L.x = 0.68; L.y = 0.64; L.w = 0.29; L.h = 0.32;
+    } else if (kind === 'camera') L.name = 'Camera';
+    else if (kind === 'screen') L.name = 'Screen / window';
+    else if (kind === 'image'){
+      L.name = 'Image'; L.x = 0.3; L.y = 0.28; L.w = 0.4; L.h = 0.44;
+      L.fit = 'contain';
+    } else if (kind === 'video'){
+      L.name = 'Video file'; L.x = 0.25; L.y = 0.22; L.w = 0.5; L.h = 0.5;
+    } else if (kind === 'text'){
+      L.name = 'Text'; L.text = 'Your text';
+      L.x = 0.2; L.y = 0.42; L.w = 0.6; L.h = 0.16;
+    }
+    return L;
+  }
+  function st2DefaultScenes(){
+    var classic = st2Layer('studio');
+    var game = st2Layer('main');
+    var face = st2Layer('face');
+    var brb = st2Layer('text');
+    brb.name = 'Back soon'; brb.text = '⏸ Back in a minute';
+    brb.fs = 84; brb.x = 0.12; brb.y = 0.4; brb.w = 0.76; brb.h = 0.2;
+    return [
+      {name: 'Classic Studio', layers: [classic]},
+      {name: 'Game + Face', layers: [game, face]},
+      {name: 'Intermission', layers: [brb]}
+    ];
+  }
+  function st2IsClassicScene(sc){
+    return !!sc && sc.layers.length === 1
+      && sc.layers[0].kind === 'studio';
+  }
+  function st2Scene(){
+    return st2.scenes[st2.activeScene] || null;
+  }
+  function st2SceneEngaged(){
+    return st2.engaged && !!st2Scene() && !st2IsClassicScene(st2Scene());
+  }
+  function st2Save(){
+    try {
+      var data = {v: 1, orient: st2.orient, engaged: st2.engaged,
+        activeScene: st2.activeScene, gains: st2.gains,
+        mixWanted: st2.mixWanted,
+        master: st2.master, masterMute: st2.masterMute,
+        scenes: st2.scenes.map(function(sc){
+          return {name: sc.name, layers: sc.layers.map(function(L){
+            var c = {};
+            ['id', 'kind', 'name', 'x', 'y', 'w', 'h', 'vis', 'fit',
+             'text', 'fs', 'color', 'bg', 'deviceId', 'srcId',
+             'vidName'].forEach(function(k){ c[k] = L[k]; });
+            /* Only a small image may ride along (data URL cap) —
+               a big one stays in memory for this session only. */
+            c.imgData = (L.imgData && L.imgData.length < 700000)
+              ? L.imgData : null;
+            return c;
+          })};
+        })};
+      localStorage.setItem(ST2_LS_KEY, JSON.stringify(data));
+    } catch (e) {}
+  }
+  function st2Load(){
+    var data = null;
+    try { data = JSON.parse(localStorage.getItem(ST2_LS_KEY) || 'null'); }
+    catch (e) {}
+    if (!data || !data.scenes || !data.scenes.length){
+      st2.scenes = st2DefaultScenes();
+      return;
+    }
+    st2.orient = data.orient === 'portrait' ? 'portrait' : 'landscape';
+    st2.engaged = !!data.engaged;
+    st2.gains = data.gains || {};
+    st2.master = typeof data.master === 'number' ? data.master : 1;
+    st2.masterMute = !!data.masterMute;
+    st2.mixWanted = !!data.mixWanted;
+    st2.scenes = data.scenes.map(function(sc){
+      return {name: String(sc.name || 'Scene'), layers: (sc.layers || [])
+        .map(function(L){
+          var d = st2Layer(L.kind || 'text');
+          ['id', 'name', 'x', 'y', 'w', 'h', 'vis', 'fit', 'text',
+           'fs', 'color', 'bg', 'deviceId', 'srcId', 'vidName',
+           'imgData'].forEach(function(k){
+            if (L[k] !== undefined) d[k] = L[k];
+          });
+          return d;
+        })};
+    });
+    if (!st2.scenes.length) st2.scenes = st2DefaultScenes();
+    st2.activeScene = Math.min(Math.max(0, data.activeScene || 0),
+                               st2.scenes.length - 1);
+    /* Restore the small persisted images into runtime media. */
+    st2.scenes.forEach(function(sc){
+      sc.layers.forEach(function(L){
+        if (L.kind === 'image' && L.imgData){
+          var im = new Image();
+          im.onload = function(){ st2Media[L.id] = {img: im}; };
+          im.src = L.imgData;
+        }
+      });
+    });
+  }
+  function st2FindLayer(id){
+    var sc = st2Scene();
+    if (!sc) return null;
+    for (var i = 0; i < sc.layers.length; i++)
+      if (sc.layers[i].id === id) return sc.layers[i];
+    return null;
+  }
+
+  /* ---------- scene drawing (called from studioDraw) ---------- */
+  function st2DrawScene(ctx, W, H){
+    var sc = st2Scene();
+    if (!sc) return;
+    sc.layers.forEach(function(L){
+      if (L.vis) st2DrawLayer(ctx, W, H, L);
+    });
+  }
+  function st2LayerLabel(ctx, x, y, w, h, txt){
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,.08)';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = 'rgba(255,255,255,.35)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.font = '700 ' + Math.max(15, Math.round(h * 0.09)) + 'px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(txt, x + w / 2, y + h / 2, w - 16);
+    ctx.restore();
+  }
+  function st2DrawLayer(ctx, W, H, L){
+    var x = L.x * W, y = L.y * H, w = L.w * W, h = L.h * H;
+    if (L.kind === 'studio'){ st2DrawLayerClassic(ctx, W, H, L); return; }
+    if (L.kind === 'text'){ st2DrawTextLayer(ctx, x, y, w, h, L); return; }
+    var src = null, contain = L.fit === 'contain';
+    if (L.kind === 'main'){
+      src = studio.mainVid;
+      if (L.fit !== 'contain' && L.fit !== 'cover')
+        contain = lcVideoKind === 'screen';
+      if (!myCamOn && lcVideoKind !== 'screen'){
+        st2LayerLabel(ctx, x, y, w, h, '📷 Camera off');
+        return;
+      }
+    } else if (L.kind === 'face'){
+      if (!(studio.faceOn && studio.faceStream && studio.faceVid
+            && studio.faceVid.srcObject)){
+        st2LayerLabel(ctx, x, y, w, h,
+          '🪟 Facecam is off — turn it on in Classic controls');
+        return;
+      }
+      ctx.save();
+      studioRoundBox(ctx, x, y, w, h, 18);
+      ctx.clip();
+      studioDrawFit(ctx, studio.faceVid, x, y, w, h, false, null,
+                    lcMirrorEffective());
+      ctx.restore();
+      ctx.save();
+      studioRoundBox(ctx, x, y, w, h, 18);
+      ctx.strokeStyle = 'rgba(255,255,255,.55)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.restore();
+      return;
+    } else if (L.kind === 'camera'){
+      var cm = st2Media[L.id];
+      if (cm && cm.vid) src = cm.vid;
+      if (!src || !studioSrcSize(src)){
+        st2LayerLabel(ctx, x, y, w, h,
+          '📷 Camera — pick a device in the console');
+        return;
+      }
+    } else if (L.kind === 'screen'){
+      if (st2.screenVid && st2.screenStream) src = st2.screenVid;
+      if (!src || !studioSrcSize(src)){
+        st2LayerLabel(ctx, x, y, w, h,
+          '🖥 Screen — start sharing in the console');
+        return;
+      }
+    } else if (L.kind === 'image'){
+      var im = st2Media[L.id];
+      if (im && im.img && im.img.naturalWidth){
+        studioDrawFit(ctx, im.img, x, y, w, h, true);
+        return;
+      }
+      st2LayerLabel(ctx, x, y, w, h, '🖼 Image — pick a file in the console');
+      return;
+    } else if (L.kind === 'video'){
+      var vm = st2Media[L.id];
+      if (vm && vm.vid) src = vm.vid;
+      if (!src || !studioSrcSize(src)){
+        st2LayerLabel(ctx, x, y, w, h, '🎬 Video — pick a file in the console'
+          + (L.vidName ? ' (' + L.vidName + ')' : ''));
+        return;
+      }
+    }
+    studioDrawFit(ctx, src, x, y, w, h, contain);
+  }
+  function st2DrawTextLayer(ctx, x, y, w, h, L){
+    ctx.save();
+    if (L.bg){
+      ctx.fillStyle = 'rgba(0,0,0,.38)';
+      studioRoundBox(ctx, x, y, w, h, 14);
+      ctx.fill();
+    }
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+    ctx.fillStyle = L.color || '#ffffff';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    var px = Math.max(12, (L.fs || 64) * (ctx.canvas.height / 720));
+    ctx.font = '800 ' + px + 'px sans-serif';
+    /* crude word wrap onto the layer's box */
+    var words = String(L.text || '').split(/\s+/), lines = [], line = '';
+    words.forEach(function(wd){
+      var t = line ? line + ' ' + wd : wd;
+      if (ctx.measureText(t).width > w - 20 && line){ lines.push(line); line = wd; }
+      else line = t;
+    });
+    if (line) lines.push(line);
+    var lh = px * 1.18, y0 = y + h / 2 - (lines.length - 1) * lh / 2;
+    lines.forEach(function(ln, i){ ctx.fillText(ln, x + w / 2, y0 + i * lh, w - 12); });
+    ctx.restore();
+  }
+  /* The classic mix re-composed inside a layer rect (used when a
+     'studio' layer sits in a custom scene, and for the console
+     preview while Studio is off). Mirrors studioDraw's classic
+     path — main, facecam (keyed if green screen is on), picture,
+     sticker — drawn in full-canvas coordinates under a transform. */
+  function st2DrawLayerClassic(ctx, W, H, L){
+    var x = L.x * W, y = L.y * H, w = L.w * W, h = L.h * H;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+    ctx.translate(x, y); ctx.scale(w / W, h / H);
+    var filter = STUDIO_FILTERS[studio.effect] || 'none';
+    var faceWanted = studio.faceOn && !!studio.faceStream
+      && !!studio.faceVid.srcObject;
+    var isScreen = lcVideoKind === 'screen';
+    if (studio.keyOn && !faceWanted){
+      studioDrawBackdrop(ctx, W, H);
+      var keyedMain = studioKeyed(studio.mainVid);
+      studioDrawFit(ctx, keyedMain, 0, 0, W, H, false,
+                    (filter === 'none' || !studioFilterOK) ? null : filter,
+                    false);
+      studioDrawSticker(ctx, W / 2, 118, 92);
+    } else {
+      if (!faceWanted && studio.effect !== 'none' && !studioFilterOK)
+        studioDrawFit(ctx, studioWorked(studio.mainVid), 0, 0, W, H,
+                      isScreen, null, false);
+      else
+        studioDrawFit(ctx, studio.mainVid, 0, 0, W, H, isScreen,
+                      (!faceWanted && filter !== 'none') ? filter : null,
+                      false);
+      if (!faceWanted) studioDrawSticker(ctx, W / 2, 118, 92);
+      if (!myCamOn && !isScreen){
+        ctx.fillStyle = 'rgba(0,0,0,.72)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff';
+        ctx.font = '800 44px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('📷 Camera off', W / 2, H / 2);
+      }
+      if (faceWanted && !(!myCamOn && isScreen)){
+        var fw = studio.faceSize === 's' ? 248
+               : studio.faceSize === 'l' ? 448 : 336;
+        var fh = Math.round(fw * 0.75);
+        var fp = studioCorner(studio.facePos, W, H, fw, fh, 26);
+        ctx.save();
+        studioRoundBox(ctx, fp.x, fp.y, fw, fh, 18);
+        ctx.clip();
+        if (studio.keyOn)
+          studioDrawFit(ctx, studioKeyed(studio.faceVid),
+                        fp.x, fp.y, fw, fh, false,
+                        (filter === 'none' || !studioFilterOK)
+                          ? null : filter, lcMirrorEffective());
+        else if (!studioFilterOK && studio.effect !== 'none')
+          studioDrawFit(ctx, studioWorked(studio.faceVid),
+                        fp.x, fp.y, fw, fh, false, null,
+                        lcMirrorEffective());
+        else
+          studioDrawFit(ctx, studio.faceVid, fp.x, fp.y, fw, fh,
+                        false, filter === 'none' ? null : filter,
+                        lcMirrorEffective());
+        ctx.restore();
+        ctx.save();
+        studioRoundBox(ctx, fp.x, fp.y, fw, fh, 18);
+        ctx.strokeStyle = 'rgba(255,255,255,.55)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.restore();
+        studioDrawSticker(ctx, fp.x + fw / 2, fp.y + 6, 64);
+      }
+    }
+    if (studio.picImg){
+      var pw = studio.picSize === 's' ? 220
+             : studio.picSize === 'l' ? 460 : 320;
+      var ph = Math.round(pw * 0.66);
+      var pp = studioCorner(studio.picPos, W, H, pw, ph, 26);
+      ctx.save();
+      studioRoundBox(ctx, pp.x, pp.y, pw, ph, 14);
+      ctx.clip();
+      ctx.fillStyle = '#111';
+      ctx.fillRect(pp.x, pp.y, pw, ph);
+      studioDrawFit(ctx, studio.picImg, pp.x, pp.y, pw, ph, true);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  /* ---------- console-owned media (camera / screen / files) ---------- */
+  function st2HiddenVid(){
+    var v = document.createElement('video');
+    v.autoplay = true; v.playsInline = true;
+    v.setAttribute('playsinline', '');
+    v.style.cssText = 'position:fixed;left:0;top:0;width:16px;'
+      + 'height:16px;opacity:0.01;z-index:-1;pointer-events:none';
+    document.body.appendChild(v);
+    return v;
+  }
+  function st2StopLayerMedia(L){
+    var m = st2Media[L.id];
+    if (m){
+      if (m.stream) m.stream.getTracks().forEach(function(t){
+        try { t.stop(); } catch (e) {}
+      });
+      if (m.vid){
+        try { m.vid.pause(); } catch (e) {}
+        m.vid.srcObject = null;
+        if (m.objUrl){ try { m.vid.removeAttribute('src'); } catch (e) {} }
+        if (m.vid.parentNode) m.vid.parentNode.removeChild(m.vid);
+      }
+      if (m.objUrl){ try { URL.revokeObjectURL(m.objUrl); } catch (e) {} }
+      delete st2Media[L.id];
+    }
+    st2MixDrop('vid:' + L.id);
+  }
+  function st2StartCameraLayer(L){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      toast('Camera is not available in this browser.');
+      return Promise.resolve();
+    }
+    var cons = L.deviceId ? {deviceId: {exact: L.deviceId}}
+                          : {facingMode: 'user'};
+    return navigator.mediaDevices.getUserMedia({video: cons, audio: false})
+      .then(function(stream){
+        var tr = stream.getVideoTracks()[0];
+        if (!tr){
+          stream.getTracks().forEach(function(t){
+            try { t.stop(); } catch (e) {}
+          });
+          toast('That camera gave no picture.');
+          return;
+        }
+        st2StopLayerMedia(L);
+        var vid = st2HiddenVid();
+        vid.muted = true;
+        vid.srcObject = stream;
+        vid.play().catch(function(){});
+        st2Media[L.id] = {vid: vid, stream: stream};
+        try {
+          var sid = tr.getSettings && tr.getSettings().deviceId;
+          if (sid) L.deviceId = sid;
+        } catch (e) {}
+        if (tr.label) L.name = '📷 ' + tr.label.slice(0, 26);
+        st2Save();
+        st2RenderAll();
+      })
+      .catch(function(){
+        toast('Camera blocked — allow it, then tap Start again.');
+      });
+  }
+  function st2ApplyScreenStream(stream, name){
+    var vtr = stream.getVideoTracks()[0];
+    if (!vtr){
+      stream.getTracks().forEach(function(t){
+        try { t.stop(); } catch (e) {}
+      });
+      toast('That share gave no picture.');
+      return;
+    }
+    st2StopScreen();
+    st2.screenStream = stream;
+    st2.screenName = name || 'Screen';
+    if (!st2.screenVid) st2.screenVid = st2HiddenVid();
+    st2.screenVid.muted = true;
+    st2.screenVid.srcObject = stream;
+    st2.screenVid.play().catch(function(){});
+    try {
+      vtr.addEventListener('ended', function(){
+        st2StopScreen();
+        st2RenderAll();
+        toast('Screen share ended.');
+      });
+    } catch (e) {}
+    st2MixRebuild();
+    st2RenderAll();
+  }
+  function st2StopScreen(){
+    if (st2.screenStream){
+      st2.screenStream.getTracks().forEach(function(t){
+        try { t.stop(); } catch (e) {}
+      });
+      st2.screenStream = null;
+    }
+    if (st2.screenVid) st2.screenVid.srcObject = null;
+    st2.screenName = '';
+    st2MixDrop('screen');
+  }
+  function st2StartScreenGDM(){
+    if (!navigator.mediaDevices
+        || !navigator.mediaDevices.getDisplayMedia){
+      toast('Screen sharing is not available in this browser.');
+      return Promise.resolve();
+    }
+    var p;
+    try {
+      p = navigator.mediaDevices.getDisplayMedia({
+        video: {width: {max: 1280}, height: {max: 720},
+                frameRate: {max: 30}},
+        audio: true});
+    } catch (e) {
+      toast('Could not start screen sharing.');
+      return Promise.resolve();
+    }
+    return p.then(function(stream){
+      st2ApplyScreenStream(stream, 'Screen');
+    }).catch(function(err){
+      if (err && err.name === 'NotAllowedError') return; /* cancelled */
+      toast('Could not start screen sharing.');
+    });
+  }
+  function st2DesktopBridge(){
+    return (typeof window !== 'undefined' && window.hereDesktop
+      && typeof window.hereDesktop.getSources === 'function')
+      ? window.hereDesktop : null;
+  }
+  function st2RefreshDesktopSources(){
+    var br = st2DesktopBridge();
+    if (!br){ st2.desktopSources = null; return Promise.resolve(); }
+    return br.getSources().then(function(list){
+      st2.desktopSources = (list || []).map(function(s){
+        var thumb = '';
+        if (typeof s.thumbnail === 'string') thumb = s.thumbnail;
+        else if (s.thumbnail && s.thumbnail.toDataURL){
+          try { thumb = s.thumbnail.toDataURL(); } catch (e) {}
+        }
+        return {id: s.id, name: s.name || 'Window', thumbnail: thumb};
+      });
+      if (st2.open) st2RenderProps();
+    }).catch(function(){ st2.desktopSources = null; });
+  }
+  function st2StartScreenDesktop(srcId, srcName){
+    /* The desktop app's bridge lists real windows/screens; the
+       stream itself comes from Electron's desktopCapturer path —
+       a chromeMediaSource getUserMedia, which is exactly what
+       that source id is for. If the browser refuses it (plain
+       browser, or an id shape it doesn't know), fall back to the
+       normal screen picker and say so. */
+    var done = function(stream){
+      st2ApplyScreenStream(stream, srcName || 'Window');
+    };
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      return st2StartScreenGDM();
+    }
+    return navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {mandatory: {chromeMediaSource: 'desktop',
+                          chromeMediaSourceId: srcId,
+                          maxWidth: 1280, maxHeight: 720}}})
+      .then(done)
+      .catch(function(){
+        toast('That window could not be captured directly — '
+              + 'falling back to the screen picker.');
+        return st2StartScreenGDM();
+      });
+  }
+  var st2FileTarget = null;
+  function st2PickFile(L, kind){
+    st2FileTarget = {id: L.id, kind: kind};
+    var inp = kind === 'image' ? $('st2-file-img') : $('st2-file-vid');
+    if (inp){ inp.value = ''; inp.click(); }
+  }
+  function st2EnsureFileInputs(){
+    if ($('st2-file-img')) return;
+    var i1 = document.createElement('input');
+    i1.type = 'file'; i1.id = 'st2-file-img'; i1.accept = 'image/*';
+    i1.hidden = true;
+    var i2 = document.createElement('input');
+    i2.type = 'file'; i2.id = 'st2-file-vid';
+    i2.accept = 'video/*,.mkv,.mov,.webm,.mp4';
+    i2.hidden = true;
+    document.body.appendChild(i1);
+    document.body.appendChild(i2);
+    i1.addEventListener('change', function(){ st2FileChosen(i1, 'image'); });
+    i2.addEventListener('change', function(){ st2FileChosen(i2, 'video'); });
+  }
+  function st2FileChosen(inp, kind){
+    var f = inp.files && inp.files[0];
+    var tgt = st2FileTarget;
+    st2FileTarget = null;
+    if (!f || !tgt) return;
+    var L = st2FindLayer(tgt.id);
+    if (!L) return;
+    if (kind === 'image'){
+      var rd = new FileReader();
+      rd.onload = function(){
+        var url = String(rd.result || '');
+        var im = new Image();
+        im.onload = function(){
+          st2StopLayerMedia(L);
+          st2Media[L.id] = {img: im};
+          L.imgData = url.length < 700000 ? url : null;
+          L.name = '🖼 ' + f.name.slice(0, 26);
+          st2Save();
+          st2RenderAll();
+          if (!L.imgData)
+            toast('Big image — it will need re-picking after a reload.');
+        };
+        im.src = url;
+      };
+      rd.readAsDataURL(f);
+    } else {
+      st2StopLayerMedia(L);
+      var vid = st2HiddenVid();
+      var url = URL.createObjectURL(f);
+      vid.src = url;
+      vid.loop = true;
+      vid.play().catch(function(){});
+      st2Media[L.id] = {vid: vid, objUrl: url, name: f.name};
+      L.vidName = f.name;
+      L.name = '🎬 ' + f.name.slice(0, 26);
+      st2Save();
+      st2MixRebuild();
+      st2RenderAll();
+    }
+  }
+
+  /* ---------- audio mixer ----------
+     One gain per audible source into one master gain; the
+     MediaStreamDestination track is what viewers hear while the
+     mixer is on. Channel keys: 'main' (my published audio track
+     — mic, or screen audio when Live Connect is sharing with
+     sound), 'screen' (the console's own screen share), and
+     'vid:' + layerId per video-file layer. */
+  function st2MixEnsure(){
+    if (st2Mix.ctx) return true;
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    try {
+      st2Mix.ctx = new AC();
+      st2Mix.dest = st2Mix.ctx.createMediaStreamDestination();
+      st2Mix.masterNode = st2Mix.ctx.createGain();
+      st2Mix.masterNode.connect(st2Mix.dest);
+      st2Mix.outTrack = st2Mix.dest.stream.getAudioTracks()[0];
+      st2MixApplyMaster();
+    } catch (e) { return false; }
+    return true;
+  }
+  function st2MixApplyMaster(){
+    if (!st2Mix.masterNode) return;
+    st2Mix.masterNode.gain.value = st2.masterMute ? 0 : st2.master;
+  }
+  function st2GainFor(key){
+    var g = st2.gains[key];
+    return typeof g === 'number' ? g : 1;
+  }
+  function st2MixSetChannel(key, sourceNode){
+    var old = st2Mix.nodes[key];
+    if (old){
+      try { old.src.disconnect(); } catch (e) {}
+      try { old.gain.disconnect(); } catch (e) {}
+    }
+    var gain = st2Mix.ctx.createGain();
+    gain.gain.value = st2GainFor(key);
+    sourceNode.connect(gain);
+    gain.connect(st2Mix.masterNode);
+    st2Mix.nodes[key] = {src: sourceNode, gain: gain};
+  }
+  function st2MixDrop(key){
+    var n = st2Mix.nodes[key];
+    if (!n) return;
+    try { n.src.disconnect(); } catch (e) {}
+    try { n.gain.disconnect(); } catch (e) {}
+    delete st2Mix.nodes[key];
+    if (st2.open) st2RenderMixer();
+  }
+  function st2MixChannelSpecs(){
+    var specs = [];
+    if (myStream && myStream.getAudioTracks().length){
+      specs.push({key: 'main',
+        label: (lcVideoKind === 'screen' && lcScreenAudio)
+          ? '🖥 Screen audio (main)' : '🎤 Your mic',
+        track: myStream.getAudioTracks()[0]});
+    }
+    if (st2.screenStream && st2.screenStream.getAudioTracks().length)
+      specs.push({key: 'screen', label: '🖥 Scene screen audio',
+                  track: st2.screenStream.getAudioTracks()[0]});
+    st2.scenes.forEach(function(sc){
+      sc.layers.forEach(function(L){
+        var m = st2Media[L.id];
+        if (L.kind === 'video' && m && m.vid)
+          specs.push({key: 'vid:' + L.id, label: '🎬 ' + L.name,
+                      element: m.vid, layerId: L.id});
+      });
+    });
+    return specs;
+  }
+  function st2MixRebuild(){
+    if (!st2Mix.ctx) return;
+    var specs = st2MixChannelSpecs();
+    var seen = {};
+    specs.forEach(function(sp){
+      seen[sp.key] = 1;
+      var cur = st2Mix.nodes[sp.key];
+      if (sp.track){
+        if (cur && cur.trackId === sp.track.id) return;
+        try {
+          var sn = st2Mix.ctx.createMediaStreamSource(
+            new MediaStream([sp.track]));
+          st2MixSetChannel(sp.key, sn);
+          st2Mix.nodes[sp.key].trackId = sp.track.id;
+        } catch (e) {}
+      } else if (sp.element){
+        var m = st2Media[sp.layerId];
+        if (m && m.eltSrc){
+          if (!cur){
+            var g = st2Mix.ctx.createGain();
+            g.gain.value = st2GainFor(sp.key);
+            m.eltSrc.connect(g);
+            g.connect(st2Mix.masterNode);
+            st2Mix.nodes[sp.key] = {src: m.eltSrc, gain: g,
+                                    fromElement: true};
+          }
+          return;
+        }
+        if (cur && cur.fromElement) return;
+        try {
+          var es = st2Mix.ctx.createMediaElementSource(sp.element);
+          if (m) m.eltSrc = es;
+          st2MixSetChannel(sp.key, es);
+          st2Mix.nodes[sp.key].fromElement = true;
+        } catch (e) {}
+      }
+    });
+    Object.keys(st2Mix.nodes).forEach(function(k){
+      if (!seen[k]) st2MixDrop(k);
+    });
+    if (st2.open) st2RenderMixer();
+  }
+  function st2OutgoingAudioTrack(){
+    return st2Mix.on && st2Mix.outTrack ? st2Mix.outTrack : null;
+  }
+  function st2MixStart(){
+    if (st2Mix.on) return Promise.resolve();
+    if (!st2MixEnsure()){
+      toast('The audio mixer is not supported in this browser.');
+      return Promise.resolve();
+    }
+    if (st2Mix.ctx.resume) st2Mix.ctx.resume().catch(function(){});
+    st2MixRebuild();
+    st2Mix.on = true;
+    st2.mixWanted = true;
+    st2Save();
+    if (st2.open) st2RenderMixer();
+    return lcReplaceSenderTrack('audio', st2Mix.outTrack);
+  }
+  function st2MixStop(){
+    if (!st2Mix.on) return Promise.resolve();
+    st2Mix.on = false;
+    if (st2.open) st2RenderMixer();
+    var raw = myStream && myStream.getAudioTracks().length
+      ? myStream.getAudioTracks()[0] : null;
+    if (raw && Object.keys(peers).length)
+      return lcReplaceSenderTrack('audio', raw);
+    return Promise.resolve();
+  }
+  function st2MixRebind(){
+    /* Fired on every Live Connect source change while Studio is
+       on: if the published audio track changed under us (device
+       switch, screen audio in/out), point the 'main' channel at
+       the new track; if the mixer is on, the mix track itself
+       never changes, so senders need no re-replace. */
+    if (!st2Mix.ctx) return;
+    st2MixRebuild();
+  }
+
+  /* ---------- console open / close / chat move ---------- */
+  function st2MoveChatIn(){
+    var slot = $('st2-chat-slot');
+    var floatEl = $('live-float');
+    var form = $('live-comment-form');
+    var formPanel = form ? (form.closest ? form.closest('.live-panel')
+                                          : form.parentNode) : null;
+    if (!st2.chatHome){
+      st2.chatHome = {
+        fP: floatEl ? floatEl.parentNode : null,
+        fN: floatEl ? floatEl.nextSibling : null,
+        cP: formPanel ? formPanel.parentNode : null,
+        cN: formPanel ? formPanel.nextSibling : null
+      };
+    }
+    if (floatEl) slot.appendChild(floatEl);
+    if (formPanel) slot.appendChild(formPanel);
+  }
+  function st2MoveChatBack(){
+    if (!st2.chatHome) return;
+    var floatEl = $('live-float');
+    var form = $('live-comment-form');
+    var formPanel = form ? (form.closest ? form.closest('.live-panel')
+                                          : form.parentNode) : null;
+    var h = st2.chatHome;
+    if (floatEl && h.fP)
+      h.fP.insertBefore(floatEl, h.fN && h.fN.parentNode === h.fP ? h.fN : null);
+    if (formPanel && h.cP)
+      h.cP.insertBefore(formPanel, h.cN && h.cN.parentNode === h.cP ? h.cN : null);
+  }
+  function st2OpenConsole(){
+    studioEnsureDom();
+    st2EnsureFileInputs();
+    st2ApplyCanvasSize();
+    st2.open = true;
+    $('st2-console').hidden = false;
+    st2MoveChatIn();
+    lcEnumerate().then(function(){ st2RenderAll(); });
+    st2RenderAll();
+    st2PumpStart();
+    st2StatsStart();
+    st2RefreshDesktopSources();
+    if (st2Mix.ctx && st2Mix.ctx.resume)
+      st2Mix.ctx.resume().catch(function(){});
+  }
+  function st2CloseConsole(){
+    st2.open = false;
+    $('st2-console').hidden = true;
+    st2MoveChatBack();
+    if (st2.pumpTimer){ clearTimeout(st2.pumpTimer); st2.pumpTimer = 0; }
+    if (st2.statsTimer){ clearInterval(st2.statsTimer); st2.statsTimer = 0; }
+    st2.drag = null;
+  }
+  function st2ApplyCanvasSize(){
+    var W = st2.orient === 'portrait' ? 720 : 1280;
+    var H = st2.orient === 'portrait' ? 1280 : 720;
+    studioEnsureDom();
+    if (studio.canvas && (studio.canvas.width !== W
+                          || studio.canvas.height !== H)){
+      studio.canvas.width = W;
+      studio.canvas.height = H;
+    }
+    var wrap = $('st2-preview-wrap');
+    if (wrap) wrap.classList.toggle('portrait', st2.orient === 'portrait');
+    var pv = $('st2-preview');
+    if (pv && pv.width !== W){ pv.width = W; pv.height = H; }
+    var seg = $('st2-orient');
+    if (seg) Array.prototype.forEach.call(seg.children, function(b){
+      b.classList.toggle('on', b.dataset.o === st2.orient);
+    });
+  }
+  function st2SetOrient(o){
+    if (st2.orient === o) return;
+    st2.orient = o;
+    st2ApplyCanvasSize();
+    st2Save();
+    toast(o === 'portrait'
+      ? '📱 Portrait canvas — 720×1280. Layers re-fit themselves.'
+      : '🖥 Landscape canvas — 1280×720.');
+  }
+
+  /* ---------- preview pump + stats ---------- */
+  function st2PumpStart(){
+    if (st2.pumpTimer) return;
+    var tick = function(){
+      if (!st2.open){ st2.pumpTimer = 0; return; }
+      st2PumpFrame();
+      st2.pumpTimer = setTimeout(tick, 120);
+    };
+    tick();
+  }
+  function st2PumpFrame(){
+    var pv = $('st2-preview');
+    if (!pv || !studio.canvas) return;
+    if (!studio.on){
+      /* Studio off: compose the current scene into the parked
+         canvas so the preview is alive while you build. Nothing
+         is published — captureStream only exists once Studio
+         actually starts. */
+      try {
+        studioBindMain();
+        var ctx = studio.ctx, W = studio.canvas.width,
+            H = studio.canvas.height;
+        ctx.filter = 'none';
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
+        if (st2SceneEngaged()) st2DrawScene(ctx, W, H);
+        else st2DrawLayerClassic(ctx, W, H,
+          {x: 0, y: 0, w: 1, h: 1, kind: 'studio'});
+        studioDrawFun(ctx, W, H);
+      } catch (e) {}
+    }
+    if (pv.width !== studio.canvas.width){
+      pv.width = studio.canvas.width;
+      pv.height = studio.canvas.height;
+    }
+    try { pv.getContext('2d').drawImage(studio.canvas, 0, 0); }
+    catch (e) {}
+    st2PaintSelBox();
+  }
+  function st2StatsStart(){
+    if (st2.statsTimer) return;
+    var tick = function(){
+      var v = $('live-viewers'), l = $('live-likes');
+      if (v) $('st2-viewers').textContent = v.textContent;
+      if (l) $('st2-likes').textContent = l.textContent;
+      var b = $('st2-btn-start');
+      if (b) b.textContent = studio.on ? '⏹ Stop Studio' : '▶ Start Studio';
+    };
+    tick();
+    st2.statsTimer = setInterval(tick, 1000);
+  }
+
+  /* ---------- preview drag / resize ---------- */
+  function st2PaintSelBox(){
+    var box = $('st2-selbox'), wrap = $('st2-preview-wrap');
+    var L = st2.sel ? st2FindLayer(st2.sel) : null;
+    if (!box || !wrap || !L){ if (box) box.hidden = true; return; }
+    box.hidden = false;
+    box.style.left = (L.x * 100) + '%';
+    box.style.top = (L.y * 100) + '%';
+    box.style.width = (L.w * 100) + '%';
+    box.style.height = (L.h * 100) + '%';
+  }
+  function st2PtrFrac(ev){
+    var r = $('st2-preview-wrap').getBoundingClientRect();
+    return {fx: (ev.clientX - r.left) / r.width,
+            fy: (ev.clientY - r.top) / r.height, rw: r.width, rh: r.height};
+  }
+  function st2HitLayer(fx, fy){
+    var sc = st2Scene();
+    if (!sc) return null;
+    for (var i = sc.layers.length - 1; i >= 0; i--){
+      var L = sc.layers[i];
+      if (!L.vis) continue;
+      if (fx >= L.x && fx <= L.x + L.w && fy >= L.y && fy <= L.y + L.h)
+        return L;
+    }
+    return null;
+  }
+  function st2WirePreview(){
+    var wrap = $('st2-preview-wrap');
+    if (!wrap || wrap.dataset.wired) return;
+    wrap.dataset.wired = '1';
+    wrap.addEventListener('pointerdown', function(ev){
+      var p = st2PtrFrac(ev);
+      var L = st2HitLayer(p.fx, p.fy);
+      st2.sel = L ? L.id : null;
+      if (L){
+        var cornerX = L.x + L.w - 26 / p.rw, cornerY = L.y + L.h - 26 / p.rh;
+        st2.drag = {id: L.id,
+          mode: (p.fx >= cornerX && p.fy >= cornerY) ? 'resize' : 'move',
+          dx: p.fx - L.x, dy: p.fy - L.y, w0: L.w, h0: L.h,
+          fx0: p.fx, fy0: p.fy};
+        try { wrap.setPointerCapture(ev.pointerId); } catch (e) {}
+      }
+      st2RenderSources();
+      st2RenderProps();
+      st2PaintSelBox();
+    });
+    wrap.addEventListener('pointermove', function(ev){
+      if (!st2.drag) return;
+      var L = st2FindLayer(st2.drag.id);
+      if (!L) return;
+      var p = st2PtrFrac(ev);
+      if (st2.drag.mode === 'move'){
+        L.x = Math.min(Math.max(0, p.fx - st2.drag.dx), 1 - L.w);
+        L.y = Math.min(Math.max(0, p.fy - st2.drag.dy), 1 - L.h);
+      } else {
+        L.w = Math.min(Math.max(0.05, st2.drag.w0 + (p.fx - st2.drag.fx0)),
+                       1 - L.x);
+        L.h = Math.min(Math.max(0.05, st2.drag.h0 + (p.fy - st2.drag.fy0)),
+                       1 - L.y);
+      }
+      st2PaintSelBox();
+    });
+    var end = function(){
+      if (st2.drag){ st2.drag = null; st2Save(); st2RenderProps(); }
+    };
+    wrap.addEventListener('pointerup', end);
+    wrap.addEventListener('pointercancel', end);
+  }
+
+  /* ---------- rendering: scenes / sources / props / mixer ---------- */
+  function st2El(tag, cls, txt){
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt !== undefined) e.textContent = txt;
+    return e;
+  }
+  function st2RenderAll(){
+    if (!st2.open) return;
+    st2RenderScenes();
+    st2RenderSources();
+    st2RenderProps();
+    st2RenderMixer();
+    st2ApplyCanvasSize();
+  }
+  function st2RenderScenes(){
+    var host = $('st2-scenes');
+    if (!host) return;
+    host.innerHTML = '';
+    st2.scenes.forEach(function(sc, i){
+      var row = st2El('div', 'st2-scene' + (i === st2.activeScene ? ' on' : ''));
+      if (st2.renaming === i){
+        var inp = st2El('input');
+        inp.type = 'text'; inp.value = sc.name; inp.maxLength = 40;
+        inp.style.cssText = 'flex:1;background:rgba(0,0,0,.4);color:#fff;'
+          + 'border:1px solid rgba(255,255,255,.4);border-radius:6px;'
+          + 'padding:4px 6px';
+        var done = function(){
+          sc.name = inp.value.trim() || sc.name;
+          st2.renaming = -1;
+          st2Save(); st2RenderScenes(); st2RenderSources();
+        };
+        inp.addEventListener('change', done);
+        inp.addEventListener('keydown', function(ev){
+          if (ev.key === 'Enter') done();
+          ev.stopPropagation();
+        });
+        inp.addEventListener('click', function(ev){ ev.stopPropagation(); });
+        row.appendChild(inp);
+        setTimeout(function(){ inp.focus(); inp.select(); }, 0);
+      } else {
+        row.appendChild(st2El('span', 'nm', sc.name));
+        var ren = st2El('button', 'st2-icon-btn', '✎');
+        ren.title = 'Rename scene';
+        ren.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          st2.renaming = i;
+          st2RenderScenes();
+        });
+        row.appendChild(ren);
+      }
+      if (st2.scenes.length > 1){
+        var del = st2El('button', 'st2-icon-btn', '✕');
+        del.title = 'Delete scene';
+        del.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          st2DeleteScene(i);
+        });
+        row.appendChild(del);
+      }
+      row.addEventListener('click', function(){ st2SwitchScene(i); });
+      host.appendChild(row);
+    });
+  }
+  function st2SwitchScene(i){
+    st2.activeScene = i;
+    st2.sel = null;
+    var sc = st2Scene();
+    st2.engaged = !st2IsClassicScene(sc);
+    st2Save();
+    st2RenderScenes();
+    st2RenderSources();
+    st2RenderProps();
+  }
+  function st2AddScene(){
+    var n = st2.scenes.length + 1, name = 'Scene ' + n;
+    var names = st2.scenes.map(function(s){ return s.name; });
+    while (names.indexOf(name) >= 0){ n++; name = 'Scene ' + n; }
+    var L = st2Layer('main');
+    st2.scenes.push({name: name, layers: [L]});
+    st2Save();
+    st2SwitchScene(st2.scenes.length - 1);
+    toast('Scene added — it is live the moment you switch to it.');
+  }
+  function st2DeleteScene(i){
+    if (st2.scenes.length <= 1) return;
+    st2.scenes[i].layers.forEach(function(L){ st2StopLayerMedia(L); });
+    st2.scenes.splice(i, 1);
+    if (st2.activeScene >= st2.scenes.length)
+      st2.activeScene = st2.scenes.length - 1;
+    st2.sel = null;
+    var sc = st2Scene();
+    st2.engaged = !st2IsClassicScene(sc);
+    st2Save();
+    st2RenderAll();
+  }
+  var ST2_KIND_ICON = {main: '🎥', face: '🪟', camera: '📷',
+    screen: '🖥', image: '🖼', video: '🎬', text: '🔤', studio: '🎛'};
+  function st2RenderSources(){
+    var host = $('st2-sources');
+    var nm = $('st2-scene-name');
+    var sc = st2Scene();
+    if (nm && sc) nm.textContent = sc.name;
+    if (!host) return;
+    host.innerHTML = '';
+    if (!sc) return;
+    /* top of the list = front of the picture */
+    for (var i = sc.layers.length - 1; i >= 0; i--){
+      (function(L, idx){
+        var row = st2El('div', 'st2-src'
+          + (st2.sel === L.id ? ' on' : '') + (L.vis ? '' : ' off'));
+        row.appendChild(st2El('span', 'nm',
+          (ST2_KIND_ICON[L.kind] || '▢') + ' ' + L.name));
+        var eye = st2El('button', 'st2-icon-btn', L.vis ? '👁' : '🚫');
+        eye.title = L.vis ? 'Hide layer' : 'Show layer';
+        eye.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          L.vis = !L.vis;
+          st2Save(); st2RenderSources(); st2PaintSelBox();
+        });
+        row.appendChild(eye);
+        var up = st2El('button', 'st2-icon-btn', '↑');
+        up.title = 'Bring forward';
+        up.disabled = idx === sc.layers.length - 1;
+        up.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          if (idx >= sc.layers.length - 1) return;
+          sc.layers.splice(idx, 1);
+          sc.layers.splice(idx + 1, 0, L);
+          st2Save(); st2RenderSources();
+        });
+        row.appendChild(up);
+        var dn = st2El('button', 'st2-icon-btn', '↓');
+        dn.title = 'Send backward';
+        dn.disabled = idx === 0;
+        dn.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          if (idx <= 0) return;
+          sc.layers.splice(idx, 1);
+          sc.layers.splice(idx - 1, 0, L);
+          st2Save(); st2RenderSources();
+        });
+        row.appendChild(dn);
+        var del = st2El('button', 'st2-icon-btn', '✕');
+        del.title = 'Remove layer';
+        del.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          st2StopLayerMedia(L);
+          sc.layers.splice(idx, 1);
+          if (st2.sel === L.id) st2.sel = null;
+          st2Save(); st2RenderAll(); st2PaintSelBox();
+        });
+        row.appendChild(del);
+        row.addEventListener('click', function(){
+          st2.sel = L.id;
+          st2RenderSources(); st2RenderProps(); st2PaintSelBox();
+        });
+        host.appendChild(row);
+      })(sc.layers[i], i);
+    }
+    if (!sc.layers.length)
+      host.appendChild(st2El('div', 'st2-note',
+        'No sources yet — add one below. An empty scene shows black.'));
+  }
+  function st2AddLayer(kind){
+    var sc = st2Scene();
+    if (!sc) return;
+    var L = st2Layer(kind);
+    sc.layers.push(L);
+    if (st2IsClassicScene(sc) && sc.layers.length > 1) st2.engaged = true;
+    st2.sel = L.id;
+    st2Save();
+    st2RenderAll();
+    st2PaintSelBox();
+    if (kind === 'image') st2PickFile(L, 'image');
+    if (kind === 'video') st2PickFile(L, 'video');
+  }
+
+  function st2PropRow(host, labelText){
+    host.appendChild(st2El('div', 'st2-sec', labelText));
+  }
+  function st2RenderProps(){
+    var host = $('st2-props');
+    if (!host) return;
+    host.innerHTML = '';
+    var L = st2.sel ? st2FindLayer(st2.sel) : null;
+    if (!L){
+      host.appendChild(st2El('div', 'st2-note',
+        'Tap a source above — or tap a layer in the preview — to edit it here.'));
+      return;
+    }
+    st2PropRow(host, 'Layer · ' + (ST2_KIND_ICON[L.kind] || '') + ' ' + L.kind);
+    var nmIn = st2El('input');
+    nmIn.type = 'text'; nmIn.value = L.name; nmIn.maxLength = 40;
+    nmIn.addEventListener('change', function(){
+      L.name = nmIn.value.trim() || L.name;
+      st2Save(); st2RenderSources();
+    });
+    host.appendChild(nmIn);
+    host.appendChild(st2El('div', 'st2-note',
+      'Position ' + Math.round(L.x * 100) + '%, ' + Math.round(L.y * 100)
+      + '% · size ' + Math.round(L.w * 100) + '% × ' + Math.round(L.h * 100)
+      + '% of the canvas'));
+    if (['main', 'camera', 'screen', 'image', 'video', 'face']
+          .indexOf(L.kind) >= 0){
+      host.appendChild(studioSeg([['cover', 'Fill frame'], ['contain', 'Fit whole']],
+        L.fit, function(v){ L.fit = v; st2Save(); st2RenderProps(); }));
+    }
+    if (L.kind === 'text'){
+      st2PropRow(host, 'Words');
+      var ta = st2El('textarea');
+      ta.value = L.text; ta.rows = 2; ta.maxLength = 120;
+      ta.addEventListener('input', function(){ L.text = ta.value; st2Save(); });
+      host.appendChild(ta);
+      st2PropRow(host, 'Size');
+      var fs = st2El('input');
+      fs.type = 'range'; fs.min = '24'; fs.max = '160'; fs.value = String(L.fs);
+      fs.addEventListener('input', function(){ L.fs = +fs.value; st2Save(); });
+      host.appendChild(fs);
+      st2PropRow(host, 'Colour');
+      var col = st2El('input');
+      col.type = 'color'; col.value = L.color || '#ffffff';
+      col.addEventListener('input', function(){ L.color = col.value; st2Save(); });
+      host.appendChild(col);
+      host.appendChild(studioSeg([['on', 'Dark backing'], ['off', 'No backing']],
+        L.bg ? 'on' : 'off',
+        function(v){ L.bg = v === 'on'; st2Save(); st2RenderProps(); }));
+    }
+    if (L.kind === 'camera'){
+      st2PropRow(host, 'Which camera');
+      var sel = st2El('select');
+      var anyOpt = false;
+      (lcDevices.video || []).forEach(function(d, di){
+        var o = document.createElement('option');
+        o.value = d.deviceId;
+        o.textContent = d.label || ('Camera ' + (di + 1));
+        if (L.deviceId === d.deviceId) o.selected = true;
+        sel.appendChild(o); anyOpt = true;
+      });
+      if (!anyOpt){
+        var o2 = document.createElement('option');
+        o2.textContent = 'No cameras listed yet';
+        sel.appendChild(o2);
+      }
+      sel.addEventListener('change', function(){
+        L.deviceId = sel.value || null;
+        st2Save();
+        if (st2Media[L.id]) st2StartCameraLayer(L);
+      });
+      host.appendChild(sel);
+      var camOn = !!st2Media[L.id];
+      var cb = st2El('button', 'st2-rowbtn',
+        camOn ? '⏹ Stop this camera' : '▶ Start this camera');
+      cb.addEventListener('click', function(){
+        if (st2Media[L.id]){ st2StopLayerMedia(L); st2RenderAll(); }
+        else st2StartCameraLayer(L);
+      });
+      host.appendChild(cb);
+      host.appendChild(st2El('div', 'st2-note',
+        'A second camera is its own source — your main camera keeps its own layer.'));
+    }
+    if (L.kind === 'screen'){
+      var sb = st2El('button', 'st2-rowbtn', '🖥 Share screen / window…');
+      sb.addEventListener('click', function(){ st2StartScreenGDM(); });
+      host.appendChild(sb);
+      var br = st2DesktopBridge();
+      if (br){
+        var db = st2El('button', 'st2-rowbtn', '🪟 Windows from the HERE app');
+        db.addEventListener('click', function(){
+          st2RefreshDesktopSources();
+          toast('Pick a window below — the list refreshes itself.');
+        });
+        host.appendChild(db);
+        if (st2.desktopSources && st2.desktopSources.length){
+          var grid = st2El('div', 'st2-srcgrid');
+          st2.desktopSources.forEach(function(s){
+            var b = st2El('button', 'st2-srcpick');
+            if (s.thumbnail){
+              var img = document.createElement('img');
+              img.src = s.thumbnail; img.alt = '';
+              b.appendChild(img);
+            }
+            b.appendChild(st2El('div', 'nm', s.name));
+            b.addEventListener('click', function(){
+              L.srcId = s.id;
+              st2Save();
+              st2StartScreenDesktop(s.id, s.name);
+            });
+            grid.appendChild(b);
+          });
+          host.appendChild(grid);
+        }
+        host.appendChild(st2El('div', 'st2-note',
+          'You are in the HERE desktop app: windows come from the app itself. '
+          + 'If one refuses to capture directly, the normal screen picker opens instead.'));
+      }
+      if (st2.screenStream){
+        var eb = st2El('button', 'st2-rowbtn',
+          '⏹ Stop sharing (' + (st2.screenName || 'Screen') + ')');
+        eb.addEventListener('click', function(){
+          st2StopScreen(); st2RenderAll();
+        });
+        host.appendChild(eb);
+      }
+    }
+    if (L.kind === 'image'){
+      var ib = st2El('button', 'st2-rowbtn',
+        st2Media[L.id] ? '🖼 Replace image…' : '🖼 Pick an image…');
+      ib.addEventListener('click', function(){ st2PickFile(L, 'image'); });
+      host.appendChild(ib);
+      if (!st2Media[L.id])
+        host.appendChild(st2El('div', 'st2-note',
+          'No image loaded' + (L.imgData ? '' : ' yet — pick one and it rides this scene.')));
+    }
+    if (L.kind === 'video'){
+      var vb = st2El('button', 'st2-rowbtn',
+        st2Media[L.id] ? '🎬 Replace video file…' : '🎬 Pick a video file…');
+      vb.addEventListener('click', function(){ st2PickFile(L, 'video'); });
+      host.appendChild(vb);
+      var vm = st2Media[L.id];
+      if (vm && vm.vid){
+        var pb = st2El('button', 'st2-rowbtn',
+          vm.vid.paused ? '▶ Play the video' : '⏸ Pause the video');
+        pb.addEventListener('click', function(){
+          if (vm.vid.paused) vm.vid.play().catch(function(){});
+          else vm.vid.pause();
+          st2RenderProps();
+        });
+        host.appendChild(pb);
+        host.appendChild(st2El('div', 'st2-note',
+          'Loops forever. Its sound rides the mixer (🎬 channel below). '
+          + 'Files cannot be saved between visits — re-pick it next time.'));
+      } else if (L.vidName){
+        host.appendChild(st2El('div', 'st2-note',
+          'Last time this slot played “' + L.vidName + '” — pick it again to revive it.'));
+      }
+    }
+    if (L.kind === 'face'){
+      host.appendChild(st2El('div', 'st2-note',
+        'The facecam is the Studio facecam — its camera, corner, size, '
+        + 'effects and green screen live in Classic controls. In a scene '
+        + 'you place the box freely instead.'));
+      var fb = st2El('button', 'st2-rowbtn', '🎛 Open Classic controls');
+      fb.addEventListener('click', function(){ openStudioSheet(); });
+      host.appendChild(fb);
+    }
+    if (L.kind === 'studio'){
+      host.appendChild(st2El('div', 'st2-note',
+        'The classic mix — main + facecam + picture + effects, exactly '
+        + 'as the Studio sheet builds it. On its own in a scene it IS '
+        + 'the classic Studio; in a stack it paints as a full-frame backdrop layer.'));
+    }
+    if (L.kind === 'main'){
+      host.appendChild(st2El('div', 'st2-note',
+        'Your Live Connect source — camera, capture card, or screen '
+        + 'share. Switch it in 🎮 Live Connect; this layer follows.'));
+    }
+  }
+  function st2RenderMixer(){
+    var host = $('st2-mix-channels');
+    if (!host) return;
+    var state = $('st2-mix-state');
+    if (state)
+      state.textContent = st2Mix.on
+        ? '● ON — viewers hear the mix'
+        : (studio.on ? 'Off — viewers hear your mic directly'
+                     : 'Starts with Studio');
+    var tg = $('st2-mix-toggle');
+    if (tg) tg.textContent = st2Mix.on ? 'Stop mixer' : 'Use mixer';
+    var mm = $('st2-mix-master');
+    if (mm && document.activeElement !== mm)
+      mm.value = String(Math.round(st2.master * 100));
+    var muteBtn = $('st2-mix-mute');
+    if (muteBtn) muteBtn.textContent = st2.masterMute ? '🔇' : '🔊';
+    host.innerHTML = '';
+    var specs = st2Mix.ctx ? st2MixChannelSpecs() : [];
+    if (!specs.length){
+      host.appendChild(st2El('div', 'st2-note',
+        'No audio sources yet — your mic appears here when it is on, '
+        + 'video files get a channel when one is loaded.'));
+      return;
+    }
+    specs.forEach(function(sp){
+      var row = st2El('div', 'st2-mix-ch');
+      row.appendChild(st2El('span', 'lb', sp.label));
+      var r = st2El('input');
+      r.type = 'range'; r.min = '0'; r.max = '150';
+      r.value = String(Math.round(st2GainFor(sp.key) * 100));
+      var pc = st2El('span', 'pc', Math.round(st2GainFor(sp.key) * 100) + '%');
+      r.addEventListener('input', function(){
+        var v = +r.value / 100;
+        st2.gains[sp.key] = v;
+        pc.textContent = r.value + '%';
+        var n = st2Mix.nodes[sp.key];
+        if (n) n.gain.gain.value = v;
+        st2Save();
+      });
+      row.appendChild(r);
+      row.appendChild(pc);
+      host.appendChild(row);
+    });
+  }
+
+  /* ---------- console wiring ---------- */
+  st2Load();
+  $('st2-scene-add').addEventListener('click', st2AddScene);
+  $('st2-btn-close').addEventListener('click', st2CloseConsole);
+  $('st2-btn-classic').addEventListener('click', function(){
+    openStudioSheet();
+  });
+  $('st2-btn-start').addEventListener('click', function(){
+    if (studio.on) studioStop();
+    else studioStart();
+  });
+  $('st2-orient').addEventListener('click', function(ev){
+    var b = ev.target.closest ? ev.target.closest('button') : null;
+    if (b && b.dataset.o) st2SetOrient(b.dataset.o);
+  });
+  $('st2-addrow').addEventListener('click', function(ev){
+    var b = ev.target.closest ? ev.target.closest('button') : null;
+    if (b && b.dataset.add) st2AddLayer(b.dataset.add);
+  });
+  $('st2-mix-toggle').addEventListener('click', function(){
+    if (!studio.on && !st2Mix.on){
+      toast('Start Studio first — the mixer rides the Studio picture.');
+      return;
+    }
+    if (st2Mix.on){ st2MixStop(); st2.mixWanted = false; st2Save(); }
+    else st2MixStart();
+  });
+  $('st2-mix-master').addEventListener('input', function(ev){
+    st2.master = +ev.target.value / 100;
+    st2MixApplyMaster();
+    st2Save();
+  });
+  $('st2-mix-mute').addEventListener('click', function(){
+    st2.masterMute = !st2.masterMute;
+    st2MixApplyMaster();
+    st2Save();
+    st2RenderMixer();
+  });
+  st2WirePreview();
+
+  /* Diagnostics / test surface (same precedent as __liveStudio). */
+  window.__liveStudio2 = {
+    state: function(){
+      return {open: st2.open, engaged: st2SceneEngaged(),
+              orient: st2.orient,
+              canvasW: studio.canvas ? studio.canvas.width : 0,
+              canvasH: studio.canvas ? studio.canvas.height : 0,
+              scenes: st2.scenes.map(function(s){ return s.name; }),
+              activeScene: st2.activeScene,
+              layers: st2Scene() ? st2Scene().layers.map(function(L){
+                return {kind: L.kind, name: L.name, x: L.x, y: L.y,
+                        w: L.w, h: L.h, vis: L.vis};
+              }) : [],
+              mixOn: st2Mix.on,
+              mixChannels: Object.keys(st2Mix.nodes),
+              mixTrackLive: !!(st2Mix.outTrack
+                && st2Mix.outTrack.readyState === 'live'),
+              screenLive: !!st2.screenStream,
+              desktopBridge: !!st2DesktopBridge(),
+              desktopSources: st2.desktopSources
+                ? st2.desktopSources.length : -1};
+    },
+    openConsole: st2OpenConsole,
+    closeConsole: st2CloseConsole,
+    addScene: st2AddScene,
+    switchScene: st2SwitchScene,
+    addLayer: st2AddLayer,
+    setOrient: st2SetOrient,
+    mixStart: st2MixStart,
+    mixStop: st2MixStop,
+    startScreen: st2StartScreenGDM
+  };
+
   /* ---------------- peers (keyed by user_id) ----------------
      remoteKind: 'panelist' (they publish; tile + video) or 'watcher'
      (receive-only from me; no tile). Offer rule (glare-free):
@@ -4116,6 +5724,11 @@ function liveRoomDiff(prev, next){
         var out = tr;
         if (tr.kind === 'video' && typeof studioOutgoingTrack === 'function')
           out = studioOutgoingTrack() || tr;
+        /* Phase 2 mixer: same discipline for audio — a peer
+           born while the mixer is on gets the mix track. */
+        if (tr.kind === 'audio'
+            && typeof st2OutgoingAudioTrack === 'function')
+          out = st2OutgoingAudioTrack() || tr;
         try {
           var snd = P.pc.addTrack(out, myStream);
           if (out.kind === 'video') shapeVideoSender(P.pc, snd);
