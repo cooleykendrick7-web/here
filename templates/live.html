@@ -5847,21 +5847,31 @@ function liveRoomDiff(prev, next){
     ctx.fillRect(0, stripTop, W, H - stripTop);
     var pad = Math.round(W * 0.03);
     var base = H * 0.962;
-    var big = Math.round(H * 0.046);
-    ctx.font = '800 ' + big + 'px system-ui, -apple-system, '
-      + '"Segoe UI", Roboto, sans-serif';
+    var suffix = ' — Come join HERE · joincomehere.com';
+    var fam = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var big = Math.round(Math.min(H * 0.046, W * 0.085));
+    var small = Math.round(Math.min(H * 0.031, W * 0.05));
+    ctx.font = '800 ' + big + 'px ' + fam;
+    var wH = ctx.measureText('H').width;
+    var wE = ctx.measureText('ERE').width;
+    ctx.font = '600 ' + small + 'px ' + fam;
+    var wS = ctx.measureText(suffix).width;
+    if (pad + wH + wE + wS > W - pad){
+      var f = (W - 2 * pad) / (pad + wH + wE + wS);
+      big = Math.max(10, Math.floor(big * f));
+      small = Math.max(8, Math.floor(small * f));
+      ctx.font = '800 ' + big + 'px ' + fam;
+      wH = ctx.measureText('H').width;
+      wE = ctx.measureText('ERE').width;
+    }
+    ctx.font = '800 ' + big + 'px ' + fam;
     ctx.fillStyle = '#d41f2e';
     ctx.fillText('H', pad, base);
-    var wH = ctx.measureText('H').width;
     ctx.fillStyle = '#ffffff';
     ctx.fillText('ERE', pad + wH, base);
-    var wE = ctx.measureText('ERE').width;
-    var small = Math.round(H * 0.031);
-    ctx.font = '600 ' + small + 'px system-ui, -apple-system, '
-      + '"Segoe UI", Roboto, sans-serif';
+    ctx.font = '600 ' + small + 'px ' + fam;
     ctx.fillStyle = 'rgba(255,255,255,0.92)';
-    ctx.fillText(' — Come join HERE · joincomehere.com',
-                 pad + wH + wE, base);
+    ctx.fillText(suffix, pad + wH + wE, base);
   }
   function rpDraw(){
     if (!replay.drawOn) return;
@@ -5880,14 +5890,48 @@ function liveRoomDiff(prev, next){
         var sw = src.videoWidth || src.width || 0;
         var sh = src.videoHeight || src.height || 0;
         if (sw && sh){
-          var wantW = sw >= sh ? 1280 : 720;
-          var wantH = sw >= sh ? 720 : 1280;
+          var drawSrc = src, dw2 = sw, dh2 = sh;
+          if (src === replay.vid){
+            /* Phone cameras report SENSOR dims: held upright, an
+               iPhone track still claims landscape while the picture
+               it shows is portrait. On touch devices trust the
+               phone's own portrait/landscape mode; when it disagrees
+               with the raw dims, swap them and draw through a
+               normalizer canvas at the DISPLAYED aspect, so the fit
+               math never stretches the picture. */
+            var devP = null;
+            try {
+              if (('ontouchstart' in window)
+                  || (navigator.maxTouchPoints || 0) > 0)
+                devP = !!(window.matchMedia
+                  && window.matchMedia(
+                       '(orientation: portrait)').matches);
+            } catch (e) {}
+            if (devP !== null && devP !== (sh > sw)){
+              var t2 = dw2; dw2 = dh2; dh2 = t2;
+            }
+            if (!replay.norm)
+              replay.norm = document.createElement('canvas');
+            var sc = Math.min(1, 1280 / Math.max(dw2, dh2));
+            var nw = Math.max(2, Math.round(dw2 * sc));
+            var nh = Math.max(2, Math.round(dh2 * sc));
+            if (replay.norm.width !== nw
+                || replay.norm.height !== nh){
+              replay.norm.width = nw; replay.norm.height = nh;
+            }
+            replay.norm.getContext('2d').drawImage(src, 0, 0,
+                                                   nw, nh);
+            drawSrc = replay.norm;
+          }
+          var wantW = dw2 >= dh2 ? 1280 : 720;
+          var wantH = dw2 >= dh2 ? 720 : 1280;
           if (c.width !== wantW || c.height !== wantH){
             c.width = wantW; c.height = wantH;
           }
           ctx.fillStyle = '#000';
           ctx.fillRect(0, 0, c.width, c.height);
-          studioDrawFit(ctx, src, 0, 0, c.width, c.height, false);
+          studioDrawFit(ctx, drawSrc, 0, 0, c.width, c.height,
+                        false);
           rpWatermark(ctx, c.width, c.height);
         }
       }
