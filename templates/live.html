@@ -787,6 +787,32 @@
 .st2-stats{font-size:15px;font-weight:800;background:rgba(255,255,255,.07);
   border:1px solid rgba(255,255,255,.14);border-radius:10px;
   padding:9px 12px;margin-bottom:4px}
+/* ===== Live Replay end card (host only): shown when the host's
+   live ends and a recording exists — download it, post it to the
+   timeline, or throw it away. Dark glass like the Studio console. */
+#replay-card{position:fixed;inset:0;z-index:1700;display:flex;
+  align-items:center;justify-content:center;padding:18px;
+  background:rgba(4,4,8,.72);backdrop-filter:blur(6px)}
+#replay-card[hidden]{display:none}
+.replay-box{width:min(92vw,430px);border-radius:20px;padding:22px;
+  background:rgba(18,18,24,.92);border:1px solid rgba(255,255,255,.16);
+  box-shadow:0 24px 60px rgba(0,0,0,.55);color:#fff;text-align:center}
+.replay-title{font-size:19px;font-weight:800;margin:2px 0 6px}
+.replay-sub{font-size:13.5px;color:rgba(255,255,255,.75);
+  margin-bottom:14px;line-height:1.45}
+.replay-note{font-size:12.5px;color:#ffb3b8;margin-bottom:10px}
+.replay-cap{width:100%;box-sizing:border-box;border-radius:12px;
+  border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);
+  color:#fff;padding:10px 12px;font-size:14px;margin-bottom:12px}
+.replay-btns{display:flex;flex-direction:column;gap:9px}
+.replay-btn{display:block;width:100%;box-sizing:border-box;
+  border-radius:13px;padding:12px;font-size:15px;font-weight:700;
+  border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);
+  color:#fff;cursor:pointer;text-decoration:none}
+.replay-btn.primary{background:var(--red);border-color:var(--red)}
+.replay-btn:disabled{opacity:.45;cursor:default}
+.replay-done{margin-top:12px;background:none;border:none;color:
+  rgba(255,255,255,.65);font-size:13.5px;cursor:pointer;padding:6px}
 #st2-chat-slot{flex:1;display:flex;flex-direction:column;gap:8px;
   min-height:120px}
 #st2-chat-slot .live-float{position:static;width:auto;max-height:none;
@@ -1200,6 +1226,23 @@ body.live-embed #live-sheet, body.live-embed #live-sheet-backdrop{display:none!i
       · ❤️ <span id="st2-likes">0</span></div>
     <div class="st2-sec">💬 Live chat</div>
     <div id="st2-chat-slot"></div>
+  </div>
+</div>
+<!-- Live Replay end card (host only; filled + shown by the
+     __liveReplay module when a recording exists). -->
+<div id="replay-card" hidden>
+  <div class="replay-box">
+    <div class="replay-title" id="replay-title">🔴 Your live was recorded</div>
+    <div class="replay-sub" id="replay-sub">Saving your replay…</div>
+    <div class="replay-note" id="replay-note" hidden></div>
+    <input class="replay-cap" id="replay-caption" maxlength="500"
+      value="🔴 My live replay — come join HERE! joincomehere.com">
+    <div class="replay-btns">
+      <a class="replay-btn primary" id="replay-download" href="#" download>📥 Download</a>
+      <button type="button" class="replay-btn" id="replay-post">📣 Post replay</button>
+      <button type="button" class="replay-btn" id="replay-discard">🗑 Discard</button>
+    </div>
+    <button type="button" class="replay-done" id="replay-done">Done → my profile</button>
   </div>
 </div>
 <div id="live-toast" hidden></div>
@@ -2393,6 +2436,9 @@ function liveRoomDiff(prev, next){
        replaced them with the raw one). */
     if (typeof studioAfterSourceChange === 'function')
       studioAfterSourceChange();
+    /* Live Replay: a source change can swap the published audio
+       track under the recorder — re-feed its audio graph. */
+    if (window.__liveReplay) __liveReplay.rebind();
     if (lcSheetOpen && !sheetEl.hidden
         && sheetTitle.dataset.sheet === 'connect')
       renderConnectSheet();
@@ -5701,6 +5747,510 @@ function liveRoomDiff(prev, next){
     mixStop: st2MixStop,
     startScreen: st2StartScreenGDM
   };
+
+  /* ---------------- Live Replay (host recording) ----------------
+     Ken's order, Nov 13, 2026: when a host ends a live, the live
+     has been recorded and the host can download it or post it.
+     The lives are WebRTC mesh — there is no media server — so the
+     recording happens HERE, on the host's own device: a record
+     canvas draws the host's published picture (the Studio canvas
+     while Studio is on, otherwise a hidden video bound to the
+     outgoing track) cover-fit, stamps the HERE watermark strip
+     along the bottom every frame, and a MediaRecorder uploads
+     ~10s chunks to the server while the live runs. Audio rides a
+     persistent AudioContext destination re-fed whenever the
+     published audio track changes (source switches, mixer on/off);
+     if the graph can't be built, the raw published track rides
+     the recording stream directly.
+     EVERYTHING is fail-open: any failure quietly means "no
+     replay" and can never touch the live itself. */
+  var replay = {
+    state: 'idle', /* idle|recording|capped|finishing|ready|
+                      failed|discarded|unavailable */
+    rec: null, canvas: null, ctx: null, vid: null, vidTrackId: null,
+    stream: null, actx: null, dest: null, inGain: null,
+    srcNode: null, srcTrackId: null,
+    seq: 0, inflight: 0, queue: [], dropped: 0,
+    startedAt: 0, ext: 'webm', mime: '', rid: null, downloadUrl: '',
+    capped: false, posted: false, postId: null, toastShown: false,
+    finishPromise: null, capTimer: 0, watchTimer: 0, drawOn: false
+  };
+  var REPLAY_CAP_MS = 60 * 60 * 1000;
+
+  function rpFmtDur(s){
+    s = Math.max(0, s | 0);
+    var m = Math.floor(s / 60), r = s % 60;
+    return m + ':' + (r < 10 ? '0' : '') + r;
+  }
+  function rpSupported(){
+    return typeof MediaRecorder !== 'undefined'
+      && typeof HTMLCanvasElement !== 'undefined'
+      && !!HTMLCanvasElement.prototype.captureStream;
+  }
+  function rpMime(){
+    var tries = ['video/mp4', 'video/webm;codecs=vp9,opus',
+                 'video/webm'];
+    for (var i = 0; i < tries.length; i++){
+      try {
+        if (MediaRecorder.isTypeSupported(tries[i])) return tries[i];
+      } catch (e) {}
+    }
+    return '';
+  }
+  function rpPublishedAudio(){
+    var t = null;
+    try {
+      if (typeof st2OutgoingAudioTrack === 'function')
+        t = st2OutgoingAudioTrack();
+    } catch (e) {}
+    if (t && t.readyState === 'live') return t;
+    if (myStream && myStream.getAudioTracks().length)
+      return myStream.getAudioTracks()[0];
+    return null;
+  }
+  function rpRebindAudio(){
+    if (replay.state !== 'recording') return;
+    if (!replay.actx || !replay.dest) return; /* raw-track mode */
+    var want = rpPublishedAudio();
+    var wid = want ? want.id : null;
+    if (wid === replay.srcTrackId) return;
+    if (replay.srcNode){
+      try { replay.srcNode.disconnect(); } catch (e) {}
+      replay.srcNode = null;
+    }
+    replay.srcTrackId = wid;
+    if (want){
+      try {
+        replay.srcNode = replay.actx.createMediaStreamSource(
+          new MediaStream([want]));
+        replay.srcNode.connect(replay.inGain);
+      } catch (e) { replay.srcNode = null; }
+    }
+  }
+  function rpRebindVideo(){
+    if (!replay.vid) return;
+    var t = outgoingVideoTrack();
+    if (!t) return;
+    if (replay.vidTrackId === t.id && replay.vid.srcObject) return;
+    replay.vidTrackId = t.id;
+    try {
+      replay.vid.srcObject = new MediaStream([t]);
+      replay.vid.play().catch(function(){});
+    } catch (e) {}
+  }
+  function rpWatermark(ctx, W, H){
+    var stripTop = H * 0.84;
+    var g = ctx.createLinearGradient(0, stripTop, 0, H);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.66)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, stripTop, W, H - stripTop);
+    var pad = Math.round(W * 0.03);
+    var base = H * 0.962;
+    var big = Math.round(H * 0.046);
+    ctx.font = '800 ' + big + 'px system-ui, -apple-system, '
+      + '"Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#d41f2e';
+    ctx.fillText('H', pad, base);
+    var wH = ctx.measureText('H').width;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('ERE', pad + wH, base);
+    var wE = ctx.measureText('ERE').width;
+    var small = Math.round(H * 0.031);
+    ctx.font = '600 ' + small + 'px system-ui, -apple-system, '
+      + '"Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.fillText(' — Come join HERE · joincomehere.com',
+                 pad + wH + wE, base);
+  }
+  function rpDraw(){
+    if (!replay.drawOn) return;
+    if (replay.state !== 'recording'){ replay.drawOn = false; return; }
+    try {
+      var c = replay.canvas, ctx = replay.ctx, src = null;
+      if (typeof studio !== 'undefined' && studio && studio.on
+          && studio.canvas && studio.canvas.width)
+        src = studio.canvas;
+      else {
+        rpRebindVideo();
+        var v = replay.vid;
+        if (v && v.readyState >= 2 && v.videoWidth) src = v;
+      }
+      if (src){
+        var sw = src.videoWidth || src.width || 0;
+        var sh = src.videoHeight || src.height || 0;
+        if (sw && sh){
+          var wantW = sw >= sh ? 1280 : 720;
+          var wantH = sw >= sh ? 720 : 1280;
+          if (c.width !== wantW || c.height !== wantH){
+            c.width = wantW; c.height = wantH;
+          }
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, c.width, c.height);
+          studioDrawFit(ctx, src, 0, 0, c.width, c.height, false);
+          rpWatermark(ctx, c.width, c.height);
+        }
+      }
+    } catch (e) {}
+    requestAnimationFrame(rpDraw);
+  }
+  function rpEnqueue(blob){
+    if (!blob || !blob.size) return;
+    replay.seq += 1;
+    replay.queue.push({seq: replay.seq, blob: blob, retried: false});
+    rpPump();
+  }
+  function rpPump(){
+    while (replay.inflight < 2 && replay.queue.length){
+      var item = replay.queue.shift();
+      replay.inflight += 1;
+      rpUpload(item).then(function(){
+        replay.inflight -= 1;
+        rpPump();
+      });
+    }
+  }
+  function rpUpload(item){
+    var fd = new FormData();
+    fd.append('chunk', item.blob, 'chunk.' + replay.ext);
+    fd.append('seq', String(item.seq));
+    fd.append('ext', replay.ext);
+    return fetch('/live/' + B.id + '/replay/chunk',
+        {method: 'POST', credentials: 'same-origin', body: fd})
+      .then(function(r){
+        if (!r.ok) throw new Error('chunk');
+        return r.json();
+      })
+      .then(function(d){
+        if (!d || !d.ok) throw new Error('chunk');
+        if (d.replay_id) replay.rid = d.replay_id;
+      })
+      .catch(function(){
+        if (!item.retried){
+          item.retried = true;
+          replay.queue.unshift(item);
+          return;
+        }
+        replay.dropped += 1;
+      });
+  }
+  function rpDrain(){
+    return new Promise(function(resolve){
+      var waited = 0;
+      var iv = setInterval(function(){
+        waited += 150;
+        if ((replay.inflight === 0 && !replay.queue.length)
+            || waited > 25000){
+          clearInterval(iv);
+          resolve();
+        }
+      }, 150);
+    });
+  }
+  function rpRecorderStopped(){
+    return new Promise(function(resolve){
+      if (!replay.rec || replay.rec.state === 'inactive')
+        return resolve();
+      var done = false;
+      var finish = function(){
+        if (!done){ done = true; resolve(); }
+      };
+      try {
+        replay.rec.addEventListener('stop', finish);
+        setTimeout(finish, 3000);
+        replay.rec.stop();
+      } catch (e) { finish(); }
+    });
+  }
+  function rpCap(){
+    if (replay.state !== 'recording') return;
+    replay.capped = true;
+    replay.state = 'capped';
+    replay.drawOn = false;
+    if (replay.rec && replay.rec.state !== 'inactive'){
+      try { replay.rec.stop(); } catch (e) {}
+    }
+  }
+  function rpStart(){
+    try {
+      replay.canvas = document.createElement('canvas');
+      replay.canvas.width = 1280;
+      replay.canvas.height = 720;
+      replay.ctx = replay.canvas.getContext('2d');
+      /* The canvas MUST live in the document — the same iOS rule
+         the Studio canvas follows, or captureStream freezes. */
+      replay.canvas.style.cssText = 'position:fixed;left:0;bottom:0;'
+        + 'width:2px;height:2px;opacity:0.01;z-index:-1;'
+        + 'pointer-events:none';
+      document.body.appendChild(replay.canvas);
+      var v = document.createElement('video');
+      v.autoplay = true; v.playsInline = true; v.muted = true;
+      v.setAttribute('playsinline', '');
+      v.style.cssText = 'position:fixed;left:0;top:0;width:16px;'
+        + 'height:16px;opacity:0.01;z-index:-1;pointer-events:none';
+      document.body.appendChild(v);
+      replay.vid = v;
+      replay.state = 'recording';
+      /* Audio: a persistent destination the recorder drinks from,
+         re-fed on every published-track change. */
+      var audioTrack = null;
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (AC){
+          replay.actx = new AC();
+          if (replay.actx.resume)
+            replay.actx.resume().catch(function(){});
+          replay.dest = replay.actx.createMediaStreamDestination();
+          replay.inGain = replay.actx.createGain();
+          replay.inGain.gain.value = 1;
+          replay.inGain.connect(replay.dest);
+          rpRebindAudio();
+          audioTrack = replay.dest.stream.getAudioTracks()[0] || null;
+        }
+      } catch (e) { replay.actx = null; replay.dest = null; }
+      if (!audioTrack){
+        /* Fallback: the raw published track rides the stream. */
+        var raw = rpPublishedAudio();
+        if (raw) audioTrack = raw;
+      }
+      var vtrack = replay.canvas.captureStream(30)
+        .getVideoTracks()[0];
+      var tracks = [vtrack];
+      if (audioTrack) tracks.push(audioTrack);
+      replay.stream = new MediaStream(tracks);
+      replay.mime = rpMime();
+      replay.ext = replay.mime.indexOf('mp4') !== -1 ? 'mp4' : 'webm';
+      var opts = {videoBitsPerSecond: 1500000,
+                  audioBitsPerSecond: 128000};
+      if (replay.mime) opts.mimeType = replay.mime;
+      replay.rec = new MediaRecorder(replay.stream, opts);
+      replay.rec.ondataavailable = function(e){ rpEnqueue(e.data); };
+      replay.rec.onerror = function(){ rpCap(); };
+      replay.startedAt = Date.now();
+      replay.rec.start(10000);
+      replay.drawOn = true;
+      requestAnimationFrame(rpDraw);
+      replay.capTimer = setTimeout(rpCap, REPLAY_CAP_MS);
+      replay.watchTimer = setInterval(function(){
+        rpRebindAudio();
+      }, 1000);
+    } catch (e) {
+      /* Fail-open: no replay this time; the live never notices. */
+      replay.state = 'unavailable';
+      replay.drawOn = false;
+    }
+  }
+  function rpMaybeStart(){
+    if (!isHost || ended) return;
+    if (replay.state !== 'idle') return;
+    if (!myStream || !myStream.getVideoTracks().length) return;
+    if (!rpSupported()){
+      replay.state = 'unavailable';
+      if (!replay.toastShown){
+        replay.toastShown = true;
+        toast("Replay isn't available in this browser");
+      }
+      return;
+    }
+    rpStart();
+  }
+  function rpBeginFinish(){
+    if (replay.finishPromise) return replay.finishPromise;
+    if (replay.state !== 'recording' && replay.state !== 'capped')
+      return null;
+    replay.state = 'finishing';
+    replay.drawOn = false;
+    if (replay.capTimer){
+      clearTimeout(replay.capTimer);
+      replay.capTimer = 0;
+    }
+    if (replay.watchTimer){
+      clearInterval(replay.watchTimer);
+      replay.watchTimer = 0;
+    }
+    replay.finishPromise = rpRecorderStopped()
+      .then(function(){ return rpDrain(); })
+      .then(function(){
+        var fd = new FormData();
+        fd.append('duration_s', String(Math.max(0,
+          Math.round((Date.now() - replay.startedAt) / 1000))));
+        fd.append('ext', replay.ext);
+        fd.append('parts', String(replay.seq));
+        return fetch('/live/' + B.id + '/replay/finish',
+          {method: 'POST', credentials: 'same-origin', body: fd})
+          .then(function(r){ return r.json(); });
+      })
+      .then(function(d){
+        if (d && d.ok){
+          replay.state = 'ready';
+          replay.rid = d.replay_id;
+          replay.downloadUrl = d.download_url || '';
+        } else replay.state = 'failed';
+        rpPaintCard();
+        return d;
+      })
+      .catch(function(){
+        replay.state = 'failed';
+        rpPaintCard();
+        return null;
+      });
+    return replay.finishPromise;
+  }
+  function rpSetBtn(el, on, label){
+    if (!el) return;
+    if (label) el.textContent = label;
+    if (el.tagName === 'A'){
+      el.style.pointerEvents = on ? '' : 'none';
+      el.style.opacity = on ? '' : '.45';
+    } else el.disabled = !on;
+  }
+  function rpPaintCard(){
+    var card = $('replay-card');
+    if (!card || card.hidden) return;
+    var title = $('replay-title'), sub = $('replay-sub'),
+        note = $('replay-note'), dl = $('replay-download'),
+        post = $('replay-post'), dis = $('replay-discard'),
+        cap = $('replay-caption');
+    if (!title) return;
+    var dur = rpFmtDur(Math.round(
+      (Date.now() - replay.startedAt) / 1000));
+    note.hidden = true;
+    if (replay.state === 'finishing'){
+      title.textContent = '🔴 Your live was recorded (' + dur + ')';
+      sub.textContent = 'Saving your replay…';
+      rpSetBtn(dl, false);
+      rpSetBtn(post, false);
+      rpSetBtn(dis, false);
+      if (cap) cap.disabled = true;
+    } else if (replay.state === 'ready'){
+      if (dl && replay.downloadUrl) dl.href = replay.downloadUrl;
+      if (replay.capped){
+        note.hidden = false;
+        note.textContent = 'Replay capped at 60 min — this is '
+          + 'the first hour of your live.';
+      } else if (replay.dropped){
+        note.hidden = false;
+        note.textContent = 'Note: ' + replay.dropped + ' chunk(s) '
+          + 'never uploaded — a few seconds may be missing.';
+      }
+      if (replay.posted){
+        title.textContent = '✅ Replay posted';
+        sub.textContent = 'Your live replay is on your timeline.';
+        rpSetBtn(dl, true);
+        rpSetBtn(post, false, '📣 Posted');
+        rpSetBtn(dis, false);
+        if (cap) cap.disabled = true;
+      } else {
+        title.textContent = '🔴 Your live was recorded (' + dur + ')';
+        sub.textContent = 'Download it, post it to your timeline, '
+          + 'or throw it away.';
+        rpSetBtn(dl, true);
+        rpSetBtn(post, true, '📣 Post replay');
+        rpSetBtn(dis, !!replay.rid, '🗑 Discard');
+        if (cap) cap.disabled = false;
+      }
+    } else if (replay.state === 'discarded'){
+      title.textContent = '🗑 Replay discarded';
+      sub.textContent = 'The recording was deleted.';
+      rpSetBtn(dl, false);
+      rpSetBtn(post, false);
+      rpSetBtn(dis, false);
+      if (cap) cap.disabled = true;
+    } else {
+      title.textContent = '🔴 Your live has ended';
+      sub.textContent = "The replay couldn't be saved this time.";
+      rpSetBtn(dl, false);
+      rpSetBtn(post, false);
+      rpSetBtn(dis, false);
+      if (cap) cap.disabled = true;
+    }
+  }
+  var rpWired = false;
+  function rpWireCard(){
+    if (rpWired) return;
+    rpWired = true;
+    var dl = $('replay-download'), post = $('replay-post'),
+        dis = $('replay-discard'), done = $('replay-done');
+    if (dl) dl.addEventListener('click', function(e){
+      if (replay.state !== 'ready') e.preventDefault();
+    });
+    if (post) post.addEventListener('click', function(){
+      if (replay.state !== 'ready' || replay.posted || !replay.rid)
+        return;
+      rpSetBtn(post, false, 'Posting…');
+      var capEl = $('replay-caption');
+      var fd = new FormData();
+      fd.append('caption',
+        ((capEl && capEl.value) || '').slice(0, 500));
+      fetch('/live/replay/' + replay.rid + '/post',
+          {method: 'POST', credentials: 'same-origin', body: fd})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d && d.ok){
+            replay.posted = true;
+            replay.postId = d.post_id;
+            rpPaintCard();
+            toast('Posted to your timeline ✅');
+          } else {
+            rpSetBtn(post, true, '📣 Post replay');
+            toast((d && d.error) || 'Could not post the replay.');
+          }
+        })
+        .catch(function(){
+          rpSetBtn(post, true, '📣 Post replay');
+          toast('Could not post the replay.');
+        });
+    });
+    if (dis) dis.addEventListener('click', function(){
+      if (!replay.rid) return;
+      if (!confirm('Throw this replay away? This cannot be undone.'))
+        return;
+      rpSetBtn(dis, false, 'Discarding…');
+      fetch('/live/replay/' + replay.rid + '/discard',
+          {method: 'POST', credentials: 'same-origin'})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d && d.ok){
+            replay.state = 'discarded';
+            rpPaintCard();
+          } else {
+            rpSetBtn(dis, true, '🗑 Discard');
+            toast('Could not discard the replay.');
+          }
+        })
+        .catch(function(){ rpSetBtn(dis, true, '🗑 Discard'); });
+    });
+    if (done) done.addEventListener('click', function(){
+      window.location.href = '/user/' + B.host.id;
+    });
+  }
+  function rpHostEndScreen(){
+    if (replay.state !== 'recording' && replay.state !== 'capped'
+        && replay.state !== 'finishing' && replay.state !== 'ready'
+        && replay.state !== 'failed')
+      return false;
+    var card = $('replay-card');
+    if (!card) return false;
+    card.hidden = false;
+    rpWireCard();
+    rpPaintCard();
+    return true;
+  }
+  window.__liveReplay = {
+    rebind: function(){ rpRebindAudio(); },
+    beginFinish: function(){ return rpBeginFinish(); },
+    hostEndScreen: rpHostEndScreen,
+    state: function(){
+      return {state: replay.state, seq: replay.seq,
+              dropped: replay.dropped, rid: replay.rid,
+              ext: replay.ext, capped: replay.capped,
+              posted: replay.posted};
+    }
+  };
+  if (isHost){
+    timers.push(setInterval(rpMaybeStart, 1500));
+    rpMaybeStart();
+  }
 
   /* ---------------- peers (keyed by user_id) ----------------
      remoteKind: 'panelist' (they publish; tile + video) or 'watcher'
@@ -9843,6 +10393,10 @@ function renderTopGifters(list){
   function teardownEnded(){
     if (ended) return;
     ended = true;
+    /* Live Replay: the live just ended — stop the recorder and
+       start saving BEFORE anything else tears down. Fail-open:
+       the module guards itself; this can never break the end. */
+    if (window.__liveReplay) __liveReplay.beginFinish();
     if (typeof studioStop === 'function') studioStop(true);
     /* Embed (mini player): tell the parent tile so it clears. */
     if (B.embed){
@@ -9862,6 +10416,12 @@ function renderTopGifters(list){
         if (myStream)
           myStream.getTracks().forEach(function(tr){ tr.stop(); });
       } catch (e) {}
+      if (window.__liveReplay && __liveReplay.hostEndScreen()){
+        /* The replay end screen owns the exit now: its Done
+           button navigates to the profile. Tracks were stopped
+           above; the page stays as the end screen's home. */
+        return;
+      }
       window.location.href = '/user/' + B.host.id;
       return;
     }
