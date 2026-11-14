@@ -297,6 +297,27 @@ def delete_object(key):
     return True
 
 
+def get_object(key):
+    """The object's bytes, or None when absent (a 404 is absence,
+    not an error). Transport failures raise StorageError. Mirrors
+    head_object's discipline; used by the Live Replay join, which
+    spools the bytes to a temp file rather than holding big media
+    in RAM any longer than the read itself."""
+    cfg = config()
+    if not cfg:
+        raise StorageError("R2 is not configured.")
+    url, headers = _signed_headers(
+        cfg, "GET", key,
+        payload_hash=hashlib.sha256(b"").hexdigest())
+    status, _h, payload = _http_request("GET", url, headers,
+                                        timeout=900)
+    if status == 404:
+        return None
+    if status != 200:
+        raise StorageError(f"R2 GET {key} -> HTTP {status}")
+    return payload
+
+
 def copy_object(src_key, dst_key):
     """Server-side copy within the bucket (story-clip snapshots)."""
     cfg = config()

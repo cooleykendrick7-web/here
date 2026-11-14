@@ -38,6 +38,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
 
 import ads
 import moderation
@@ -856,6 +857,22 @@ def init_db():
         status TEXT NOT NULL DEFAULT 'live',
         created_at TEXT NOT NULL, ended_at TEXT,
         host_seen_at TEXT NOT NULL)""")
+    # Live Replay (Nov 13, 2026): the host's client-side recording
+    # of a live, chunked up while the live runs. One row per live
+    # that produced (or is producing) a replay. status walks
+    # recording -> ready -> posted | discarded. The final file's
+    # storage key is derived: replays/r<id>.<ext>; the uploaded
+    # parts live at replays/r<id>/p<seq>.part until finish joins
+    # them. parts = highest chunk seq the server has seen.
+    c.execute("""CREATE TABLE IF NOT EXISTS live_replays (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        live_id INTEGER NOT NULL, host_id INTEGER NOT NULL,
+        ext TEXT NOT NULL DEFAULT 'webm',
+        bytes INTEGER NOT NULL DEFAULT 0,
+        duration_s INTEGER NOT NULL DEFAULT 0,
+        parts INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'recording',
+        post_id INTEGER, created_at TEXT NOT NULL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS live_signals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         live_id INTEGER NOT NULL, from_id INTEGER NOT NULL,
@@ -17166,6 +17183,372 @@ async def live_end(request: Request, lid: int):
     _end_live_row(conn, live)
     conn.commit()
     conn.close()
+    return JSONResponse({"ok": True})
+
+
+
+
+# ---------------------------------------------------------------------------
+# Live Replay (Ken's order, Nov 13, 2026) — when a host ends a live,
+# the live has been recorded ON THE HOST'S DEVICE (the platform's
+# lives are WebRTC mesh; there is no media server to record with).
+# The live page's recorder draws the host's own published picture
+# (Studio canvas, or the local camera) plus a HERE watermark strip
+# onto a record canvas and uploads MediaRecorder chunks (~10s
+# each) while the live runs. Finish joins the parts byte-wise
+# (timeslice chunks of one recorder session concatenate into one
+# valid file) into replays/r<id>.<ext> — the same key space post
+# media uses, so a posted replay is an ordinary video post.
+# Everything here is host-only: a replay of someone else's live
+# must be impossible.
+# ---------------------------------------------------------------------------
+
+REPLAY_EXTS = {"webm", "mp4"}
+
+
+def _replay_key(rid, ext):
+    return f"replays/r{rid}.{ext}"
+
+
+def _replay_part_key(rid, seq):
+    return f"replays/r{rid}/p{int(seq):06d}.part"
+
+
+def _replay_put(key, data):
+    """Store bytes at key in whichever backend is live."""
+    if storage.r2_enabled():
+        storage.put_object(key, data, "application/octet-stream")
+        return
+    dest = os.path.join(UPLOAD_DIR, key)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "wb") as f:
+        f.write(data)
+
+
+def _replay_size(key):
+    """Byte size of a stored object, or None when absent."""
+    if storage.r2_enabled():
+        try:
+            head = storage.head_object(key)
+        except storage.StorageError:
+            return None
+        return head["size"] if head else None
+    path = os.path.join(UPLOAD_DIR, key)
+    return os.path.getsize(path) if os.path.isfile(path) else None
+
+
+def _replay_delete(key):
+    try:
+        if storage.r2_enabled():
+            storage.delete_object(key)
+        else:
+            path = os.path.join(UPLOAD_DIR, key)
+            if os.path.isfile(path):
+                os.remove(path)
+    except Exception:
+        pass
+
+
+def _replay_row(conn, rid):
+    r = conn.execute("SELECT * FROM live_replays WHERE id=?",
+                     (rid,)).fetchone()
+    return dict(r) if r else None
+
+
+def _replay_gate_live(request, lid):
+    """(user, live, err) for the chunk/finish routes: signed in,
+    the live exists, and the caller is its host — nobody else."""
+    user = current_user(request)
+    if not user:
+        return None, None, JSONResponse(
+            {"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    live = _live_get(conn, lid)
+    conn.close()
+    if not live:
+        return None, None, JSONResponse(
+            {"ok": False, "error": "not found"}, status_code=404)
+    if live["host_id"] != user["id"]:
+        return None, None, JSONResponse(
+            {"ok": False,
+             "error": "Only the host has this live's replay."},
+            status_code=403)
+    return user, live, None
+
+
+def _replay_gate_row(request, rid):
+    """(user, row, err) for the download/post/discard routes."""
+    user = current_user(request)
+    if not user:
+        return None, None, JSONResponse(
+            {"ok": False, "error": "login"}, status_code=401)
+    conn = db()
+    row = _replay_row(conn, rid)
+    conn.close()
+    if not row:
+        return None, None, JSONResponse(
+            {"ok": False, "error": "not found"}, status_code=404)
+    if row["host_id"] != user["id"]:
+        return None, None, JSONResponse(
+            {"ok": False,
+             "error": "Only the host has this live's replay."},
+            status_code=403)
+    return user, row, None
+
+
+@app.post("/live/{lid}/replay/chunk")
+async def live_replay_chunk(request: Request, lid: int):
+    """One MediaRecorder chunk of the host's replay. Parts land in
+    seq order under the replay's key prefix; the live_replays row
+    is born on the first chunk that arrives."""
+    user, live, err = _replay_gate_live(request, lid)
+    if err:
+        return err
+    form = await request.form()
+    up = form.get("chunk")
+    if up is None or not getattr(up, "filename", ""):
+        return JSONResponse({"ok": False, "error": "no chunk"},
+                            status_code=400)
+    try:
+        seq = int(form.get("seq") or 0)
+    except (TypeError, ValueError):
+        seq = 0
+    if seq < 1:
+        return JSONResponse({"ok": False, "error": "bad seq"},
+                            status_code=400)
+    ext = str(form.get("ext") or "webm").lower()
+    if ext not in REPLAY_EXTS:
+        ext = "webm"
+    data = await up.read()
+    if not data:
+        return JSONResponse({"ok": False, "error": "empty chunk"},
+                            status_code=400)
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM live_replays WHERE live_id=?",
+        (lid,)).fetchone()
+    if row and row["status"] == "discarded":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "replay discarded"},
+            status_code=400)
+    if not row:
+        cur = conn.execute(
+            "INSERT INTO live_replays(live_id, host_id, ext, "
+            "created_at) VALUES(?,?,?,?)",
+            (lid, user["id"], ext, now_iso()))
+        rid = cur.lastrowid
+        conn.commit()
+        row = _replay_row(conn, rid)
+    rid = row["id"]
+    try:
+        _replay_put(_replay_part_key(rid, seq), data)
+    except Exception:
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "storage"}, status_code=502)
+    conn.execute(
+        "UPDATE live_replays SET parts=MAX(parts, ?), ext=? "
+        "WHERE id=?", (seq, ext, rid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "replay_id": rid, "seq": seq})
+
+
+@app.post("/live/{lid}/replay/finish")
+async def live_replay_finish(request: Request, lid: int):
+    """Join the uploaded parts into the single replay file and
+    mark it ready. Idempotent: finishing a ready/posted replay
+    just hands back its download URL again."""
+    user, live, err = _replay_gate_live(request, lid)
+    if err:
+        return err
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM live_replays WHERE live_id=?",
+        (lid,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "no replay"},
+                            status_code=404)
+    row = dict(row)
+    rid = row["id"]
+    if row["status"] in ("ready", "posted"):
+        conn.close()
+        return JSONResponse(
+            {"ok": True, "replay_id": rid,
+             "download_url": f"/live/replay/{rid}/download"})
+    if row["status"] == "discarded":
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "replay discarded"},
+            status_code=400)
+    form = await request.form()
+    ext = str(form.get("ext") or row["ext"] or "webm").lower()
+    if ext not in REPLAY_EXTS:
+        ext = "webm"
+    try:
+        duration_s = max(0, int(form.get("duration_s") or 0))
+    except (TypeError, ValueError):
+        duration_s = 0
+    try:
+        n_parts = int(form.get("parts") or 0)
+    except (TypeError, ValueError):
+        n_parts = 0
+    n_parts = max(n_parts, int(row["parts"] or 0))
+    final_key = _replay_key(rid, ext)
+    # Join by spooling: parts append to a temp file in seq order
+    # (a part the client reported dropped is skipped — the file
+    # keeps its tail), then the temp file becomes the one final
+    # object. A 60-minute replay never sits in RAM.
+    tmp = tempfile.TemporaryFile()
+    total = 0
+    try:
+        for seq in range(1, n_parts + 1):
+            pkey = _replay_part_key(rid, seq)
+            if storage.r2_enabled():
+                try:
+                    data = storage.get_object(pkey)
+                except storage.StorageError:
+                    data = None
+            else:
+                ppath = os.path.join(UPLOAD_DIR, pkey)
+                data = None
+                if os.path.isfile(ppath):
+                    with open(ppath, "rb") as f:
+                        data = f.read()
+            if data:
+                tmp.write(data)
+                total += len(data)
+        if not total:
+            tmp.close()
+            conn.close()
+            return JSONResponse(
+                {"ok": False, "error": "no chunks arrived"},
+                status_code=400)
+        tmp.seek(0)
+        ctype = "video/mp4" if ext == "mp4" else "video/webm"
+        if storage.r2_enabled():
+            storage.put_object(final_key, tmp, ctype, size=total)
+        else:
+            dest = os.path.join(UPLOAD_DIR, final_key)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as out:
+                shutil.copyfileobj(tmp, out)
+    except storage.StorageError:
+        tmp.close()
+        conn.close()
+        return JSONResponse(
+            {"ok": False, "error": "storage"}, status_code=502)
+    tmp.close()
+    for seq in range(1, n_parts + 1):
+        _replay_delete(_replay_part_key(rid, seq))
+    conn.execute(
+        "UPDATE live_replays SET status='ready', ext=?, bytes=?, "
+        "duration_s=? WHERE id=?", (ext, total, duration_s, rid))
+    conn.commit()
+    conn.close()
+    return JSONResponse(
+        {"ok": True, "replay_id": rid,
+         "download_url": f"/live/replay/{rid}/download"})
+
+
+@app.get("/live/replay/{rid}/download")
+async def live_replay_download(request: Request, rid: int):
+    """The host downloads their replay file (attachment)."""
+    user, row, err = _replay_gate_row(request, rid)
+    if err:
+        return err
+    if row["status"] not in ("ready", "posted"):
+        return JSONResponse(
+            {"ok": False, "error": "not ready"}, status_code=409)
+    ext = row["ext"] if row["ext"] in REPLAY_EXTS else "webm"
+    key = _replay_key(rid, ext)
+    fname = f"here-live-{row['live_id']}.{ext}"
+    ctype = "video/mp4" if ext == "mp4" else "video/webm"
+    if not storage.r2_enabled():
+        path = os.path.join(UPLOAD_DIR, key)
+        if not os.path.isfile(path):
+            return JSONResponse(
+                {"ok": False, "error": "file gone"},
+                status_code=404)
+        return FileResponse(path, media_type=ctype, filename=fname)
+    try:
+        data = storage.get_object(key)
+    except storage.StorageError:
+        data = None
+    if data is None:
+        return JSONResponse({"ok": False, "error": "file gone"},
+                            status_code=404)
+    tmp = tempfile.NamedTemporaryFile(
+        delete=False, suffix="." + ext)
+    try:
+        tmp.write(data)
+    finally:
+        tmp.close()
+    return FileResponse(
+        tmp.name, media_type=ctype, filename=fname,
+        background=BackgroundTask(os.remove, tmp.name))
+
+
+@app.post("/live/replay/{rid}/post")
+async def live_replay_post(request: Request, rid: int):
+    """Post the replay to the host's timeline as a normal public
+    video post (the same insert the Peep Feed desk uses)."""
+    user, row, err = _replay_gate_row(request, rid)
+    if err:
+        return err
+    if row["status"] == "posted" and row["post_id"]:
+        return JSONResponse({"ok": True, "post_id": row["post_id"]})
+    if row["status"] != "ready":
+        return JSONResponse(
+            {"ok": False, "error": "not ready"}, status_code=409)
+    form = await request.form()
+    caption = str(form.get("caption") or "").strip()[:500]
+    if not caption:
+        caption = ("🔴 My live replay — come join HERE! "
+                   "joincomehere.com")
+    ext = row["ext"] if row["ext"] in REPLAY_EXTS else "webm"
+    media = _replay_key(rid, ext)
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO posts(user_id, page_id, kind, body, feeling, "
+        "link_url, video_url, media, privacy, music_video_id, "
+        "music_title, music_artist, music_thumb, music_start, "
+        "created_at) VALUES(?,NULL,'video',?,'','','',?,'public',"
+        "'','','','',0,?)",
+        (user["id"], caption, media, now_iso()))
+    pid = cur.lastrowid
+    for _t in parse_hashtags(caption):
+        conn.execute(
+            "INSERT OR IGNORE INTO post_hashtags(post_id, tag) "
+            "VALUES(?,?)", (pid, _t))
+    conn.execute(
+        "UPDATE live_replays SET status='posted', post_id=? "
+        "WHERE id=?", (pid, rid))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "post_id": pid})
+
+
+@app.post("/live/replay/{rid}/discard")
+async def live_replay_discard(request: Request, rid: int):
+    """Throw the replay away: the bytes go, the row stays as
+    'discarded' for the record."""
+    user, row, err = _replay_gate_row(request, rid)
+    if err:
+        return err
+    if row["status"] != "discarded":
+        ext = row["ext"] if row["ext"] in REPLAY_EXTS else "webm"
+        _replay_delete(_replay_key(rid, ext))
+        for seq in range(1, int(row["parts"] or 0) + 1):
+            _replay_delete(_replay_part_key(rid, seq))
+        conn = db()
+        conn.execute(
+            "UPDATE live_replays SET status='discarded' WHERE id=?",
+            (rid,))
+        conn.commit()
+        conn.close()
     return JSONResponse({"ok": True})
 
 
