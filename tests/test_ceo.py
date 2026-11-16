@@ -62,7 +62,8 @@ def dbx(sql, args=()):
 def signup(name, email):
     cl = TestClient(here.app, follow_redirects=False)
     r = cl.post("/signup", data={"name": name, "email": email,
-                                 "password": "testpass123"})
+                                 "password": "testpass123",
+                                 "birthdate": "1990-05-01"})
     assert r.status_code == 303, (name, r.status_code)
     return cl, dbq("SELECT MAX(id) m FROM users")[0]["m"]
 
