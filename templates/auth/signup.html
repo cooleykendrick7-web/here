@@ -113,6 +113,10 @@ body{background:#0a0a0a;color:#f0f0f0;min-height:100vh;display:flex;flex-directi
       <label for="su-pass">Password</label>
       <input type="password" id="su-pass" name="password" required autocomplete="new-password">
     </div>
+    <div class="field">
+      <label for="su-code">Have an invitation code? (optional)</label>
+      <input type="text" id="su-code" name="invite_code" maxlength="15" autocomplete="off" placeholder="The code your inviter gave you">
+    </div>
     <button type="submit" class="btn">Create Account</button>
   </form>
 {% if google_on %}
@@ -148,6 +152,21 @@ document.querySelectorAll('.intro-video').forEach(function(v){
   v.addEventListener('click', toggle);
   if (chip) chip.addEventListener('click', toggle);
 });
+</script>
+<script>
+(function(){
+  var el = document.getElementById('su-code');
+  if (!el) return;
+  el.addEventListener('input', function(){
+    var v = el.value.replace(/\s+/g, '').toUpperCase();
+    if (v) {
+      document.cookie = 'here_invite_code='
+        + encodeURIComponent(v) + '; path=/; max-age=1800';
+    } else {
+      document.cookie = 'here_invite_code=; path=/; max-age=0';
+    }
+  });
+})();
 </script>
 </body>
 </html>
