@@ -873,6 +873,25 @@ def init_db():
         parts INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'recording',
         post_id INTEGER, created_at TEXT NOT NULL)""")
+    # Custom invite codes ("Got My 10", Nov 15, 2026): a member's
+    # own chosen code word, credited at signup via invite_code_uses.
+    # status walks active -> completed (10 qualified joins) or
+    # active -> retired (owner gave it up). Completed/retired words
+    # free up for anyone to claim; the partial unique index keeps
+    # one ACTIVE runner per word, ever.
+    c.execute("""CREATE TABLE IF NOT EXISTS invite_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL, code TEXT NOT NULL,
+        code_norm TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL, completed_at TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS invite_code_uses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL)""")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
+              "idx_invite_codes_active_norm ON invite_codes(code_norm) "
+              "WHERE status='active'")
     c.execute("""CREATE TABLE IF NOT EXISTS live_signals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         live_id INTEGER NOT NULL, from_id INTEGER NOT NULL,
@@ -4109,8 +4128,21 @@ async def signup(request: Request):
     # Invite credit — ONLY after a successful insert (a duplicate-email
     # failure above returns early: no credit, and the invite cookie is
     # left in place so the visitor can retry with another email).
-    inviter = _inviter_for_code(request.cookies.get("here_invite", ""))
+    # A typed custom invite code (Got My 10) beats the invite
+    # LINK: when both are present the code takes the credit
+    # \u2014 never both. A bad code never blocks the join.
+    typed_code = (form.get("invite_code") or "").strip() or \
+        (request.cookies.get("here_invite_code") or "").strip()
+    code_row = _invite_code_for_signup(typed_code) \
+        if typed_code else None
+    if code_row and code_row["user_id"] == uid:
+        code_row = None
     credited = False
+    if code_row:
+        _credit_invite_code(code_row, uid, name)
+        credited = True
+    inviter = None if credited else _inviter_for_code(
+        request.cookies.get("here_invite", ""))
     if inviter and inviter["id"] != uid:
         conn = db()
         conn.execute("UPDATE users SET invited_by=? WHERE id=?",
@@ -4134,6 +4166,8 @@ async def signup(request: Request):
     resp = redir(nxt or ("/home" if onboarded else "/welcome"))
     if credited or request.cookies.get("here_invite"):
         resp.delete_cookie("here_invite", path="/")
+    if request.cookies.get("here_invite_code"):
+        resp.delete_cookie("here_invite_code", path="/")
     return set_session_cookie(resp, token, SESSION_COOKIE)
 
 
@@ -4359,6 +4393,17 @@ async def google_callback(request: Request):
     # here_invite cookie, never to oneself.
     credited = False
     if created:
+        # A typed custom invite code (carried in the
+        # here_invite_code cookie from the signup form) beats the
+        # invite LINK for brand-new Google accounts too.
+        grow = _invite_code_for_signup(
+            request.cookies.get("here_invite_code", ""))
+        if grow and grow["user_id"] == uid:
+            grow = None
+        if grow:
+            _credit_invite_code(grow, uid, name)
+            credited = True
+    if created and not credited:
         inviter = _inviter_for_code(
             request.cookies.get("here_invite", ""))
         if inviter and inviter["id"] != uid:
@@ -4379,6 +4424,8 @@ async def google_callback(request: Request):
     resp.delete_cookie("here_gnext", path="/")
     if credited or request.cookies.get("here_invite"):
         resp.delete_cookie("here_invite", path="/")
+    if request.cookies.get("here_invite_code"):
+        resp.delete_cookie("here_invite_code", path="/")
     return set_session_cookie(resp, token, SESSION_COOKIE)
 
 
@@ -5638,6 +5685,15 @@ async def home(request: Request):
     if err:
         return err
     record_activity(user["id"])
+    # Got My 10: a throttled completion sweep rides home loads
+    # \u2014 a code whose tenth qualified join landed since the
+    # last sweep completes (and pays) within a couple of minutes
+    # even if its owner never opens /my-code.
+    if time.time() - _invite_code_sweep_last[0] > 120:
+        _invite_code_sweep_last[0] = time.time()
+        _swc = db()
+        _invite_code_sweep(_swc)
+        _swc.close()
     owner_on = is_owner(request)
     posts = _home_posts(user, owner_on)
     feed_items = _home_feed_items(user, posts)
@@ -10135,6 +10191,12 @@ async def profile(request: Request, uid: int):
     _bconn = db()
     _sw, _sl, _sd = _showdown_record(_bconn, uid)
     _bconn.close()
+    # Got My 10: completed custom invite codes (derived badge).
+    _icconn = db()
+    got10_count = _icconn.execute(
+        "SELECT COUNT(*) AS c FROM invite_codes WHERE user_id=? "
+        "AND status='completed'", (uid,)).fetchone()["c"]
+    _icconn.close()
     # Private profile: non-friends see a locked profile (public face
     # only) — the owner, their friends, and the owner context see all.
     locked = bool(prof.get("private_profile")) and user["id"] != uid \
@@ -10171,6 +10233,7 @@ async def profile(request: Request, uid: int):
         "is_verified_user": bool(prof.get("is_verified_user")),
         "idm_member": bool(prof.get("idm_member")),
         "eats_member": bool(prof.get("eats_enabled")),
+        "got10_count": got10_count,
         "vuser_status": prof.get("vuser_status") or "none",
         "is_verified_vendor": bool(prof.get("is_verified_vendor")),
         "vvendor_status": prof.get("vvendor_status") or "none",
@@ -18944,6 +19007,276 @@ def _invite_bonus(conn, earner_id, tickets, stamp):
         (inviter_id, "invite_bonus", bonus, None, "",
          f"from user {earner_id}", stamp))
 
+
+# ---------------- custom invite codes ("Got My 10") ----------------
+# Ken's order (Nov 15, 2026): members make their OWN invitation
+# code \u2014 a word they choose \u2014 and new signups type it into
+# the "Have an invitation code?" box to credit them. A join counts
+# (qualifies) only when the joiner actually uses HERE \u2014 the
+# same _QUALIFIED_SQL truth as the Invite Race (a post, a live
+# view, or a ticket txn); ghost signups never count. At 10
+# qualified joins the code retires itself: the owner earns the
+# Got My 10 badge (derived \u2014 a completed invite_codes row)
+# plus 1,000 tickets into gift_earned (NOT gift_lifetime, the
+# _invite_bonus reasoning: levels measure fan love, not
+# recruiting), and the words free up for anyone else to claim.
+# While a code is active its words are taken \u2014 nobody else
+# can run the same code.
+INVITE_CODE_TARGET = 10
+INVITE_CODE_REWARD = 1000
+INVITE_CODE_RESERVED = {
+    "HERE", "ADMIN", "OFFICIAL", "SUPPORT", "STAFF", "OWNER",
+    "MOD", "MODERATOR", "HELP", "SYSTEM", "MILLI", "JOINCOME",
+    "JOINCOMEERE", "FREE", "MONEY"}
+_invite_code_sweep_last = [0.0]
+
+
+def _invite_norm(raw):
+    """The one normalization for invite codes: strip + upper.
+    Codes are case-insensitive \u2014 KEN10 and ken10 are one code."""
+    return str(raw or "").strip().upper()
+
+
+def _name_norm(name):
+    """A display name squeezed into code shape (letters/digits,
+    upper) for the impersonation guard."""
+    return re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+
+
+def _invite_code_error(code_raw, user_id):
+    """None when code_raw may be claimed by user_id right now,
+    else the plain-words reason it may not. The one gate shared
+    by the create route and the live availability check."""
+    code_norm = _invite_norm(code_raw)
+    if not re.fullmatch(r"[A-Z0-9]{4,15}", code_norm or ""):
+        return ("Codes are 4 to 15 characters \u2014 letters and "
+                "numbers only, no spaces.")
+    if code_norm in INVITE_CODE_RESERVED:
+        return "That word is reserved \u2014 pick a code that's yours."
+    conn = db()
+    try:
+        # Impersonation guard: a code may not BE the name of the
+        # owner account (user 3) or of any badge-carrying
+        # (verified) member.
+        guards = conn.execute(
+            "SELECT name FROM users WHERE id=3 OR is_verified=1 "
+            "OR is_verified_user=1 OR is_verified_vendor=1").fetchall()
+        for g in guards:
+            if _name_norm(g["name"]) == code_norm:
+                return ("That code matches a verified member's "
+                        "name \u2014 pick a code that's yours.")
+        own = conn.execute(
+            "SELECT id FROM invite_codes WHERE user_id=? "
+            "AND status='active'", (user_id,)).fetchone()
+        if own:
+            return ("You already have an active code \u2014 retire "
+                    "it before making a new one.")
+        taken = conn.execute(
+            "SELECT id FROM invite_codes WHERE code_norm=? "
+            "AND status='active'", (code_norm,)).fetchone()
+        if taken:
+            return ("Unavailable \u2014 somebody is running that "
+                    "code now.")
+    finally:
+        conn.close()
+    return None
+
+
+def _invite_code_sweep(conn):
+    """Complete every active invite code whose qualified joins
+    hit the target: flip it to 'completed' (the guarded UPDATE is
+    the claim \u2014 idempotent), pay the owner 1,000 earned
+    tickets with a ticket_txns row, and notify. Commits its own
+    work on the caller's conn; notifications fire after the
+    commit (notify opens its own conn)."""
+    done = []
+    actives = conn.execute(
+        "SELECT * FROM invite_codes WHERE status='active'").fetchall()
+    for row in actives:
+        cnt = conn.execute(
+            "SELECT COUNT(*) AS c FROM invite_code_uses x "
+            "JOIN users u ON u.id = x.user_id WHERE x.code_id=? "
+            "AND " + _QUALIFIED_SQL, (row["id"],)).fetchone()["c"]
+        if cnt < INVITE_CODE_TARGET:
+            continue
+        cur = conn.execute(
+            "UPDATE invite_codes SET status='completed', "
+            "completed_at=? WHERE id=? AND status='active'",
+            (now_iso(), row["id"]))
+        if cur.rowcount != 1:
+            continue
+        conn.execute(
+            "UPDATE users SET gift_earned = gift_earned + ? "
+            "WHERE id=?", (INVITE_CODE_REWARD, row["user_id"]))
+        conn.execute(
+            "INSERT INTO ticket_txns(user_id, kind, tickets, "
+            "live_id, gift_key, note, created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (row["user_id"], "invite_code_reward",
+             INVITE_CODE_REWARD, None, "",
+             "Got My 10 \u2014 code " + row["code"]
+             + " reached 10 qualified joins", now_iso()))
+        done.append((row["user_id"], row["code"]))
+    if done:
+        conn.commit()
+    for owner_id, code in done:
+        notify(owner_id, "invite_code_done",
+               "\U0001f51f Your code " + code + " hit 10! Badge "
+               "earned + 1,000 tickets added.", "/my-code")
+
+
+def _invite_code_for_signup(raw):
+    """Resolve a typed invitation code to its ACTIVE invite_codes
+    row, or None. Invalid / retired / completed codes resolve to
+    None \u2014 the signup then just proceeds (link credit may
+    still apply); a bad code never blocks a join."""
+    norm = _invite_norm(raw)
+    if not norm:
+        return None
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM invite_codes WHERE code_norm=? "
+        "AND status='active'", (norm,)).fetchone()
+    conn.close()
+    return row
+
+
+def _credit_invite_code(code_row, uid, name):
+    """Credit a brand-new account to a typed invite code: the
+    invited_by stamp, the use row, the owner's notification, and
+    a completion sweep (this join could be the tenth)."""
+    conn = db()
+    conn.execute("UPDATE users SET invited_by=? WHERE id=?",
+                 (code_row["user_id"], uid))
+    conn.execute(
+        "INSERT INTO invite_code_uses(code_id, user_id, "
+        "created_at) VALUES(?,?,?)",
+        (code_row["id"], uid, now_iso()))
+    conn.commit()
+    conn.close()
+    notify(code_row["user_id"], "invite",
+           "\U0001f389 " + name + " joined HERE from your invite!",
+           "/my-code", actor_id=uid)
+    conn = db()
+    _invite_code_sweep(conn)
+    conn.close()
+
+
+@app.get("/my-code", response_class=HTMLResponse)
+async def my_code_page(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    _invite_code_sweep(conn)
+    active = conn.execute(
+        "SELECT * FROM invite_codes WHERE user_id=? "
+        "AND status='active'", (user["id"],)).fetchone()
+    joiners = []
+    qualified = 0
+    if active:
+        rows = conn.execute(
+            "SELECT u.id, u.name, u.avatar, "
+            "x.created_at AS joined, CASE WHEN " + _QUALIFIED_SQL
+            + " THEN 1 ELSE 0 END AS q FROM invite_code_uses x "
+            "JOIN users u ON u.id = x.user_id WHERE x.code_id=? "
+            "ORDER BY x.id", (active["id"],)).fetchall()
+        for r in rows:
+            qualified += 1 if r["q"] else 0
+            joiners.append({
+                "name": r["name"],
+                "avatar": avatar_url(r["avatar"]),
+                "joined": fancy_time(r["joined"]),
+                "counted": bool(r["q"])})
+    past_rows = conn.execute(
+        "SELECT * FROM invite_codes WHERE user_id=? "
+        "AND status != 'active' ORDER BY id DESC",
+        (user["id"],)).fetchall()
+    past = [{"code": p["code"], "status": p["status"],
+             "when": fancy_time(p["completed_at"]
+                                or p["created_at"])}
+            for p in past_rows]
+    got10 = conn.execute(
+        "SELECT COUNT(*) AS c FROM invite_codes WHERE user_id=? "
+        "AND status='completed'", (user["id"],)).fetchone()["c"]
+    conn.close()
+    return render(request, "invite_code.html", {
+        "active": dict(active) if active else None,
+        "joiners": joiners, "qualified": qualified,
+        "target": INVITE_CODE_TARGET,
+        "pct": min(100, int(100 * qualified / INVITE_CODE_TARGET)),
+        "past": past, "got10_total": got10,
+        "error": request.query_params.get("error", ""),
+        "ok": request.query_params.get("ok", "")})
+
+
+@app.post("/invite-code/check")
+async def invite_code_check(request: Request):
+    user, err = require_login(request)
+    if err:
+        return JSONResponse({"ok": False, "available": False,
+                             "reason": "Log in first."},
+                            status_code=401)
+    raw = ""
+    if "application/json" in request.headers.get("content-type", ""):
+        try:
+            raw = (await request.json()).get("code", "")
+        except Exception:
+            raw = ""
+    else:
+        form = await request.form()
+        raw = form.get("code") or ""
+    problem = _invite_code_error(raw, user["id"])
+    return JSONResponse({
+        "ok": True, "available": problem is None,
+        "code": _invite_norm(raw),
+        "reason": problem or "Available \u2014 that code is "
+                  "yours to claim."})
+
+
+@app.post("/invite-code")
+async def invite_code_create(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    form = await request.form()
+    raw = form.get("code") or ""
+    problem = _invite_code_error(raw, user["id"])
+    if problem:
+        return redir("/my-code?error=" + quote(problem, safe=""))
+    norm = _invite_norm(raw)
+    conn = db()
+    try:
+        conn.execute(
+            "INSERT INTO invite_codes(user_id, code, code_norm, "
+            "status, created_at) VALUES(?,?,?,'active',?)",
+            (user["id"], norm, norm, now_iso()))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return redir("/my-code?error=" + quote(
+            "Unavailable \u2014 somebody is running that code now.",
+            safe=""))
+    conn.close()
+    return redir("/my-code?ok=" + quote(
+        "Your code " + norm + " is live \u2014 share it!",
+        safe=""))
+
+
+@app.post("/invite-code/retire")
+async def invite_code_retire(request: Request):
+    user, err = require_login(request)
+    if err:
+        return err
+    conn = db()
+    conn.execute(
+        "UPDATE invite_codes SET status='retired' WHERE user_id=? "
+        "AND status='active'", (user["id"],))
+    conn.commit()
+    conn.close()
+    return redir("/my-code?ok=" + quote(
+        "Code retired \u2014 the words are free again.", safe=""))
 
 def _paid_total_cents(conn):
     """Every dollar HERE has actually paid a creator, ever."""
@@ -27768,6 +28101,10 @@ HEARLEY_KB = [
     (["invite", "invite link", "referral", "invite friends"],
      "Your personal invite link is on the Invite page — share it anywhere. When somebody joins from your link, HERE knows they came through you (that's how the Invite Race counts you). Invited friends also earn you milestone rewards.",
      "/invite", "Get my invite link"),
+    (["invitation code", "invite code", "custom code", "got my 10",
+      "my code"],
+     "An invitation code is a word YOU make up on the My Invite Code page \u2014 your name, your crew, anything that's yours. Friends type it into the 'Have an invitation code?' box when they sign up and HERE credits them to you. A join counts when they actually use HERE \u2014 a post, watching a live, or using tickets. At 10 counted joins your code retires on its own, you earn the \U0001f51f Got My 10 badge plus 1,000 tickets in your earned balance, and the words free up for somebody else to claim.",
+     "/my-code", "Make my invite code"),
     (["invest in here", "investing in here", "how to invest", "buy into here", "invest", "investing", "investment"],
      "There are three ways to invest in HERE, all on the Invest page. One: become a creator — free; your time is the investment, and fans pay you in tickets that cash out to your bank. Two: the Playbook ($19.99) — the money manual our artists read. Three: Black Coin (BC), the ecosystem's coin. Read the Invest page's honesty box before the coin: BC is not stock and nobody promises its price.",
      "/invest", "Open the Invest page"),
