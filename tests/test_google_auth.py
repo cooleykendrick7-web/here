@@ -84,18 +84,29 @@ check("callback: wrong state refused",
 check("callback: wrong state created NO account",
       not dbq("SELECT id FROM users WHERE email='gina@example.com'"))
 
-# happy path: brand-new account
+# happy path: a brand-new Google identity detours through the
+# 18+ birthday page BEFORE any account exists (age gate)
 r = c.get(f"/auth/google/callback?code=ok&state={state}")
-check("callback: new Google user lands on /welcome",
+check("callback: new Google user is sent to the birthday page",
+      r.status_code == 303
+      and r.headers["location"].endswith("/auth/google/dob"),
+      r.headers.get("location", ""))
+check("callback: NO account exists before the birthday step",
+      not dbq("SELECT id FROM users WHERE email='gina@example.com'"))
+r = c.get("/auth/google/dob")
+check("dob page: renders for the pending signup",
+      r.status_code == 200 and "birthday" in r.text)
+r = c.post("/auth/google/dob", data={"birthdate": "1992-05-05"})
+check("dob: adult birthday lands on /welcome",
       r.status_code == 303 and "/welcome" in r.headers["location"],
       r.headers.get("location", ""))
 rows = dbq("SELECT * FROM users WHERE email='gina@example.com'")
-check("callback: account created with google_sub stored",
+check("dob: account created with google_sub stored",
       len(rows) == 1 and rows[0]["google_sub"] == "g-sub-1")
-check("callback: session cookie issued",
+check("dob: session cookie issued",
       "here_session" in r.headers.get("set-cookie", ""))
 home = c.get("/home")
-check("callback: the new session actually works",
+check("dob: the new session actually works",
       home.status_code == 200 and "Gina Google" in home.text)
 
 # returning by sub: straight to /home, no duplicate
@@ -110,7 +121,7 @@ check("returning: still exactly ONE account for that email",
 
 # link by email: an existing password account + Google same email
 c3 = anon()
-c3.post("/signup", data={"name": "Paul Pass", "email": "paul@example.com",
+c3.post("/signup", data={"birthdate": "1990-01-01", "name": "Paul Pass", "email": "paul@example.com",
                          "password": "Str0ng!Pass99"})
 paul_id = dbq("SELECT id FROM users WHERE email='paul@example.com'")[0]["id"]
 PROFILE.update({"sub": "g-sub-2", "email": "paul@example.com",
@@ -131,7 +142,7 @@ check("link: the old password still works after linking",
 
 # invite credit for a Google-created account
 c6 = anon()
-c6.post("/signup", data={"name": "Ivy Inviter", "email": "ivy@example.com",
+c6.post("/signup", data={"birthdate": "1990-01-01", "name": "Ivy Inviter", "email": "ivy@example.com",
                          "password": "Str0ng!Pass99"})
 ivy = dbq("SELECT * FROM users WHERE email='ivy@example.com'")[0]
 PROFILE.update({"sub": "g-sub-3", "email": "newbie@example.com",
@@ -141,6 +152,7 @@ c7.cookies.set("here_invite", ivy["invite_code"])
 c7.get("/auth/google")
 st7 = c7.cookies.get("here_gstate")
 r = c7.get(f"/auth/google/callback?code=ok&state={st7}")
+c7.post("/auth/google/dob", data={"birthdate": "1990-01-01"})
 nb = dbq("SELECT * FROM users WHERE email='newbie@example.com'")
 check("invite: Google signup credits the inviter",
       len(nb) == 1 and nb[0]["invited_by"] == ivy["id"])
