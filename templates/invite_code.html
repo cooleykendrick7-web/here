@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}My Invite Code — HERE{% endblock %}
+{% block content %}
+<div style="max-width:720px;margin:0 auto">
+  <div class="card" style="padding:24px 20px">
+    <div style="font-size:36px">🎟️</div>
+    <h1 style="font-size:26px;margin-top:4px">My Invite Code</h1>
+    <p style="color:var(--muted);margin-top:8px;line-height:1.55">Make up your own invitation code — a word that's yours — and tell your people to type it into the <strong>"Have an invitation code?"</strong> box when they sign up. That tells HERE they came from you.</p>
+    <p style="color:var(--muted);margin-top:8px;line-height:1.55">A join counts when someone signs up with your code AND does one real thing on HERE — a post, watching a live, or using tickets. At 10, your code retires, you earn the 🔟 <strong>Got My 10</strong> badge + <strong>1,000 tickets</strong>, and the words free up for someone else.</p>
+
+    {% if error %}<div style="background:rgba(212,31,46,.12);border:1px solid var(--red);color:var(--red);border-radius:8px;padding:10px 12px;margin-top:14px;font-size:14.5px;font-weight:700">{{ error|e }}</div>{% endif %}
+    {% if ok %}<div style="background:rgba(29,158,80,.12);border:1px solid #1d9e50;color:#1d9e50;border-radius:8px;padding:10px 12px;margin-top:14px;font-size:14.5px;font-weight:700">{{ ok|e }}</div>{% endif %}
+
+    {% if active %}
+    <div style="margin-top:20px;text-align:center">
+      <div style="font-size:12.5px;color:var(--muted);font-weight:800;letter-spacing:1.5px">YOUR CODE</div>
+      <div style="font-size:42px;font-weight:900;letter-spacing:2px;color:var(--red);line-height:1.15">{{ active.code|e }}</div>
+      <p style="margin-top:4px;font-weight:800;font-size:16px">{{ qualified }} of {{ target }} counted</p>
+      <div style="background:rgba(127,127,127,.25);border-radius:999px;height:12px;margin:10px auto 0;max-width:420px;overflow:hidden">
+        <div style="background:linear-gradient(90deg,#f5c542,#d41f2e);height:12px;border-radius:999px;width:{{ pct }}%"></div>
+      </div>
+    </div>
+
+    {% if joiners %}
+    <div style="margin-top:20px">
+      <div style="font-weight:800;margin-bottom:8px">Who joined with your code</div>
+      {% for j in joiners %}
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--border)">
+        {% if j.avatar %}<img src="{{ j.avatar|e }}" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover">{% endif %}
+        <span style="font-weight:700">{{ j.name|e }}</span>
+        <span style="color:var(--muted);font-size:13.5px">joined {{ j.joined }}</span>
+        {% if j.counted %}<span style="margin-left:auto;font-weight:800;color:#1d9e50">✓ counted</span>{% else %}<span style="margin-left:auto;color:var(--muted);font-size:13.5px">• joined — not active yet</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="margin-top:16px;color:var(--muted)">Nobody has used your code yet — share it everywhere: say it on a live, text it, put it on a flyer.</p>
+    {% endif %}
+
+    <form action="/invite-code/retire" method="post" style="margin-top:20px" onsubmit="return confirm('Retire this code? It stops working right away and the words free up for somebody else.')">
+      <button type="submit" class="btn">Retire this code</button>
+    </form>
+    {% else %}
+    <form action="/invite-code" method="post" style="margin-top:18px">
+      <div class="field">
+        <label for="ic-code">Pick your code</label>
+        <input type="text" id="ic-code" name="code" maxlength="15" autocomplete="off" placeholder="e.g. YOURNAME10" required>
+      </div>
+      <p id="ic-hint" style="font-size:13.5px;min-height:19px;margin:2px 0 10px;color:var(--muted)">4 to 15 characters — letters and numbers only, no spaces.</p>
+      <button type="submit" class="btn">Make my code</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if got10_total %}
+  <div class="card" style="padding:18px 20px;margin-top:14px;text-align:center">
+    <span style="font-size:17px;font-weight:900">🔟 Got My 10{% if got10_total > 1 %} ×{{ got10_total }}{% endif %}</span>
+    <p style="color:var(--muted);margin-top:6px">You've filled {{ got10_total }} code{% if got10_total != 1 %}s{% endif %} with 10 real joins — the badge rides on your profile.</p>
+  </div>
+  {% endif %}
+
+  {% if past %}
+  <div class="card" style="padding:18px 20px;margin-top:14px">
+    <div style="font-weight:800;margin-bottom:8px">Your past codes</div>
+    {% for p in past %}
+    <div style="display:flex;gap:10px;padding:6px 0;border-top:1px solid var(--border)">
+      <span style="font-weight:800;letter-spacing:1px">{{ p.code|e }}</span>
+      {% if p.status == 'completed' %}<span style="color:#1d9e50;font-weight:700">🔟 completed</span>{% else %}<span style="color:var(--muted)">retired</span>{% endif %}
+      <span style="margin-left:auto;color:var(--muted);font-size:13.5px">{{ p.when }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% if not active %}
+<script>
+(function(){
+  var inp = document.getElementById('ic-code');
+  var hint = document.getElementById('ic-hint');
+  if (!inp || !hint) return;
+  var t = null;
+  inp.addEventListener('input', function(){
+    var v = inp.value.replace(/\s+/g, '').toUpperCase();
+    if (inp.value !== v) inp.value = v;
+    if (t) clearTimeout(t);
+    if (v.length < 4) {
+      hint.textContent = '4 to 15 characters — letters and numbers only, no spaces.';
+      hint.style.color = 'var(--muted)';
+      return;
+    }
+    hint.textContent = 'Checking…';
+    hint.style.color = 'var(--muted)';
+    t = setTimeout(function(){
+      var fd = new FormData();
+      fd.append('code', v);
+      fetch('/invite-code/check', {method: 'POST', credentials: 'same-origin', body: fd})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (!d || !d.ok) { hint.textContent = ''; return; }
+          hint.textContent = d.reason;
+          hint.style.color = d.available ? '#1d9e50' : '#c0392b';
+        })
+        .catch(function(){ hint.textContent = ''; });
+    }, 350);
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}
