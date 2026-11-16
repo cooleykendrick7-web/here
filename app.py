@@ -892,6 +892,14 @@ def init_db():
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
               "idx_invite_codes_active_norm ON invite_codes(code_norm) "
               "WHERE status='active'")
+    # The 18+ age gate (Nov 15, 2026): a brand-new Google identity
+    # parks here — verified sub/email/name only, NO users row —
+    # until the birthday check at /auth/google/dob passes. Rows
+    # are single-use and die 30 minutes after issue.
+    c.execute("""CREATE TABLE IF NOT EXISTS google_signups (
+        token TEXT PRIMARY KEY, sub TEXT NOT NULL,
+        email TEXT NOT NULL, name TEXT NOT NULL,
+        created_at TEXT NOT NULL)""")
     c.execute("""CREATE TABLE IF NOT EXISTS live_signals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         live_id INTEGER NOT NULL, from_id INTEGER NOT NULL,
@@ -1644,41 +1652,6 @@ def init_db():
         last_checked_at TEXT NOT NULL DEFAULT '')""")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
               "idx_twox_links_code ON twox_links(code)")
-    # CEO — Creative Engineering Operations link codes + desktop
-    # tokens (additive, Phase A): ceo_links mirrors twox_links
-    # column-for-column (the code is the hand-typed bootstrap ONLY);
-    # ceo_tokens holds the real posting credential — a 256-bit
-    # random token minted by POST /api/ceo/link, stored ONLY as its
-    # SHA-256 hash, scope-limited to post:create + media:upload +
-    # status:read, 180-day expiry, revocable from the /ceo room,
-    # from the app (unlink), by code regeneration, and by any
-    # password change. See the CEO block by the /api/ceo routes.
-    c.execute("""CREATE TABLE IF NOT EXISTS ceo_links (
-        user_id INTEGER PRIMARY KEY,
-        code TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL DEFAULT '',
-        updated_at TEXT NOT NULL DEFAULT '',
-        linked_at TEXT NOT NULL DEFAULT '',
-        app_version TEXT NOT NULL DEFAULT '',
-        platform TEXT NOT NULL DEFAULT '',
-        last_checked_at TEXT NOT NULL DEFAULT '')""")
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
-              "idx_ceo_links_code ON ceo_links(code)")
-    c.execute("""CREATE TABLE IF NOT EXISTS ceo_tokens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        token_hash TEXT NOT NULL DEFAULT '',
-        scope TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL DEFAULT '',
-        expires_at TEXT NOT NULL DEFAULT '',
-        last_used_at TEXT NOT NULL DEFAULT '',
-        app_version TEXT NOT NULL DEFAULT '',
-        platform TEXT NOT NULL DEFAULT '',
-        revoked_at TEXT NOT NULL DEFAULT '')""")
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS "
-              "idx_ceo_tokens_hash ON ceo_tokens(token_hash)")
-    c.execute("CREATE INDEX IF NOT EXISTS "
-              "idx_ceo_tokens_user ON ceo_tokens(user_id)")
     c.execute("""CREATE TABLE IF NOT EXISTS media_track_likes (
         track_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
         created_at TEXT NOT NULL DEFAULT '',
@@ -2744,16 +2717,6 @@ def _accept_media_key(user, key, subdir, allowed_exts):
         (key or "").strip())
     if not m or m.group(2) not in allowed_exts:
         return "", "That upload couldn't be used — please try again."
-    if not storage.r2_enabled():
-        # Disk mode: the same minted key lives under UPLOAD_DIR
-        # (written by POST /api/ceo/upload). The regex above has
-        # already pinned the key to '<subdir>/u<uid>-<hex>.<ext>',
-        # so this join cannot escape the uploads tree. (The web
-        # callers only reach this function in R2 mode; the CEO API
-        # reaches it in both.)
-        if not os.path.isfile(os.path.join(UPLOAD_DIR, key)):
-            return "", "That upload couldn't be found — please try again."
-        return key, ""
     try:
         if not storage.exists(key):
             return "", "That upload couldn't be found — please try again."
@@ -3991,11 +3954,18 @@ _PRESIGN_VIDEO_TYPES = {"video/mp4": "mp4", "video/webm": "webm",
                         "video/quicktime": "mov"}
 
 
-def _presign_response(user, data):
-    """The presign core, factored out of the cookie handler so the
-    CEO desktop API (POST /api/ceo/presign) can serve a
-    token-resolved user through the EXACT same logic — one surface
-    vocabulary, one key shape, one direct/fallback contract."""
+@app.post("/api/uploads/presign")
+async def uploads_presign(request: Request):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "login"},
+                            status_code=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
     subdir = _PRESIGN_SURFACES.get(str(data.get("surface") or ""))
     if subdir is None:
         return JSONResponse({"ok": False, "error": "surface"},
@@ -4011,21 +3981,6 @@ def _presign_response(user, data):
         return JSONResponse({"ok": True, "direct": False})
     return JSONResponse({"ok": True, "direct": True,
                          "key": key, "url": url})
-
-
-@app.post("/api/uploads/presign")
-async def uploads_presign(request: Request):
-    user = current_user(request)
-    if not user:
-        return JSONResponse({"ok": False, "error": "login"},
-                            status_code=401)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    return _presign_response(user, data)
 
 
 # ---------------- root / auth ----------------
@@ -4107,6 +4062,48 @@ def _pw_rejected(pw):
     return False
 
 
+# ---------------- the 18+ age gate (Nov 15, 2026) ----------------
+# HERE is 18+ at the door (Ken's call): every NEW signup — email
+# or Google — proves an adult birthdate before any account
+# exists. The birthday itself is never displayed anywhere; only
+# the age derived from it shows (Profile Basics). Current
+# members are untouched: the gate lives only in the signup
+# flows, never in login.
+UNDER18_ERROR = ("HERE is for 18 and up \u2014 come back and see "
+                 "us when you're 18.")
+DOB_INVALID_ERROR = ("Please enter your real birthday "
+                     "\u2014 HERE is 18+.")
+
+
+def _age_on(birthdate_str, today=None):
+    """Whole-years age on `today` (default: today in Chicago)
+    for an ISO birthdate string, or None when the string is not
+    a plausible birthdate: unparseable, in the future, or
+    implying an age over 120."""
+    try:
+        d = date.fromisoformat((birthdate_str or "").strip()[:10])
+    except ValueError:
+        return None
+    t = today or _today_chicago()
+    if d > t:
+        return None
+    age = t.year - d.year - ((t.month, t.day) < (d.month, d.day))
+    if age < 0 or age > 120:
+        return None
+    return age
+
+
+def _dob_gate_error(birthdate_str):
+    """None when the birthdate proves an adult; otherwise the
+    exact signup error to show for it."""
+    age = _age_on(birthdate_str)
+    if age is None:
+        return DOB_INVALID_ERROR
+    if age < 18:
+        return UNDER18_ERROR
+    return None
+
+
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request):
     if current_user(request):
@@ -4143,6 +4140,10 @@ async def signup(request: Request):
     if _pw_rejected(password):
         return redir("/signup?error=" + "That password is too common "
                      "\u2014 pick something less guessable.")
+    birthdate = (form.get("birthdate") or "").strip()[:10]
+    _dob_err = _dob_gate_error(birthdate)
+    if _dob_err:
+        return redir("/signup?error=" + _dob_err)
     _sip = _client_ip(request)
     if _too_many_attempts("signup", _sip, 20, 60):
         return redir("/signup?error=" + "Too many new accounts from "
@@ -4152,9 +4153,10 @@ async def signup(request: Request):
     conn = db()
     try:
         cur = conn.execute(
-            "INSERT INTO users(name, email, pw_hash, created_at, invite_code) "
-            "VALUES(?,?,?,?,?)",
-            (name, email, pw_hash, now_iso(), gen_invite_code(conn)))
+            "INSERT INTO users(name, email, pw_hash, created_at, "
+            "invite_code, birthdate) VALUES(?,?,?,?,?,?)",
+            (name, email, pw_hash, now_iso(), gen_invite_code(conn),
+             birthdate))
         uid = cur.lastrowid
         # Original 100: while founding seats remain, this real
         # signup takes one. First hundred accounts, ever — when
@@ -4305,7 +4307,10 @@ async def privacy_page(request: Request):
 #  * brand-new Google accounts get an unguessable random password
 #    hash (nobody knows it, password login simply never matches);
 #    the member can set a real password any time through /forgot;
-#  * invite credit + founding seats follow the exact signup rules.
+#  * invite credit + founding seats follow the exact signup rules;
+#  * a brand-new identity is NOT an account until the 18+
+#    birthday check passes: it parks in google_signups and the
+#    browser detours through /auth/google/dob first.
 def _google_cfg():
     cid = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
     sec = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
@@ -4399,7 +4404,6 @@ async def google_callback(request: Request):
     conn = db()
     u = conn.execute("SELECT * FROM users WHERE google_sub=?",
                      (sub,)).fetchone()
-    created = False
     if not u:
         u = conn.execute("SELECT * FROM users WHERE email=?",
                          (email,)).fetchone()
@@ -4408,47 +4412,147 @@ async def google_callback(request: Request):
                          (sub, u["id"]))
             conn.commit()
     if not u:
-        pw_hash = bcrypt.hashpw(
-            secrets.token_urlsafe(32).encode(),
-            bcrypt.gensalt()).decode()
-        try:
-            cur = conn.execute(
-                "INSERT INTO users(name, email, pw_hash, created_at, "
-                "invite_code, google_sub) VALUES(?,?,?,?,?,?)",
-                (name, email, pw_hash, now_iso(),
-                 gen_invite_code(conn), sub))
-            uid = cur.lastrowid
-            conn.execute(
-                "UPDATE users SET founding=1, founding_no="
-                "(SELECT COUNT(*) FROM users WHERE founding=1) + 1 "
-                "WHERE id=? AND "
-                "(SELECT COUNT(*) FROM users WHERE founding=1) < 100",
-                (uid,))
-            conn.commit()
-            created = True
-            u = conn.execute("SELECT * FROM users WHERE id=?",
-                             (uid,)).fetchone()
-        except sqlite3.IntegrityError:
-            conn.rollback()
-            u = conn.execute("SELECT * FROM users WHERE email=?",
-                             (email,)).fetchone()
-            if u and not (u["google_sub"] or ""):
-                conn.execute(
-                    "UPDATE users SET google_sub=? WHERE id=?",
-                    (sub, u["id"]))
-                conn.commit()
+        # Brand-new Google identity — but HERE is 18+ at the
+        # door and Google never hands us a birthdate. Park the
+        # verified identity in google_signups and send the
+        # browser to the birthday page; the account is created
+        # ONLY when that check passes (POST /auth/google/dob).
+        pending = secrets.token_urlsafe(32)
+        conn.execute(
+            "INSERT INTO google_signups(token, sub, email, name, "
+            "created_at) VALUES(?,?,?,?,?)",
+            (pending, sub, email, name, now_iso()))
+        conn.commit()
+        conn.close()
+        resp = RedirectResponse("/auth/google/dob", status_code=303)
+        resp.set_cookie("here_google_pending", pending,
+                        max_age=1800, httponly=True, path="/",
+                        samesite="lax")
+        return resp
     conn.close()
-    if not u:
-        return redir(fail)
     uid = u["id"]
-    # Invite credit for a brand-new account \u2014 the same rule as
-    # email signup: only after a successful insert, only from the
-    # here_invite cookie, never to oneself.
+    token = new_session(uid)
+    dest = _safe_next(request.cookies.get("here_gnext")) or "/home"
+    resp = redir(dest)
+    resp.delete_cookie("here_gstate", path="/")
+    resp.delete_cookie("here_gnext", path="/")
+    if request.cookies.get("here_invite"):
+        resp.delete_cookie("here_invite", path="/")
+    if request.cookies.get("here_invite_code"):
+        resp.delete_cookie("here_invite_code", path="/")
+    return set_session_cookie(resp, token, SESSION_COOKIE)
+
+
+def _google_pending(request):
+    """The live google_signups row behind this browser's pending
+    cookie, or None. Rows die 30 minutes after issue; an expired
+    row is deleted on sight."""
+    token = request.cookies.get("here_google_pending", "")
+    if not token:
+        return None
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM google_signups WHERE token=?",
+        (token,)).fetchone()
+    if row:
+        ts = _parse_ts(row["created_at"])
+        if ts is None or (datetime.now(timezone.utc) - ts) \
+                > timedelta(minutes=30):
+            conn.execute(
+                "DELETE FROM google_signups WHERE token=?",
+                (token,))
+            conn.commit()
+            row = None
+    conn.close()
+    return row
+
+
+@app.get("/auth/google/dob", response_class=HTMLResponse)
+async def google_dob_page(request: Request):
+    if current_user(request):
+        return redir("/home")
+    row = _google_pending(request)
+    if not row:
+        return redir("/login")
+    return render(request, "auth/google_dob.html",
+                  {"error": "", "email": row["email"],
+                   "name": row["name"], "dead": False})
+
+
+@app.post("/auth/google/dob")
+async def google_dob_submit(request: Request):
+    row = _google_pending(request)
+    if not row:
+        return redir("/login")
+    form = await request.form()
+    birthdate = (form.get("birthdate") or "").strip()[:10]
+    dob_err = _dob_gate_error(birthdate)
+    if dob_err:
+        # The gate said no: the pending signup dies here — no
+        # account, no second try on this token. The birthday
+        # page carries the reason and the way back.
+        conn = db()
+        conn.execute("DELETE FROM google_signups WHERE token=?",
+                     (row["token"],))
+        conn.commit()
+        conn.close()
+        resp = render(request, "auth/google_dob.html",
+                      {"error": dob_err, "email": row["email"],
+                       "name": row["name"], "dead": True})
+        resp.delete_cookie("here_google_pending", path="/")
+        return resp
+    name, email, sub = row["name"], row["email"], row["sub"]
+    # Create the account exactly as the callback always did for
+    # a new Google identity — unguessable random password hash,
+    # founding seat, google_sub stamped — plus the birthdate
+    # that just passed the gate.
+    pw_hash = bcrypt.hashpw(
+        secrets.token_urlsafe(32).encode(),
+        bcrypt.gensalt()).decode()
+    conn = db()
+    created = False
+    try:
+        cur = conn.execute(
+            "INSERT INTO users(name, email, pw_hash, created_at, "
+            "invite_code, google_sub, birthdate) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (name, email, pw_hash, now_iso(),
+             gen_invite_code(conn), sub, birthdate))
+        uid = cur.lastrowid
+        conn.execute(
+            "UPDATE users SET founding=1, founding_no="
+            "(SELECT COUNT(*) FROM users WHERE founding=1) + 1 "
+            "WHERE id=? AND "
+            "(SELECT COUNT(*) FROM users WHERE founding=1) < 100",
+            (uid,))
+        conn.commit()
+        created = True
+    except sqlite3.IntegrityError:
+        # The email got registered while the birthday page was
+        # open — land on that account and stamp the sub, the
+        # same fallback the callback always had.
+        conn.rollback()
+        u = conn.execute("SELECT * FROM users WHERE email=?",
+                         (email,)).fetchone()
+        if u and not (u["google_sub"] or ""):
+            conn.execute(
+                "UPDATE users SET google_sub=? WHERE id=?",
+                (sub, u["id"]))
+            conn.commit()
+        uid = u["id"] if u else None
+    if uid is None:
+        conn.close()
+        return redir("/login?error=" + "Google sign-in didn't "
+                     "finish \u2014 try again.")
+    conn.execute("DELETE FROM google_signups WHERE token=?",
+                 (row["token"],))
+    conn.commit()
+    conn.close()
+    # Invite credit for the brand-new account — the same rules
+    # as email signup: a typed custom invite code (cookie) beats
+    # the invite LINK, never both, never to oneself.
     credited = False
     if created:
-        # A typed custom invite code (carried in the
-        # here_invite_code cookie from the signup form) beats the
-        # invite LINK for brand-new Google accounts too.
         grow = _invite_code_for_signup(
             request.cookies.get("here_invite_code", ""))
         if grow and grow["user_id"] == uid:
@@ -4473,6 +4577,7 @@ async def google_callback(request: Request):
     dest = _safe_next(request.cookies.get("here_gnext")) or (
         "/welcome" if created else "/home")
     resp = redir(dest)
+    resp.delete_cookie("here_google_pending", path="/")
     resp.delete_cookie("here_gstate", path="/")
     resp.delete_cookie("here_gnext", path="/")
     if credited or request.cookies.get("here_invite"):
@@ -4741,12 +4846,6 @@ async def reset_submit(request: Request, token: str):
         # A reset kills every session the account has, everywhere.
         conn.execute("DELETE FROM sessions WHERE user_id=?",
                      (row["user_id"],))
-        # ...and every CEO desktop token: a password change is the
-        # member re-asserting control of the account, so studio
-        # apps must link again with a fresh code.
-        conn.execute("UPDATE ceo_tokens SET revoked_at=? "
-                     "WHERE user_id=? AND revoked_at=''",
-                     (now_iso(), row["user_id"]))
         _urow = conn.execute("SELECT email FROM users WHERE id=?",
                              (row["user_id"],)).fetchone()
         _changed_email = _urow["email"] if _urow else ""
@@ -20266,549 +20365,6 @@ async def twox_link_confirm(request: Request):
     return JSONResponse(payload)
 
 
-# ---------------- CEO — Creative Engineering Operations ----------------
-# CEO Connect Phase A: the recording app links to HERE and posts as
-# the artist. Modelled on the /api/2x/* pattern above, with the one
-# thing 2X never needed: real posting rights. The 2X link code is
-# itself the bearer for two read-only calls — acceptable for status,
-# NOT acceptable as a posting credential (the code is displayed on a
-# web page and typed by hand). So the CEO code stays the bootstrap:
-# the entitled artist reads it in the /ceo room, types it into the
-# app once, and POST /api/ceo/link exchanges it for a real desktop
-# token — 256-bit random, returned ONCE, stored server-side ONLY as
-# its SHA-256 hash (ceo_tokens), scope-limited to exactly
-# post:create + media:upload + status:read, 180-day expiry.
-# Revocation doors: per-token + revoke-all in the /ceo room, code
-# regeneration (revokes ALL tokens — a leaked code must not leave a
-# live token behind), unlink from the app, and any password change
-# (hooked in the reset flow, beside the session wipe). Posts are
-# inserted through create_post_from_form itself, so moderation,
-# privacy and wall rules are identical to web posts; uploads ride
-# the factored presign core or the multipart fallback below, and
-# media keys are validated by _accept_media_key as always.
-
-CEO_TOKEN_SCOPE = "post:create media:upload status:read"
-CEO_TOKEN_TTL_DAYS = 180
-
-
-def _ceo_new_code(conn):
-    while True:
-        raw = "".join(secrets.choice(TWOX_CODE_ALPHABET)
-                      for _ in range(10))
-        code = "CEO-" + raw[:5] + "-" + raw[5:]
-        if not conn.execute("SELECT 1 FROM ceo_links WHERE "
-                            "code=?", (code,)).fetchone():
-            return code
-
-
-def _ceo_code_row(conn, user_id, create=False):
-    row = conn.execute("SELECT * FROM ceo_links WHERE user_id=?",
-                       (user_id,)).fetchone()
-    if row or not create:
-        return dict(row) if row else None
-    stamp = now_iso()
-    conn.execute(
-        "INSERT INTO ceo_links(user_id, code, created_at, "
-        "updated_at) VALUES(?,?,?,?)",
-        (user_id, _ceo_new_code(conn), stamp, stamp))
-    conn.commit()
-    return _ceo_code_row(conn, user_id)
-
-
-def _ceo_active_tokens(conn, user_id):
-    return [dict(r) for r in conn.execute(
-        "SELECT id, platform, app_version, created_at, "
-        "expires_at, last_used_at FROM ceo_tokens WHERE "
-        "user_id=? AND revoked_at='' ORDER BY id",
-        (user_id,)).fetchall()]
-
-
-def _ceo_revoke_all_tokens(conn, user_id):
-    conn.execute("UPDATE ceo_tokens SET revoked_at=? WHERE "
-                 "user_id=? AND revoked_at=''",
-                 (now_iso(), user_id))
-
-
-@app.get("/ceo", response_class=HTMLResponse)
-async def ceo_room(request: Request):
-    """CEO link room: the gate state, the member's CEO link code
-    (entitled only) and their linked computers with revoke
-    controls. Mirrors GET /2x."""
-    user, err = require_login(request)
-    if err:
-        return err
-    conn = db()
-    gate = _twox_gate(conn, user)
-    owner_on = is_owner(request)
-    entitled = bool(gate["entitled"] or owner_on)
-    link = _ceo_code_row(conn, user["id"], create=entitled) \
-        if entitled else _ceo_code_row(conn, user["id"])
-    tokens = _ceo_active_tokens(conn, user["id"])
-    conn.close()
-    return render(request, "ceo.html", {
-        "entitled": entitled, "owner_bypass": bool(owner_on
-                                                   and not gate[
-                                                       "entitled"]),
-        "gate": gate, "link": link, "tokens": tokens})
-
-
-@app.post("/ceo/tokens/revoke-all")
-async def ceo_tokens_revoke_all(request: Request):
-    user, err = require_login(request)
-    if err:
-        return err
-    conn = db()
-    _ceo_revoke_all_tokens(conn, user["id"])
-    conn.commit()
-    conn.close()
-    return redir("/ceo", "All computers unlinked — CEO apps must "
-                         "link again with your code.")
-
-
-@app.post("/ceo/tokens/{token_id}/revoke")
-async def ceo_token_revoke(request: Request, token_id: int):
-    user, err = require_login(request)
-    if err:
-        return err
-    conn = db()
-    conn.execute("UPDATE ceo_tokens SET revoked_at=? WHERE id=? "
-                 "AND user_id=? AND revoked_at=''",
-                 (now_iso(), token_id, user["id"]))
-    conn.commit()
-    conn.close()
-    return redir("/ceo", "That computer was unlinked.")
-
-
-@app.post("/ceo/code/regenerate")
-async def ceo_code_regenerate(request: Request):
-    """Rotate the link code AND revoke every desktop token: the
-    code is the bootstrap for tokens, so a leaked code must not
-    leave a live token behind (a deliberate tightening of the 2X
-    pattern)."""
-    user, err = require_login(request)
-    if err:
-        return err
-    conn = db()
-    gate = _twox_gate(conn, user)
-    if not (gate["entitled"] or is_owner(request)):
-        conn.close()
-        return redir("/ceo")
-    _ceo_code_row(conn, user["id"], create=True)
-    conn.execute("UPDATE ceo_links SET code=?, updated_at=? "
-                 "WHERE user_id=?",
-                 (_ceo_new_code(conn), now_iso(), user["id"]))
-    _ceo_revoke_all_tokens(conn, user["id"])
-    conn.commit()
-    conn.close()
-    return redir("/ceo", "New CEO link code generated — the old "
-                         "code no longer works, and every linked "
-                         "computer was signed out.")
-
-
-def _ceo_hash_token(token):
-    return hashlib.sha256((token or "").encode()).hexdigest()
-
-
-async def _ceo_code_from_request(request):
-    code = request.query_params.get("code") or ""
-    if not code:
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                code = str(body.get("code") or "")
-        except Exception:
-            code = ""
-    if not code:
-        try:
-            form = await request.form()
-            code = str(form.get("code") or "")
-        except Exception:
-            code = ""
-    return code.strip().upper()
-
-
-def _ceo_lookup(request, code):
-    """Rate-limit + resolve a CEO link code for the exchange.
-    Returns (conn, row) or (None, JSONResponse) — 60 calls / 10 min
-    per IP rides the shared auth_attempts limiter (bucket ceo_link,
-    mirroring 2x_link). Error vocabulary is the link endpoint's:
-    invalid_code / rate_limited."""
-    ip = _client_ip(request)
-    if _too_many_attempts("ceo_link", ip, 60, 10):
-        return None, JSONResponse(
-            {"linked": False, "error": "rate_limited"},
-            status_code=429)
-    _record_attempt("ceo_link", ip)
-    if not code:
-        return None, JSONResponse(
-            {"linked": False, "error": "invalid_code"},
-            status_code=400)
-    conn = db()
-    row = conn.execute("SELECT * FROM ceo_links WHERE code=?",
-                       (code,)).fetchone()
-    if not row:
-        conn.close()
-        return None, JSONResponse(
-            {"linked": False, "error": "invalid_code"},
-            status_code=401)
-    return conn, dict(row)
-
-
-def _ceo_auth(request, scope=None):
-    """Resolve the CEO Bearer token beside cookie auth. Returns
-    (conn, user, token_row) or (None, None, JSONResponse). The
-    presented token is hashed and looked up; revoked and expired
-    tokens are distinct 401s so the app can say the true thing."""
-    ip = _client_ip(request)
-    if _too_many_attempts("ceo_api", ip, 300, 10):
-        return None, None, JSONResponse(
-            {"linked": False, "error": "rate_limited"},
-            status_code=429)
-    _record_attempt("ceo_api", ip)
-    auth = request.headers.get("authorization") or ""
-    token = auth[7:].strip() if auth.lower().startswith("bearer ") \
-        else ""
-    if not token:
-        return None, None, JSONResponse(
-            {"linked": False, "error": "invalid_token"},
-            status_code=401)
-    conn = db()
-    row = conn.execute("SELECT * FROM ceo_tokens WHERE "
-                       "token_hash=?",
-                       (_ceo_hash_token(token),)).fetchone()
-    if not row:
-        conn.close()
-        return None, None, JSONResponse(
-            {"linked": False, "error": "invalid_token"},
-            status_code=401)
-    row = dict(row)
-    if row["revoked_at"]:
-        conn.close()
-        return None, None, JSONResponse(
-            {"linked": False, "error": "token_revoked"},
-            status_code=401)
-    try:
-        expired = bool(row["expires_at"]) and datetime.fromisoformat(
-            row["expires_at"]) <= datetime.now(timezone.utc)
-    except ValueError:
-        expired = False
-    if expired:
-        conn.close()
-        return None, None, JSONResponse(
-            {"linked": False, "error": "token_expired"},
-            status_code=401)
-    if scope and scope not in (row["scope"] or "").split():
-        conn.close()
-        return None, None, JSONResponse(
-            {"linked": False, "error": "scope"},
-            status_code=403)
-    user = get_user(row["user_id"])
-    if not user:
-        conn.close()
-        return None, None, JSONResponse(
-            {"linked": False, "error": "invalid_token"},
-            status_code=401)
-    conn.execute("UPDATE ceo_tokens SET last_used_at=? WHERE id=?",
-                 (now_iso(), row["id"]))
-    conn.commit()
-    return conn, user, row
-
-
-def _ceo_gate_refusal(conn, user):
-    """For the write endpoints: the gate is re-checked on every
-    call, so a closed door (Creator Mode off, plaque revoked)
-    pauses studio posting immediately. Returns a 403 JSONResponse
-    in the reason vocabulary, or None when entitled."""
-    gate = _twox_gate(conn, user)
-    if gate["entitled"]:
-        return None
-    return JSONResponse(
-        {"linked": True, "entitled": False,
-         "creator_mode": gate["creator_mode"],
-         "artist_approved": gate["artist_approved"],
-         "artist_state": gate["artist_state"],
-         "reasons": gate["reasons"]}, status_code=403)
-
-
-@app.post("/api/ceo/link")
-async def ceo_link(request: Request):
-    """Exchange a link code for a scoped desktop token. The token
-    is returned ONCE, in this response only; the server keeps its
-    SHA-256 hash. Gate failures answer 403 with the reasons."""
-    code = await _ceo_code_from_request(request)
-    conn, row = _ceo_lookup(request, code)
-    if conn is None:
-        return row
-    user = get_user(row["user_id"])
-    if not user:
-        conn.close()
-        return JSONResponse({"linked": False,
-                             "error": "invalid_code"},
-                            status_code=401)
-    refusal = _ceo_gate_refusal(conn, user)
-    if refusal is not None:
-        conn.close()
-        return refusal
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
-    app_version = str(body.get("app_version") or "")[:40]
-    platform = str(body.get("platform") or "")[:20]
-    token = secrets.token_urlsafe(32)
-    stamp = now_iso()
-    expires = (datetime.now(timezone.utc)
-               + timedelta(days=CEO_TOKEN_TTL_DAYS)).isoformat()
-    conn.execute(
-        "INSERT INTO ceo_tokens(user_id, token_hash, scope, "
-        "created_at, expires_at, app_version, platform) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (user["id"], _ceo_hash_token(token), CEO_TOKEN_SCOPE,
-         stamp, expires, app_version, platform))
-    conn.execute(
-        "UPDATE ceo_links SET linked_at=?, app_version=?, "
-        "platform=?, last_checked_at=? WHERE user_id=?",
-        (stamp, app_version, platform, stamp, user["id"]))
-    conn.commit()
-    gate = _twox_gate(conn, user)
-    conn.close()
-    return JSONResponse(
-        {"linked": True, "entitled": True,
-         "creator_mode": gate["creator_mode"],
-         "artist_approved": gate["artist_approved"],
-         "artist_state": gate["artist_state"],
-         "reasons": [], "username": user["name"],
-         "token": token, "token_expires_at": expires})
-
-
-@app.get("/api/ceo/entitlement")
-async def ceo_entitlement(request: Request):
-    """The token-keyed status check: gate fields + reasons in the
-    2X vocabulary (the _twox_status_payload shape), nothing else
-    about the member."""
-    resolved = _ceo_auth(request, "status:read")
-    if resolved[0] is None:
-        return resolved[2]
-    conn, user, _trow = resolved
-    gate = _twox_gate(conn, user)
-    conn.close()
-    return JSONResponse(
-        {"linked": True, "entitled": gate["entitled"],
-         "creator_mode": gate["creator_mode"],
-         "artist_approved": gate["artist_approved"],
-         "artist_state": gate["artist_state"],
-         "reasons": gate["reasons"], "checked_at": now_iso()})
-
-
-@app.post("/api/ceo/presign")
-async def ceo_presign(request: Request):
-    """Token twin of /api/uploads/presign: the factored core serves
-    a token-resolved user. Accepts the design's surface names
-    (posts/stories) as well as the web vocabulary (post/story)."""
-    resolved = _ceo_auth(request, "media:upload")
-    if resolved[0] is None:
-        return resolved[2]
-    conn, user, _trow = resolved
-    refusal = _ceo_gate_refusal(conn, user)
-    if refusal is not None:
-        conn.close()
-        return refusal
-    conn.close()
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    surface = str(data.get("surface") or "")
-    data["surface"] = {"posts": "post", "stories": "story"}.get(
-        surface, surface)
-    return _presign_response(user, data)
-
-
-@app.post("/api/ceo/upload")
-async def ceo_upload(request: Request):
-    """Multipart upload fallback — REQUIRED, not optional: the
-    presign core only mints keys for video content types and only
-    in R2 mode, so a desktop screenshot (PNG) can never take the
-    direct path, and in disk mode nothing can. The file lands under
-    the exact key shape _accept_media_key validates
-    ('<subdir>/u<uid>-<uuid>.<ext>'), through the same compression
-    + caps policy as the web save paths, in R2 or on disk per the
-    live storage mode."""
-    resolved = _ceo_auth(request, "media:upload")
-    if resolved[0] is None:
-        return resolved[2]
-    conn, user, _trow = resolved
-    refusal = _ceo_gate_refusal(conn, user)
-    if refusal is not None:
-        conn.close()
-        return refusal
-    conn.close()
-    form = await request.form()
-    surface = str(form.get("surface") or "post")
-    subdir = {"post": "posts", "posts": "posts",
-              "story": "stories", "stories": "stories"}.get(surface)
-    if subdir is None:
-        return JSONResponse({"ok": False, "error": "surface"},
-                            status_code=400)
-    up = form.get("media")
-    fname = getattr(up, "filename", "") or ""
-    if not fname:
-        return JSONResponse({"ok": False, "error": "no file"},
-                            status_code=400)
-    ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-    allowed = IMG_EXTS | VID_EXTS if subdir == "posts" \
-        else STORY_EXTS
-    if ext not in allowed:
-        return JSONResponse(
-            {"ok": False,
-             "error": f"File type .{ext} not allowed."},
-            status_code=400)
-    cap_mb = (PLUS_VIDEO_MB if _is_plus(user) else
-              POST_VIDEO_MAX_MB) if ext in VID_EXTS else MAX_UPLOAD_MB
-    limit = cap_mb * 1024 * 1024
-    data = b""
-    src = up.file
-    try:
-        src.seek(0)
-    except Exception:
-        pass
-    while True:
-        chunk = src.read(1024 * 1024)
-        if not chunk:
-            break
-        data += chunk
-        if len(data) > limit:
-            return JSONResponse({"ok": False,
-                                 "error": _UPLOAD_FAIL},
-                                status_code=400)
-    if ext in IMG_COMPRESS_EXTS:
-        packed = _compress_image(data, subdir)
-        if packed and len(packed[0]) < len(data):
-            data, ext = packed
-    key = f"{subdir}/u{user['id']}-{uuid.uuid4().hex}.{ext}"
-    if storage.r2_enabled():
-        ctype = (mimetypes.guess_type("x." + ext)[0]
-                 or "application/octet-stream")
-        try:
-            storage.put_object(key, data, ctype, size=len(data))
-        except storage.StorageError:
-            return JSONResponse({"ok": False,
-                                 "error": _UPLOAD_FAIL},
-                                status_code=400)
-    else:
-        dest = os.path.join(UPLOAD_DIR, key)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "wb") as fh:
-            fh.write(data)
-    return JSONResponse({"ok": True, "media_key": key})
-
-
-@app.post("/api/ceo/post")
-async def ceo_post(request: Request):
-    """Create a post as the token's artist. The media key is
-    validated by _accept_media_key, and the insert runs through
-    create_post_from_form itself — moderation, privacy and wall
-    rules are the web's, because it is the web's code path."""
-    resolved = _ceo_auth(request, "post:create")
-    if resolved[0] is None:
-        return resolved[2]
-    conn, user, _trow = resolved
-    refusal = _ceo_gate_refusal(conn, user)
-    if refusal is not None:
-        conn.close()
-        return refusal
-    conn.close()
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
-    kind = str(body.get("kind") or "text").strip()
-    if kind not in ("text", "photo", "video"):
-        return JSONResponse({"ok": False, "error": "kind"},
-                            status_code=400)
-    media_key = str(body.get("media_key") or "").strip()
-    if kind in ("photo", "video") and not media_key:
-        return JSONResponse({"ok": False,
-                             "error": "media required"},
-                            status_code=400)
-    if kind == "text" and not str(body.get("text") or "").strip():
-        return JSONResponse({"ok": False, "error": "text required"},
-                            status_code=400)
-    form = {"kind": kind,
-            "body": str(body.get("text") or ""),
-            "privacy": str(body.get("privacy") or "public")}
-    disk_temp = ""
-    if media_key:
-        allowed = IMG_EXTS if kind == "photo" else \
-            VID_EXTS if kind == "video" else IMG_EXTS | VID_EXTS
-        _media, kerr = _accept_media_key(user, media_key, "posts",
-                                          allowed)
-        if kerr:
-            return JSONResponse({"ok": False, "error": kerr},
-                                status_code=400)
-        if storage.r2_enabled():
-            # create_post_from_form's own media-key branch takes it
-            # from here — the literal web path.
-            form["media_key"] = media_key
-        else:
-            # Disk mode's web path is an attached file: hand the
-            # pipeline the stored bytes as the attachment, and the
-            # minted temp object is removed once the post lands.
-            import io as _io
-
-            class _CeoMediaShim:
-                def __init__(self, filename, data):
-                    self.filename = filename
-                    self.file = _io.BytesIO(data)
-                    self.content_type = ""
-
-            disk_path = os.path.join(UPLOAD_DIR, media_key)
-            try:
-                with open(disk_path, "rb") as fh:
-                    disk_data = fh.read()
-            except OSError:
-                return JSONResponse(
-                    {"ok": False,
-                     "error": "That upload couldn't be found — "
-                              "please try again."},
-                    status_code=400)
-            form["media"] = _CeoMediaShim(
-                media_key.rsplit("/", 1)[-1], disk_data)
-            disk_temp = disk_path
-    pid, ferr = create_post_from_form(user, form)
-    if ferr:
-        return JSONResponse({"ok": False, "error": ferr},
-                            status_code=400)
-    if disk_temp:
-        try:
-            os.remove(disk_temp)
-        except OSError:
-            pass
-    return JSONResponse({"ok": True, "post_id": pid,
-                         "url": f"/post/{pid}"})
-
-
-@app.post("/api/ceo/unlink")
-async def ceo_unlink(request: Request):
-    """The app signs itself out: the presented token is revoked.
-    (The app then wipes its local copy.)"""
-    resolved = _ceo_auth(request)
-    if resolved[0] is None:
-        return resolved[2]
-    conn, _user, trow = resolved
-    conn.execute("UPDATE ceo_tokens SET revoked_at=? WHERE id=?",
-                 (now_iso(), trow["id"]))
-    conn.commit()
-    conn.close()
-    return JSONResponse({"ok": True, "linked": False})
-
-
 # ---------------- Label routes ----------------
 
 @app.post("/settings/artist-apply")
@@ -28707,6 +28263,10 @@ HEARLEY_KB = [
       "my code"],
      "An invitation code is a word YOU make up on the My Invite Code page \u2014 your name, your crew, anything that's yours. Friends type it into the 'Have an invitation code?' box when they sign up and HERE credits them to you. A join counts when they actually use HERE \u2014 a post, watching a live, or using tickets. At 10 counted joins your code retires on its own, you earn the \U0001f51f Got My 10 badge plus 1,000 tickets in your earned balance, and the words free up for somebody else to claim.",
      "/my-code", "Make my invite code"),
+    (["how old do you have to be", "how old to join", "age limit",
+      "minimum age", "under 18", "age requirement", "old enough"],
+     "You have to be 18 or older to join HERE. Signup asks for your birthday to check your age \u2014 your birthday itself is never shown to anybody; only your age (like Age 24) appears on your profile. Under 18? Signup stops you with a friendly note \u2014 come back and see us when you're 18.",
+     "/signup", "Join HERE"),
     (["invest in here", "investing in here", "how to invest", "buy into here", "invest", "investing", "investment"],
      "There are three ways to invest in HERE, all on the Invest page. One: become a creator — free; your time is the investment, and fans pay you in tickets that cash out to your bank. Two: the Playbook ($19.99) — the money manual our artists read. Three: Black Coin (BC), the ecosystem's coin. Read the Invest page's honesty box before the coin: BC is not stock and nobody promises its price.",
      "/invest", "Open the Invest page"),
