@@ -27374,6 +27374,83 @@ def _owner_ads_ctx(conn):
 
 
 # ---------------- owner ----------------
+# ---------------- HITZ admin inside the owner panel ----------------
+# Ken's order (2026-11-16): HITZ has NO admin login on its own site.
+# He checks and runs HITZ from here. This server calls the HITZ admin
+# API with a shared secret (HITZ_ADMIN_KEY env on BOTH apps).
+HITZ_BASE_URL = os.environ.get("HITZ_BASE_URL", "https://hitzmixtapes.com").rstrip("/")
+HITZ_ADMIN_KEY = os.environ.get("HITZ_ADMIN_KEY", "")
+
+
+def _hitz_money(cents):
+    try:
+        cents = int(cents or 0)
+    except Exception:
+        cents = 0
+    return f"${cents // 100:,}.{abs(cents) % 100:02d}"
+
+
+def _hitz_api(path, method="GET"):
+    if not HITZ_ADMIN_KEY:
+        return None, "HITZ admin is not connected yet - the shared key (HITZ_ADMIN_KEY) is not set on this app."
+    req = urllib.request.Request(
+        HITZ_BASE_URL + path, method=method,
+        headers={"X-Admin-Key": HITZ_ADMIN_KEY,
+                 "User-Agent": "HERE-Owner-Panel/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read().decode("utf-8")), ""
+    except Exception as e:
+        return None, f"Could not reach HITZ ({e})."
+
+
+@app.get("/owner/hitz", response_class=HTMLResponse)
+async def owner_hitz_page(request: Request):
+    err = require_owner(request)
+    if err:
+        return err
+    data, herr = _hitz_api("/api/admin/overview")
+    return render(request, "owner/hitz.html",
+                  {"hitz": data, "hitz_error": herr, "money": _hitz_money,
+                   "flash": request.query_params.get("flash", "")})
+
+
+@app.post("/owner/hitz/fulfill/{tx_id}")
+async def owner_hitz_fulfill(request: Request, tx_id: int):
+    err = require_owner(request)
+    if err:
+        return err
+    data, herr = _hitz_api(f"/api/admin/fulfill/{tx_id}", method="POST")
+    if herr:
+        return redir("/owner/hitz", herr)
+    if data and data.get("status") == "waitlist":
+        return redir("/owner/hitz",
+                     "Sponsored spots are full - that request went to the waitlist.")
+    return redir("/owner/hitz", "Request fulfilled.")
+
+
+@app.post("/owner/hitz/resolve-report/{report_id}")
+async def owner_hitz_resolve(request: Request, report_id: int):
+    err = require_owner(request)
+    if err:
+        return err
+    data, herr = _hitz_api(f"/api/admin/resolve-report/{report_id}", method="POST")
+    if herr:
+        return redir("/owner/hitz", herr)
+    return redir("/owner/hitz", "Report resolved.")
+
+
+@app.post("/owner/hitz/remove-tape/{tape_id}")
+async def owner_hitz_remove_tape(request: Request, tape_id: int):
+    err = require_owner(request)
+    if err:
+        return err
+    data, herr = _hitz_api(f"/api/admin/remove-tape/{tape_id}", method="POST")
+    if herr:
+        return redir("/owner/hitz", herr)
+    return redir("/owner/hitz", "Tape removed.")
+
+
 @app.get("/owner/login", response_class=HTMLResponse)
 async def owner_login_page(request: Request):
     if is_owner(request):
