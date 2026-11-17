@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HITZ — Owner — HERE</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+body{background:#0a0a0a;color:#f0f0f0;padding:20px}
+a{color:#ff8f98;text-decoration:none}
+.topbar{display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+.brand{font-size:34px;font-weight:900;color:#ffd400}
+.topbar h1{font-size:22px}
+.topbar .spacer{flex:1}
+.logout{color:#9a9a9a;font-size:14px}
+section{margin-bottom:28px}
+h2{font-size:17px;margin-bottom:10px;color:#ffd400}
+.table-wrap{overflow-x:auto;background:#141414;border:1px solid #2a2a2a;border-radius:10px}
+table.admin{width:100%;border-collapse:collapse;font-size:13px}
+table.admin th{background:#1f1f1f;color:#ffd400;text-align:left;padding:9px 10px;font-size:12px;white-space:nowrap}
+table.admin td{padding:8px 10px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+table.admin tr:last-child td{border-bottom:none}
+.btn{display:inline-block;background:#d41f2e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer}
+.btn-ghost{display:inline-block;background:#2a2a2a;color:#f0f0f0;border:none;border-radius:6px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer}
+.inline-form{display:inline}
+.empty{color:#9a9a9a;font-size:14px;padding:14px}
+.note{color:#9a9a9a;font-size:13.5px;margin-bottom:12px;line-height:1.55}
+.flash{background:#12351a;border:1px solid #1f7a33;color:#b7f0c2;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:14px}
+.errbox{background:#3a1414;border:1px solid #7a1f1f;color:#f0b7b7;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:14px;line-height:1.5}
+.readouts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin:14px 0 6px}
+.readout{background:#141414;border:1px solid #2a2a2a;border-radius:12px;padding:13px 14px}
+.readout .r-num{font-size:21px;font-weight:900;color:#ffd400;font-variant-numeric:tabular-nums}
+.readout .r-lbl{font-size:12px;color:#9a9a9a;font-weight:600;margin-top:3px}
+.pill{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 9px;background:#333;color:#fff}
+.pill.gold{background:#8a6d00;color:#ffe97a}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">H</span>
+  <h1>🎧 HITZ — Mixtape Platform</h1>
+  <span class="spacer"></span>
+  <a class="btn-ghost" href="https://hitzmixtapes.com" target="_blank" rel="noopener">Open HITZ ↗</a>
+  <a class="btn-ghost" href="/owner">← Owner Panel</a>
+  <a class="logout" href="/owner/logout">Logout</a>
+</div>
+
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+{% if hitz_error %}
+<div class="errbox"><strong>HITZ did not answer.</strong><br>{{ hitz_error }}<br>
+<span style="color:#9a9a9a">The HITZ site itself may be waking up (free tier) — wait a few seconds and refresh. If this keeps happening, the shared key may not be set on one of the two apps.</span></div>
+{% elif hitz %}
+<p class="note">Everything HITZ, checked from here — the HITZ website itself has no admin login anymore.
+{% if not hitz.payments_connected %} <strong style="color:#ffd400">Payments are not connected on HITZ yet</strong>, so money rows below are unpaid requests until you verify payment and fulfill them.{% endif %}</p>
+
+<div class="readouts">
+  <div class="readout"><div class="r-num">{{ hitz.stats.users }}</div><div class="r-lbl">Users ({{ hitz.stats.artists }} artists · {{ hitz.stats.fans }} fans)</div></div>
+  <div class="readout"><div class="r-num">{{ hitz.stats.tapes }}</div><div class="r-lbl">Live mixtapes ({{ hitz.stats.tracks }} tracks)</div></div>
+  <div class="readout"><div class="r-num">{{ hitz.stats.plays }}</div><div class="r-lbl">Plays</div></div>
+  <div class="readout"><div class="r-num">{{ hitz.stats.downloads }}</div><div class="r-lbl">Downloads</div></div>
+  <div class="readout"><div class="r-num">{{ money(hitz.stats.paid_artist_cents) }}</div><div class="r-lbl">Paid to artists (fulfilled)</div></div>
+  <div class="readout"><div class="r-num">{{ money(hitz.stats.paid_platform_cents) }}</div><div class="r-lbl">Platform earned (fulfilled)</div></div>
+  <div class="readout"><div class="r-num">{{ money(hitz.stats.pending_total_cents) }}</div><div class="r-lbl">Pending money ({{ hitz.stats.pending_count }} requests)</div></div>
+  <div class="readout"><div class="r-num">{{ hitz.stats.sponsored_active }} / {{ hitz.stats.sponsored_max }}</div><div class="r-lbl">Sponsored spots live</div></div>
+  <div class="readout"><div class="r-num">{{ hitz.stats.open_reports }}</div><div class="r-lbl">Open reports / DMCA</div></div>
+  <div class="readout"><div class="r-num">{{ hitz.stats.follows }}</div><div class="r-lbl">Artist follows</div></div>
+</div>
+
+<section>
+  <h2>💰 Pending Money — fulfill only after payment is verified</h2>
+  <div class="table-wrap">
+  <table class="admin">
+    <tr><th>ID</th><th>Type</th><th>Amount</th><th>Artist cut</th><th>Platform cut</th><th>From</th><th>Status</th><th>Detail</th><th></th></tr>
+    {% for r in hitz.pending %}
+    <tr>
+      <td>{{ r.id }}</td><td>{{ r.kind }}</td><td>{{ money(r.amount_cents) }}</td>
+      <td>{{ money(r.artist_cents) }}</td><td>{{ money(r.platform_cents) }}</td>
+      <td>{{ r.payer_name or r.artist_name or "—" }}</td><td>{{ r.status }}</td><td>{{ r.meta }}</td>
+      <td><form class="inline-form" method="post" action="/owner/hitz/fulfill/{{ r.id }}"><button class="btn" type="submit">Fulfill (payment verified)</button></form></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="9" class="empty">No pending requests</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>🚩 Open Reports / DMCA</h2>
+  <div class="table-wrap">
+  <table class="admin">
+    <tr><th>ID</th><th>Tape</th><th>Reason</th><th></th></tr>
+    {% for r in hitz.reports %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td><a href="https://hitzmixtapes.com/tape/{{ r.tape_id }}" target="_blank" rel="noopener">{{ r.title }}</a></td>
+      <td>{{ r.reason }}</td>
+      <td>
+        <form class="inline-form" method="post" action="/owner/hitz/resolve-report/{{ r.id }}"><button class="btn-ghost" type="submit">Resolve</button></form>
+        <form class="inline-form" method="post" action="/owner/hitz/remove-tape/{{ r.tape_id }}"><button class="btn" type="submit">Remove tape</button></form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">No open reports</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>🎵 All Tapes</h2>
+  <div class="table-wrap">
+  <table class="admin">
+    <tr><th>Tape</th><th>Artist</th><th>Mode</th><th>Plays</th><th>Downloads</th><th></th></tr>
+    {% for t in hitz.tapes %}
+    <tr>
+      <td><a href="https://hitzmixtapes.com/tape/{{ t.id }}" target="_blank" rel="noopener">{{ t.title }}</a></td>
+      <td>{{ t.artist_name }}</td>
+      <td>{{ t.download_mode }}{% if t.download_mode == "paid" %} · {{ money(t.price_cents) }}{% endif %}</td>
+      <td>{{ t.plays }}</td><td>{{ t.downloads }}</td>
+      <td><form class="inline-form" method="post" action="/owner/hitz/remove-tape/{{ t.id }}"><button class="btn-ghost" type="submit">Remove</button></form></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">No tapes yet</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>👥 Newest Users</h2>
+  <div class="table-wrap">
+  <table class="admin">
+    <tr><th>Name</th><th>Email</th><th>Role</th><th>Badges</th><th>Joined</th></tr>
+    {% for u in hitz.users %}
+    <tr>
+      <td>{{ u.display_name }}</td><td>{{ u.email }}</td><td>{{ u.role }}</td>
+      <td>{% if u.is_pro %}<span class="pill gold">PRO</span> {% endif %}{% if u.is_premium %}<span class="pill">PREMIUM</span>{% endif %}</td>
+      <td>{{ u.created_at }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="empty">No users yet</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+</section>
+{% endif %}
+
+</body>
+</html>
